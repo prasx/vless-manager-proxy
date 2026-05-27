@@ -752,18 +752,19 @@ def generate_base_config():
 
 def apply_all_proxies():
     """Write minimal config to disk; manage proxies via Xray API only."""
-    base = generate_base_config()
     cfg_path = xray_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text(json.dumps(base, indent=2))
-    add_log("INFO", "Base config written to disk")
 
     config = generate_full_config()
     proxy_obs = [o for o in config["outbounds"] if o["tag"].startswith("node")]
     proxy_count = len(proxy_obs)
+    max_active = int(get_setting("max_active_proxies", "100"))
 
     if xray_api_ok():
-        max_active = int(get_setting("max_active_proxies", "100"))
+        base = generate_base_config()
+        cfg_path.write_text(json.dumps(base, indent=2))
+        add_log("INFO", "Base config written to disk")
+
         limited = generate_full_config(max_outbounds=max_active)
         limited_obs = [o for o in limited["outbounds"] if o["tag"].startswith("node")]
 
@@ -810,6 +811,14 @@ def apply_all_proxies():
         add_log(
             "INFO",
             f"Applied {len(limited_obs)} proxies via API (total working: {proxy_count})",
+        )
+    else:
+        limited = generate_full_config(max_outbounds=max_active)
+        cfg_path.write_text(json.dumps(limited, indent=2))
+        applied = sum(1 for o in limited["outbounds"] if o["tag"].startswith("node"))
+        add_log(
+            "WARN",
+            f"Xray API unavailable — wrote {applied} proxies to disk (total working: {proxy_count})",
         )
 
 
