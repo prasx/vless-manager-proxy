@@ -1,28 +1,50 @@
-# VLESS Manager
+# VLESS Manager Proxy
 
-Flask-сервис для управления VLESS прокси. Добавляй подписки и отдельные ссылки — панель сама тестирует, собирает конфиг со всеми рабочими узлами и применяет через Xray API без перезапуска. Встроенный observatory + balancer (leastPing) автоматически выбирают лучший узел.
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/)
+[![Flask](https://img.shields.io/badge/Flask-3.1%2B-green)](https://flask.palletsprojects.com/)
+[![Xray](https://img.shields.io/badge/Xray-24.3%2B-orange)](https://github.com/XTLS/Xray-core)
 
-## Установка
+Веб-панель для управления VLESS прокси. Добавляй подписки и отдельные ссылки — панель сама тестирует, собирает конфиг со всеми рабочими узлами и применяет через **Xray API без перезапуска**. Встроенный **Observatory + Balancer** (leastPing) автоматически выбирают лучший узел.
 
+## 🌟 Особенности
+
+*   **⚡️ Hot-swap через API** — Добавление/удаление outbound на лету, без перезапуска Xray и без разрыва соединений.
+*   **🎯 Observatory + Balancer** — Xray сам проверяет задержки узлов каждые 30 секунд и выбирает лучший по leastPing.
+*   **📡 Умное тестирование** — Фоновая проверка каждые 60 секунд. Кнопка "Test All" протестирует все прокси и автоматически пересоберет конфиг.
+*   **🌍 Автоопределение страны профиля** — Из фрагмента ссылки (`#RU`, `#NL`) или через ip-api.com.
+*   **🔄 Импорт** — Вручную (вставка `vless://...` ссылки) или по URL подписки (списком).
+*   **🎨 Тема** — Светлая/тёмная тема.
+*   **📊 Фильтры** — All / World / Failed.
+
+
+## 🚀 Быстрая установка
+
+### 1. Установка Xray-core
 ```bash
-# 1. Xray-core
-sudo apt install unzip -y
-arch=$(uname -m)
-case "$arch" in x86_64) f="Xray-linux-64.zip" ;; aarch64) f="Xray-linux-arm64-v8a.zip" ;; esac
+# Установка зависимостей
+sudo apt update && sudo apt install unzip -y
+
+# Скачивание Xray под вашу архитектуру
+arch=$(uname -m); case "$arch" in x86_64) f="Xray-linux-64.zip" ;; aarch64) f="Xray-linux-arm64-v8a.zip" ;; *) echo "Unsupported arch: $arch"; exit 1 ;; esac
 wget "https://github.com/XTLS/Xray-core/releases/latest/download/$f"
+
+# Установка в /usr/local/bin
 sudo unzip -o "$f" -d /usr/local/bin/ xray geosite.dat geoip.dat && rm "$f"
 
-# 2. Панель
+# Установка панели
 sudo mkdir -p /opt/vless-manager
 cd /opt/vless-manager
-wget https://raw.githubusercontent.com/prasx/vless-manager/main/app.py
-pip install flask
+wget https://raw.githubusercontent.com/prasx/vless-manager-proxy/main/app.py
+pip3 install flask
 
-# 3. systemd-сервис Xray
+# Настройка systemd-сервисов
+# xray.service
 sudo tee /etc/systemd/system/xray.service << 'EOF'
 [Unit]
 Description=Xray VLESS Proxy
 After=network.target
+
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/xray run -config /etc/xray/config.json
@@ -30,17 +52,17 @@ Restart=on-failure
 RestartSec=3
 LimitNOFILE=4096
 NoNewPrivileges=true
+
 [Install]
 WantedBy=multi-user.target
 EOF
-sudo systemctl daemon-reload
-sudo systemctl enable --now xray
 
-# 4. systemd-сервис панели
+# vless-manager
 sudo tee /etc/systemd/system/vless-manager.service << 'EOF'
 [Unit]
-Description=vless-manager
+Description=VLESS Manager
 After=network.target
+
 [Service]
 Type=simple
 User=root
@@ -48,25 +70,17 @@ WorkingDirectory=/opt/vless-manager
 ExecStart=/usr/bin/python3 /opt/vless-manager/app.py
 Restart=on-failure
 RestartSec=5
+
 [Install]
 WantedBy=multi-user.target
 EOF
-sudo systemctl daemon-reload
-sudo systemctl enable --now vless-manager
-```
 
+# Запуск
+sudo systemctl daemon-reload
+sudo systemctl enable --now xray vless-manager
+```
 Открой `http://<ip>:5000`.
 
-## Возможности
-
-- **Добавление** — вставь `vless://...` ссылку вручную или импорт по URL подписки
-- **Автоопределение страны профиля** — из фрагмента `#RU` / `#NL` либо через ip-api.com
-- **Фоновая проверка** — каждые 60 секунд тестирует все прокси, обновляет статус
-- **Test All** — протестировать все и автоматически пересобрать конфиг
-- **Observatory + Balancer** — Xray сам проверят задержки узлов каждые 30s и выбирает best по leastPing
-- **Hot-swap через API** — добавление/удаление outbound на лету, без перезапуска
-- **Фильтры** — All / World / Failed
-- **Светлая/тёмная тема**
 
 ## Структура
 
@@ -106,3 +120,18 @@ vless-manager/
 | POST | `/api/xray/stop` | `systemctl stop xray` |
 | POST | `/api/xray-restart` | `systemctl restart xray` |
 | POST | `/api/import` | Импорт по URL `{"url":"..."}` |
+
+
+
+
+## 🤝 Вклад в проект
+Создавайте Issue, предлагайте Pull Request'ы или форкайте репозиторий.
+
+
+## 📜 Лицензия
+MIT License — свободно используйте, изменяйте и распространяйте.
+
+
+## 🙏 Благодарности
+Xray-core(https://github.com/XTLS/Xray-core)
+Flask(https://flask.palletsprojects.com/en/stable/)
