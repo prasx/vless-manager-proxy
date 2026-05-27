@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}VLESS Manager — Settings{% endblock %}
+{% block page_title %}Settings{% endblock %}
+{% block content %}
+
+<div class="settings-section">
+  <h2>Xray Binary &amp; Config</h2>
+  <div class="form-row">
+    <label>Xray binary path</label>
+    <input type="text" id="xrayBin" class="input" placeholder="e.g. xray or /usr/local/bin/xray">
+  </div>
+  <div class="form-row">
+    <label>Config file path</label>
+    <input type="text" id="xrayConfigPath" class="input" placeholder="e.g. xray_config.json or /etc/xray/config.json">
+  </div>
+  <div class="form-row">
+    <label>Proxy listen address</label>
+    <input type="text" id="proxyListen" class="input" placeholder="0.0.0.0 for LAN, 127.0.0.1 for local only">
+  </div>
+  <div class="form-actions">
+    <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+    <button class="btn btn-apply" onclick="restartXray()">Restart Xray</button>
+  </div>
+</div>
+
+<div class="settings-section">
+  <h2>Xray Daemon</h2>
+  <div id="xrayStatus" class="label" style="margin-bottom:10px">// checking...</div>
+  <div class="form-actions">
+    <button class="btn" id="btnXrayStart" onclick="startXrayDaemon()">Start</button>
+    <button class="btn btn-danger" id="btnXrayStop" onclick="stopXrayDaemon()">Stop</button>
+    <button class="btn btn-apply" onclick="restartXray()">Restart</button>
+  </div>
+</div>
+
+<div class="settings-section" style="overflow-x:auto">
+  <h2>API Reference</h2>
+  <table style="width:100%;border-collapse:collapse;font-size:0.78rem">
+    <thead>
+      <tr style="border-bottom:1px solid var(--border)">
+        <th style="text-align:left;padding:6px 8px">Method</th>
+        <th style="text-align:left;padding:6px 8px">Path</th>
+        <th style="text-align:left;padding:6px 8px">Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/proxies?filter=&amp;country=</code></td><td style="padding:4px 8px">List all proxies</td></tr>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/status</code></td><td style="padding:4px 8px">Proxy statistics</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/add</code></td><td style="padding:4px 8px">Add proxy <code>{"link":"vless://..."}</code></td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/test/&lt;id&gt;</code></td><td style="padding:4px 8px">Test single proxy</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/test-all</code></td><td style="padding:4px 8px">Test all + rebuild config</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources</code></td><td style="padding:4px 8px">Add source <code>{"name":"...","url":"..."}</code></td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources/&lt;id&gt;/import</code></td><td style="padding:4px 8px">Import from source</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources/import-all</code></td><td style="padding:4px 8px">Import from all sources</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/import</code></td><td style="padding:4px 8px">Import by URL <code>{"url":"..."}</code></td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/settings</code></td><td style="padding:4px 8px">Save settings</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray/start</code></td><td style="padding:4px 8px">systemctl start xray</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray/stop</code></td><td style="padding:4px 8px">systemctl stop xray</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray-restart</code></td><td style="padding:4px 8px">systemctl restart xray</td></tr>
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}
+{% block extra_js %}
+<script src="{{ url_for('static', filename='settings.js') }}"></script>
+{% endblock %}

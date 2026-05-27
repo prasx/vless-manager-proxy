@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+{% block head %}
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}VLESS Manager{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+{% block extra_css %}{% endblock %}
+{% endblock %}
+</head>
+<body>
+<div class="noise"></div>
+<div class="container">
+
+{% block header %}
+<div class="header">
+  <div class="header-top">
+    <div>
+      <div class="label">VLESS Manager</div>
+      <h1>{% block page_title %}Dashboard{% endblock %}</h1>
+    </div>
+    <nav class="nav">
+      <a href="/" class="btn">Dashboard</a>
+      <a href="/sources" class="btn">Sources</a>
+      <a href="/settings" class="btn">Settings</a>
+      <a href="/logs" class="btn">Logs</a>
+      <button class="btn btn-theme" onclick="toggleTheme()" title="Toggle theme">&#9681;</button>
+    </nav>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}{% endblock %}
+
+{% block footer %}
+<div class="footer">
+  <span>v1.0</span>
+  <a href="https://github.com/prasx" target="_blank">🖤 GitHub</a>
+</div>
+{% endblock %}
+
+</div>
+
+<script src="{{ url_for('static', filename='theme.js') }}"></script>
+<script src="{{ url_for('static', filename='toast.js') }}"></script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}VLESS Manager — Sources{% endblock %}
+{% block page_title %}Proxy Sources{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='sources.css') }}">
+{% endblock %}
+{% block content %}
+
+<div class="toolbar" style="margin-bottom:20px">
+  <button class="btn btn-primary" onclick="importAll()">Import All</button>
+</div>
+
+<div class="section-label">Add single proxy</div>
+<div class="add-form" style="margin-bottom:24px;">
+  <input class="inp-url" id="inpProxy" placeholder="vless://..." spellcheck="false" style="flex:1">
+  <button class="btn btn-primary" onclick="addProxy()">+ Add Proxy</button>
+</div>
+
+<div class="section-label">Proxy sources</div>
+<div class="add-form">
+  <input class="inp-name" id="inpName" placeholder="name" spellcheck="false">
+  <input class="inp-url" id="inpUrl" placeholder="https://..." spellcheck="false">
+  <button class="btn btn-primary" onclick="addSource()">+ Add Source</button>
+</div>
+
+<div class="card-list" id="list"></div>
+{% endblock %}
+{% block extra_js %}
+<script src="{{ url_for('static', filename='sources.js') }}"></script>
+{% endblock %}

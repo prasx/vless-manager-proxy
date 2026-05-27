@@ -1,0 +1,4 @@
+.table-wrap { overflow-x:auto; }
+.level-INFO { color:var(--green); }
+.level-WARNING { color:#ed8936; }
+.level-ERROR { color:var(--red); }

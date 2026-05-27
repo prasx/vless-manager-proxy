@@ -1,0 +1,51 @@
+{
+  "custom": true,
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "tag": "proxy",
+      "settings": {
+        "vnext": [
+          {
+            "address": "89.125.74.127",
+            "port": 443,
+            "users": [
+              {
+                "id": "9311cca4-c996-4d25-b482-11372eb6641e",
+                "encryption": "none",
+                "flow": "xtls-rprx-vision"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "yahoo.com",
+          "fingerprint": "firefox",
+          "show": false,
+          "publicKey": "QBSuzwfPwj9OW_pE0dQc5qgqnmfjh1Y9c10fq_bLZmQ",
+          "shortId": "99bcf8d2"
+        }
+      }
+    },
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "protocol": [
+          "bittorrent"
+        ],
+        "outboundTag": "direct"
+      }
+    ]
+  }
+}

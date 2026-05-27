@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}VLESS Manager — Dashboard{% endblock %}
+{% block page_title %}Proxy Dashboard{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+{% endblock %}
+{% block content %}
+
+<div id="activeNode" style="font-size:0.72rem;color:var(--green);margin-bottom:10px;padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px">// active: —</div>
+<div class="stats" id="statGrid">
+  <div class="stat-card active" data-filter="">
+    <div class="num" id="statTotal">0</div>
+    <div class="label-s">all</div>
+  </div>
+  <div class="stat-card" data-filter="working">
+    <div class="num" id="statWorking">0</div>
+    <div class="label-s">working</div>
+  </div>
+  <div class="stat-card" data-filter="failed_recent">
+    <div class="num" id="statFailedRecent">0</div>
+    <div class="label-s">failed &lt;24h</div>
+  </div>
+  <div class="stat-card" data-filter="failed_old">
+    <div class="num" id="statFailedOld">0</div>
+    <div class="label-s">failed &gt;24h</div>
+  </div>
+</div>
+
+<div class="toolbar">
+  <button class="btn" onclick="testAll()">Test All</button>
+  <div class="country-bar" id="countryBar">
+    <button class="btn btn-primary" id="countryAll" data-country="" onclick="setCountry('')">All</button>
+    <button class="btn" id="countryWorld" data-country="world" onclick="setCountry('world')">World 0</button>
+    <button class="btn" id="countryRu" data-country="RU" onclick="setCountry('RU')">RU 0</button>
+  </div>
+</div>
+
+<div class="table-wrap">
+  <table class="desktop-table">
+    <thead>
+      <tr><th>#</th><th>Host</th><th>Port</th><th>Country</th><th>Status</th><th>Latency</th><th></th></tr>
+    </thead>
+    <tbody id="tbodyDesktop"></tbody>
+  </table>
+  <div class="mobile-list" id="mobileList"></div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+{% endblock %}

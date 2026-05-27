@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}VLESS Manager — Logs{% endblock %}
+{% block page_title %}Logs{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='logs.css') }}">
+{% endblock %}
+{% block content %}
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Time</th><th>Level</th><th>Message</th></tr>
+    </thead>
+    <tbody>
+      {% if logs %}
+      {% for row in logs %}
+      <tr>
+        <td style="color:var(--text-muted)">{{ row['timestamp'] }}</td>
+        <td class="level-{{ row['level'] }}">{{ row['level'] }}</td>
+        <td>{{ row['message'] }}</td>
+      </tr>
+      {% endfor %}
+      {% else %}
+      <tr><td colspan="3" class="empty">no logs yet</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
