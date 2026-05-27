@@ -170,6 +170,7 @@ def init_db():
         "xray_config_path": str(default_xray_config_path()),
         "xray_hot_reload": "false",
         "proxy_listen": "0.0.0.0",
+        "max_active_proxies": "100",
     }
 
     for k, v in defaults.items():
@@ -634,13 +635,19 @@ def _build_outbound(parsed, tag):
     return ob
 
 
-def generate_full_config():
-    """Generate config with all working world proxies + observatory + balancer."""
+def generate_full_config(max_outbounds=0):
+    """Generate config with working world proxies + observatory + balancer.
+
+    If max_outbounds > 0, only the fastest N outbounds are included.
+    """
+    limit_sql = " ORDER BY latency" if max_outbounds > 0 else ""
     rows = db_q(
-        "SELECT link FROM proxies WHERE status='working' AND country != '' AND country != 'RU'"
+        f"SELECT link FROM proxies WHERE status='working' AND country != '' AND country != 'RU'{limit_sql}"
     )
     proxy_obs = []
     for i, r in enumerate(rows):
+        if max_outbounds > 0 and i >= max_outbounds:
+            break
         parsed = parse_vless(r["link"])
         if parsed:
             proxy_obs.append(_build_outbound(parsed, f"node{i}"))
@@ -756,6 +763,10 @@ def apply_all_proxies():
     proxy_count = len(proxy_obs)
 
     if xray_api_ok():
+        max_active = int(get_setting("max_active_proxies", "100"))
+        limited = generate_full_config(max_outbounds=max_active)
+        limited_obs = [o for o in limited["outbounds"] if o["tag"].startswith("node")]
+
         for tag in list_active_outbounds():
             if tag.startswith("node"):
                 try:
@@ -774,7 +785,7 @@ def apply_all_proxies():
                     )
                 except Exception:
                     pass
-        for ob in proxy_obs:
+        for ob in limited_obs:
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
             with tmp:
                 json.dump({"outbound": ob}, tmp)
@@ -796,7 +807,10 @@ def apply_all_proxies():
                 pass
             finally:
                 os.unlink(tmp_path)
-        add_log("INFO", f"Applied {proxy_count} proxies via API")
+        add_log(
+            "INFO",
+            f"Applied {len(limited_obs)} proxies via API (total working: {proxy_count})",
+        )
 
 
 def list_active_outbounds():
