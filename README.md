@@ -35,7 +35,7 @@ sudo unzip -o "$f" -d /usr/local/bin/ xray geosite.dat geoip.dat && rm "$f"
 # Установка панели
 sudo mkdir -p /opt/vless-manager
 cd /opt/vless-manager
-wget https://raw.githubusercontent.com/prasx/vless-manager-proxy/main/app.py
+wget https://github.com/prasx/vless-manager-proxy.git
 pip3 install flask
 
 # Настройка systemd-сервисов
@@ -74,6 +74,10 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+
+
+# Меняем адрес конфига
+sed -i 's|/etc/xray/config.json|/opt/vless-manager/xray_config.json|g' /etc/systemd/system/xray.service
 
 # Запуск
 sudo systemctl daemon-reload
