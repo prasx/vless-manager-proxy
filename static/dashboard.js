@@ -89,6 +89,11 @@ function statusBadge(status, failedSince) {
   return status === 'failed' ? 'badge-orange' : 'badge-muted';
 }
 
+function securityBadge(sec) {
+  if (!sec || sec === 'none') return ' <span class="badge badge-warn" title="no transport encryption">no enc</span>';
+  return '';
+}
+
 function renderDesktop(proxies) {
   const tb = $('#tbodyDesktop');
   tb.innerHTML = '';
@@ -104,7 +109,7 @@ function renderDesktop(proxies) {
       <td class="id">${p.id}</td>
       <td class="host-cell" title="${p.host}">${p.host}</td>
       <td>${p.port}</td>
-      <td>${p.country || '—'}</td>
+      <td>${p.country || '—'}${securityBadge(p.security)}</td>
       <td><span class="badge ${badgeCls}">${p.status}</span></td>
       <td class="${latClass}">${p.latency ? p.latency + 'ms' : '—'}</td>
       <td class="actions-cell">
@@ -132,7 +137,7 @@ function renderMobile(proxies) {
     card.innerHTML = `
       <div class="mc-host" title="${p.host}">${p.host}</div>
       <div class="mc-meta">
-        <span>#${p.id}</span><span>${p.port}</span><span>${p.country || '—'}</span>
+        <span>#${p.id}</span><span>${p.port}</span><span>${p.country || '—'}${securityBadge(p.security)}</span>
       </div>
       <div class="mc-actions">
         <button class="btn btn-sm" onclick="copyLink(${p.id})">copy</button>

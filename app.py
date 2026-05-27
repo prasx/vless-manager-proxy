@@ -129,7 +129,22 @@ def init_db():
         pass
 
     # default settings
-    defaults = {'xray_bin': 'xray', 'xray_config_path': str(default_xray_config_path()),
+    try:
+        c.execute("ALTER TABLE proxies ADD COLUMN security TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    # backfill security for existing rows
+    c.execute("SELECT id, link FROM proxies WHERE security IS NULL OR security = ''")
+    for row in c.fetchall():
+        parsed = parse_vless(row['link'])
+        if parsed:
+            sec = parsed.get('security', 'none') or 'none'
+            c.execute("UPDATE proxies SET security=? WHERE id=?", (sec, row['id']))
+        else:
+            c.execute("UPDATE proxies SET security='none' WHERE id=?", (row['id'],))
+
+    defaults = {'xray_bin': '/usr/local/bin/xray', 'xray_config_path': str(default_xray_config_path()),
                 'xray_hot_reload': 'false', 'proxy_listen': '0.0.0.0'}
     
     for k, v in defaults.items():
@@ -692,7 +707,7 @@ def api_proxies():
         clause = (clause + ' AND ' if clause else 'WHERE ') + "status='working' AND country='RU'"
     elif c == 'world':
         clause = (clause + ' AND ' if clause else 'WHERE ') + "status='working' AND country != '' AND country != 'RU'"
-    rows = db_q(f"SELECT id, host, port, country, status, latency, failed_since, link FROM proxies {clause} ORDER BY status, latency")
+    rows = db_q(f"SELECT id, host, port, country, status, latency, failed_since, security, link FROM proxies {clause} ORDER BY status, latency")
     return jsonify([dict(r) for r in rows])
 
 @app.route('/api/status')
@@ -713,8 +728,9 @@ def api_add():
     if not parsed:
         return jsonify(error='Invalid VLESS link'), 400
     try:
-        db_q("INSERT INTO proxies (link,host,port,country,status,added_at) VALUES (?,?,?,?,?,?)",
-             (link, parsed['host'], parsed['port'], parsed.get('country', ''), 'pending', datetime.now()))
+        sec = parsed.get('security', 'none') or 'none'
+        db_q("INSERT INTO proxies (link,host,port,country,status,security,added_at) VALUES (?,?,?,?,?,?,?)",
+             (link, parsed['host'], parsed['port'], parsed.get('country', ''), 'pending', sec, datetime.now()))
         add_log('INFO', f"Added proxy: {parsed['host']}:{parsed['port']}")
         threading.Thread(target=lambda: test_and_update(link), daemon=True).start()
         return jsonify(success=True)
@@ -926,8 +942,9 @@ def import_from_url(url):
         if not parsed:
             continue
         try:
-            db_q("INSERT OR IGNORE INTO proxies (link,host,port,country,status,added_at) VALUES (?,?,?,?,?,?)",
-                 (link, parsed['host'], parsed['port'], parsed.get('country', ''), 'pending', datetime.now()))
+            sec = parsed.get('security', 'none') or 'none'
+            db_q("INSERT OR IGNORE INTO proxies (link,host,port,country,status,security,added_at) VALUES (?,?,?,?,?,?,?)",
+                 (link, parsed['host'], parsed['port'], parsed.get('country', ''), 'pending', sec, datetime.now()))
             added += 1
         except sqlite3.IntegrityError:
             pass
@@ -960,11 +977,8 @@ if __name__ == '__main__':
     for r in rows:
         print(f"    {r['key']}: {r['value'][:60]}")
 
-    # Write fresh config without restarting
-    cfg_path = xray_config_path()
-    cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    config = generate_full_config()
-    cfg_path.write_text(json.dumps(config, indent=2))
+    # Write fresh config and hot-apply via API
+    apply_all_proxies()
 
     # Clean up long country names from old imports
     enrich_all_unknown_countries()

@@ -116,6 +116,7 @@ body {
 .badge-muted { color:var(--text-muted); border-color:var(--border); }
 .badge-red { color:var(--red); border-color:var(--red); }
 .badge-orange { color:#ed8936; border-color:#ed8936; }
+.badge-warn { color:#eab308; border-color:#eab308; }
 
 /* Latency */
 .lat-good { color:var(--green); }
