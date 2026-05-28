@@ -22,6 +22,7 @@ async function loadSettings() {
     $('xrayConfigPath').value = s.xray_config_path || '';
     $('proxyListen').value = s.proxy_listen || '0.0.0.0';
     $('maxActiveProxies').value = s.max_active_proxies || '30';
+    $('probeUrl').value = s.probe_url || 'https://www.gstatic.com/generate_204';
   }
   renderXrayStatus(status);
   loadCountries();
@@ -36,6 +37,7 @@ async function saveSettings() {
     xray_config_path: $('xrayConfigPath').value.trim(),
     proxy_listen: $('proxyListen').value.trim() || '0.0.0.0',
     max_active_proxies: $('maxActiveProxies').value.trim() || '30',
+    probe_url: $('probeUrl').value.trim() || 'https://www.gstatic.com/generate_204',
   };
   const r = await api('POST', '/api/settings', data);
   $('xrayBin').disabled = false;
@@ -59,6 +61,11 @@ async function restartXray() {
   const r = await api('POST', '/api/xray-restart');
   if (r.error) { toast(r.error, 'error'); return; }
   toast('xray restarted', 'success');
+}
+
+function resetProbeUrl() {
+  $('probeUrl').value = 'https://www.gstatic.com/generate_204';
+  toast('Probe URL reset to default');
 }
 
 // ─── Country Filter ───

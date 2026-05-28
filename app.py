@@ -157,6 +157,7 @@ def init_db():
         "max_active_proxies": "30",
         "safe_only_import": "false",
         "allowed_countries": "",
+        "probe_url": "https://www.gstatic.com/generate_204",
     }
 
     for k, v in defaults.items():
@@ -699,7 +700,7 @@ def generate_full_config(max_outbounds=0):
     if proxy_obs:
         config["observatory"] = {
             "subjectSelector": ["node"],
-            "probeUrl": "https://www.gstatic.com/generate_204",
+            "probeUrl": get_setting("probe_url", "https://www.gstatic.com/generate_204"),
             "probeInterval": "30s",
             "enableConcurrency": True,
         }
@@ -754,7 +755,7 @@ def generate_base_config():
         },
         "observatory": {
             "subjectSelector": ["node"],
-            "probeUrl": "https://www.gstatic.com/generate_204",
+            "probeUrl": get_setting("probe_url", "https://www.gstatic.com/generate_204"),
             "probeInterval": "30s",
             "enableConcurrency": True,
         },
