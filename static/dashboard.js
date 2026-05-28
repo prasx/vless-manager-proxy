@@ -3,6 +3,10 @@ const $$ = s => Array.from(document.querySelectorAll(s));
 
 let currentFilter = '';
 let currentCountry = '';
+let allProxies = [];
+let totalCount = 0;
+let isLoading = false;
+const PAGE_SIZE = 50;
 const linkMap = {};
 
 function api(method, url, body) {
@@ -11,15 +15,12 @@ function api(method, url, body) {
   return fetch(url, opts).then(r => r.json());
 }
 
-function makeProxiesUrl() {
+function makeProxiesUrl(limit, offset) {
   let url = '/api/proxies?filter=' + currentFilter;
   if (currentCountry) {
-    if (currentCountry === 'world') {
-      url += '&country=world';
-    } else {
-      url += '&country=RU';
-    }
+    url += currentCountry === 'world' ? '&country=world' : '&country=RU';
   }
+  if (limit != null) url += `&limit=${limit}&offset=${offset}`;
   return url;
 }
 
@@ -45,12 +46,41 @@ function updateCountryButtons() {
 }
 
 async function loadData() {
-  const [proxies, status, ob] = await Promise.all([
-    api('GET', makeProxiesUrl()),
+  isLoading = true;
+  allProxies = [];
+  totalCount = 0;
+  await fetchPage(true);
+  isLoading = false;
+}
+
+async function loadMore() {
+  if (isLoading) return;
+  isLoading = true;
+  await fetchPage(false);
+  isLoading = false;
+}
+
+async function fetchPage(reset) {
+  const offset = reset ? 0 : allProxies.length;
+  const [data, status, ob, xr] = await Promise.all([
+    api('GET', makeProxiesUrl(PAGE_SIZE, offset)),
     api('GET', '/api/status'),
-    api('GET', '/api/xray/outbounds').catch(() => ({nodes:[], traffic:{}}))
+    api('GET', '/api/xray/outbounds').catch(() => ({nodes:[], traffic:{}})),
+    api('GET', '/api/xray/status').catch(() => ({running:false}))
   ]);
+
+  const proxies = data.proxies || data;
+  totalCount = data.total != null ? data.total : proxies.length;
+
   proxies.forEach(p => linkMap[p.id] = p.link);
+
+  if (reset) {
+    allProxies = proxies;
+  } else {
+    proxies.forEach(p => { if (!linkMap[p.id]) linkMap[p.id] = p.link; });
+    allProxies = [...allProxies, ...proxies];
+  }
+
   $('#statTotal').textContent = status.total;
   $('#statWorking').textContent = status.working;
   $('#statFailedRecent').textContent = status.failed_recent;
@@ -64,20 +94,44 @@ async function loadData() {
   if (ruBtn) ruBtn.textContent = 'RU ' + (status.ru || 0);
   updateCountryButtons();
 
-  const activeEl = $('#activeNode');
-  if (activeEl) {
+  const activeInfo = $('#activeInfo');
+  if (activeInfo) {
     const nodes = ob.nodes || [];
+    const run = xr.running;
+    const xrayBadge = run
+      ? '<span class="badge badge-green" style="margin-left:8px;font-size:0.62rem">xray running</span>'
+      : '<span class="badge badge-red" style="margin-left:8px;font-size:0.62rem">xray stopped</span>';
     if (nodes.length) {
       const traffic = ob.traffic || {};
       const withTraffic = nodes.filter(t => traffic[t]?.downlink);
-      activeEl.innerHTML = `// active: <b>${withTraffic.length ? withTraffic.join(', ') : nodes.join(', ')}</b> (${nodes.length} nodes)`;
+      activeInfo.innerHTML = `// status: <b>${withTraffic.length ? withTraffic.join(', ') : nodes.join(', ')}</b> (${nodes.length} nodes)${xrayBadge}`;
     } else {
-      activeEl.innerHTML = '// active: —';
+      activeInfo.innerHTML = `// status: —${xrayBadge}`;
     }
   }
 
-  if (window.innerWidth <= 768) renderMobile(proxies);
-  else renderDesktop(proxies);
+  if (window.innerWidth <= 768) renderMobile(allProxies);
+  else renderDesktop(allProxies);
+
+  updatePagination();
+}
+
+function updatePagination() {
+  const bar = $('#paginationBar');
+  const btn = $('#showMoreBtn');
+  const info = $('#paginationInfo');
+  if (!bar || !btn || !info) return;
+
+  if (allProxies.length >= totalCount || totalCount <= PAGE_SIZE) {
+    bar.style.display = 'none';
+    return;
+  }
+
+  bar.style.display = 'flex';
+  const remaining = totalCount - allProxies.length;
+  const next = Math.min(PAGE_SIZE, remaining);
+  btn.textContent = `Show next ${next} (${allProxies.length}/${totalCount})`;
+  info.textContent = `${allProxies.length} of ${totalCount} shown`;
 }
 
 function statusBadge(status, failedSince) {
@@ -194,6 +248,18 @@ async function testAll() {
   toast('testing all proxies, wait a minute...');
   await api('POST','/api/test-all');
   setTimeout(loadData, 3000);
+}
+
+function exportBest() {
+  window.location.href = '/api/export/best';
+}
+
+async function cleanupFailed() {
+  if (!confirm('Delete ALL failed proxies? You can re-import from Sources to restore working ones.')) return;
+  const r = await api('POST','/api/cleanup');
+  if (r.deleted > 0) toast(`cleaned up ${r.deleted} failed proxies`, 'success');
+  else toast('no failed proxies to clean up');
+  loadData();
 }
 
 let resizeTimer;

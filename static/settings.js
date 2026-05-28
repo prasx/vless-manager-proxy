@@ -21,8 +21,10 @@ async function loadSettings() {
     $('xrayBin').value = s.xray_bin || 'xray';
     $('xrayConfigPath').value = s.xray_config_path || '';
     $('proxyListen').value = s.proxy_listen || '0.0.0.0';
+    $('maxActiveProxies').value = s.max_active_proxies || '30';
   }
   renderXrayStatus(status);
+  loadCountries();
 }
 
 async function saveSettings() {
@@ -33,6 +35,7 @@ async function saveSettings() {
     xray_bin: $('xrayBin').value.trim(),
     xray_config_path: $('xrayConfigPath').value.trim(),
     proxy_listen: $('proxyListen').value.trim() || '0.0.0.0',
+    max_active_proxies: $('maxActiveProxies').value.trim() || '30',
   };
   const r = await api('POST', '/api/settings', data);
   $('xrayBin').disabled = false;
@@ -56,6 +59,61 @@ async function restartXray() {
   const r = await api('POST', '/api/xray-restart');
   if (r.error) { toast(r.error, 'error'); return; }
   toast('xray restarted', 'success');
+}
+
+// ─── Country Filter ───
+
+let countryData = [];
+
+async function loadCountries() {
+  const data = await api('GET', '/api/countries');
+  if (data.error) return;
+  countryData = data.countries || [];
+  renderCountryFilter(data.allowed);
+}
+
+function renderCountryFilter(allowedRaw) {
+  const tb = $('countryFilterBody');
+  if (!tb) return;
+  tb.innerHTML = '';
+  if (!countryData.length) {
+    tb.innerHTML = '<tr><td colspan="3" class="empty">no countries detected yet — import some proxies</td></tr>';
+    return;
+  }
+  const allowedSet = new Set(allowedRaw.split(',').map(s => s.trim()).filter(Boolean));
+  for (const c of countryData) {
+    const checked = !allowedRaw ? true : allowedSet.has(c.code);
+    const tr = document.createElement('tr');
+    tr.style.cssText = 'border-bottom:1px solid var(--border)';
+    tr.innerHTML = `
+      <td style="padding:4px 12px;width:40px">
+        <input type="checkbox" data-code="${c.code}" ${checked ? 'checked' : ''}
+               style="width:16px;height:16px;accent-color:var(--text-primary);cursor:pointer">
+      </td>
+      <td style="padding:4px 6px;font-weight:bold;color:var(--text-primary)">${c.code}</td>
+      <td style="padding:4px 6px;color:var(--text-muted);font-size:0.72rem">
+        ${c.working} working / ${c.total} total
+      </td>
+    `;
+    tb.appendChild(tr);
+  }
+}
+
+function selectAllCountries(checked) {
+  const boxes = document.querySelectorAll('#countryFilterBody input[type="checkbox"]');
+  boxes.forEach(cb => cb.checked = checked);
+}
+
+async function saveCountryFilter() {
+  const checked = [];
+  document.querySelectorAll('#countryFilterBody input[type="checkbox"]:checked').forEach(cb => {
+    checked.push(cb.dataset.code);
+  });
+  const val = checked.join(',');
+  await api('POST', '/api/settings', { allowed_countries: val });
+  toast('Country filter saved — rebuilding config...');
+  await api('POST', '/api/rebuild');
+  toast('Config rebuilt with selected countries', 'success');
 }
 
 // ─── Xray Daemon ───

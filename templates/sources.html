@@ -8,6 +8,10 @@
 
 <div class="toolbar" style="margin-bottom:20px">
   <button class="btn btn-primary" onclick="importAll()">Import All</button>
+  <label class="chk-safe" title="Skip proxies without TLS/Reality encryption">
+    <input type="checkbox" id="chkSafeOnly" onchange="toggleSafeOnly()">
+    <span>Safe only (TLS/Reality)</span>
+  </label>
 </div>
 
 <div class="section-label">Add single proxy</div>

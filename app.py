@@ -16,9 +16,9 @@ DATABASE = BASE_DIR / "proxies.db"
 
 _geo_cache: dict = {}
 _geo_cache_lock = threading.Lock()
+_apply_lock = threading.Lock()
 
 # ─────────────────────── Xray Daemon ───────────────────────
-
 
 def xray_api_ok():
     try:
@@ -60,7 +60,6 @@ def _apply_proxy_listen(cfg):
 
 def _inject_api(cfg):
     """Ensure the config dict has the API section, inbound, outbound, and routing rule."""
-    _sanitize_outbounds(cfg)
     _apply_proxy_listen(cfg)
     cfg.setdefault(
         "api", {"tag": "api", "services": ["HandlerService", "RoutingService"]}
@@ -82,18 +81,6 @@ def _inject_api(cfg):
     if not any(r.get("outboundTag") == "api" for r in rules):
         rules.append(api_rule)
     _sanitize_outbounds(cfg)
-    return cfg
-
-
-def ensure_config():
-    cfg = xray_config_path()
-    if cfg.exists():
-        try:
-            data = json.loads(cfg.read_text())
-            data = _inject_api(data)
-            cfg.write_text(json.dumps(data, indent=2))
-        except Exception:
-            pass
     return cfg
 
 
@@ -122,9 +109,7 @@ def init_db():
             latency INTEGER DEFAULT 0,
             last_checked TIMESTAMP,
             added_at TIMESTAMP,
-            failed_since TIMESTAMP,
-            success_count INTEGER DEFAULT 0,
-            fail_count INTEGER DEFAULT 0
+            failed_since TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS sources (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -168,9 +153,10 @@ def init_db():
     defaults = {
         "xray_bin": "/usr/local/bin/xray",
         "xray_config_path": str(default_xray_config_path()),
-        "xray_hot_reload": "false",
         "proxy_listen": "0.0.0.0",
-        "max_active_proxies": "100",
+        "max_active_proxies": "30",
+        "safe_only_import": "false",
+        "allowed_countries": "",
     }
 
     for k, v in defaults.items():
@@ -505,8 +491,12 @@ def enrich_all_unknown_countries():
     rows = db_q(
         "SELECT id, host FROM proxies WHERE country IS NULL OR country = '' OR length(country) > 2"
     )
+    enriched = 0
     for r in rows:
-        enrich_country(r["id"], r["host"])
+        if enrich_country(r["id"], r["host"]):
+            enriched += 1
+    if enriched:
+        add_log("INFO", f"Enriched country for {enriched} proxies")
 
 
 # ─────────────────────── Проверка прокси ───────────────────────
@@ -588,6 +578,14 @@ def stream_settings(parsed):
         if hdr_host:
             h2["host"] = [hdr_host]
         s["httpSettings"] = h2
+    elif net == "xhttp":
+        xh = {}
+        if parsed.get("path"):
+            xh["path"] = parsed["path"]
+        if hdr_host:
+            xh["host"] = hdr_host
+        if xh:
+            s["xhttpSettings"] = xh
     if sec == "tls":
         s["security"] = "tls"
         tls = {"serverName": _reality_server_name(parsed), "allowInsecure": False}
@@ -640,10 +638,24 @@ def generate_full_config(max_outbounds=0):
 
     If max_outbounds > 0, only the fastest N outbounds are included.
     """
-    limit_sql = " ORDER BY latency" if max_outbounds > 0 else ""
-    rows = db_q(
-        f"SELECT link FROM proxies WHERE status='working' AND country != '' AND country != 'RU'{limit_sql}"
-    )
+    allowed = get_setting("allowed_countries", "").strip()
+    if allowed:
+        codes = [c.strip() for c in allowed.split(",") if c.strip()]
+        if codes:
+            placeholders = ",".join("?" * len(codes))
+            country_sql = f"AND country IN ({placeholders})"
+            limit_sql = " ORDER BY latency" if max_outbounds > 0 else ""
+            rows = db_q(
+                f"SELECT link FROM proxies WHERE status='working' {country_sql}{limit_sql}",
+                codes,
+            )
+        else:
+            rows = []
+    else:
+        limit_sql = " ORDER BY latency" if max_outbounds > 0 else ""
+        rows = db_q(
+            f"SELECT link FROM proxies WHERE status='working' AND country != '' AND country != 'RU'{limit_sql}"
+        )
     proxy_obs = []
     for i, r in enumerate(rows):
         if max_outbounds > 0 and i >= max_outbounds:
@@ -752,6 +764,16 @@ def generate_base_config():
 
 def apply_all_proxies():
     """Write minimal config to disk; manage proxies via Xray API only."""
+    if not _apply_lock.acquire(blocking=False):
+        add_log("WARN", "Config rebuild already in progress — skipping")
+        return
+    try:
+        _apply_all_proxies_impl()
+    finally:
+        _apply_lock.release()
+
+
+def _apply_all_proxies_impl():
     cfg_path = xray_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -872,15 +894,22 @@ def background_checker():
                 reimport_all_sources()
             continue
 
+        ok_count = 0
+        fail_count = 0
         with ThreadPoolExecutor(max_workers=20) as pool:
             futures = {pool.submit(_check_one, dict(r)): r for r in rows}
             for fut in as_completed(futures):
                 try:
                     pid, host, country, ok = fut.result()
+                    if ok:
+                        ok_count += 1
+                    else:
+                        fail_count += 1
                 except Exception:
                     pass
         enrich_all_unknown_countries()
         apply_all_proxies()
+        add_log("INFO", f"BG check: {ok_count} working, {fail_count} failed ({len(rows)} total)")
 
         if cycle % 60 == 0:
             reimport_all_sources()
@@ -913,8 +942,26 @@ def index():
 
 @app.route("/logs")
 def logs():
-    rows = db_q("SELECT * FROM logs ORDER BY timestamp DESC LIMIT 100")
-    return render_template("logs.html", logs=rows)
+    return render_template("logs.html")
+
+
+@app.route("/api/logs")
+def api_logs():
+    limit = request.args.get("limit", type=int, default=50)
+    offset = request.args.get("offset", type=int, default=0)
+    total = db_q("SELECT COUNT(*) c FROM logs")[0]["c"]
+    rows = db_q(
+        "SELECT id, timestamp, level, message FROM logs ORDER BY id DESC LIMIT ? OFFSET ?",
+        (limit, offset),
+    )
+    return jsonify(logs=[dict(r) for r in rows], total=total)
+
+
+@app.route("/api/logs/clear", methods=["POST"])
+def api_logs_clear():
+    db_q("DELETE FROM logs")
+    add_log("INFO", "Logs cleared")
+    return jsonify(success=True)
 
 
 @app.route("/sources")
@@ -934,6 +981,8 @@ def settings_page():
 def api_proxies():
     f = request.args.get("filter", "")
     c = request.args.get("country", "")
+    limit = request.args.get("limit", type=int)
+    offset = request.args.get("offset", type=int, default=0)
     clause = proxy_filter_clause(f)
     if c == "RU":
         clause = (
@@ -943,9 +992,19 @@ def api_proxies():
         clause = (
             clause + " AND " if clause else "WHERE "
         ) + "status='working' AND country != '' AND country != 'RU'"
+
+    total = db_q(f"SELECT COUNT(*) as c FROM proxies {clause}")[0]["c"]
+
+    limit_sql = ""
+    if limit is not None:
+        limit_sql = f" LIMIT {limit} OFFSET {offset}"
+
     rows = db_q(
-        f"SELECT id, host, port, country, status, latency, failed_since, security, link FROM proxies {clause} ORDER BY status, latency"
+        f"SELECT id, host, port, country, status, latency, failed_since, security, link FROM proxies {clause} ORDER BY status, latency{limit_sql}"
     )
+
+    if limit is not None:
+        return jsonify(proxies=[dict(r) for r in rows], total=total)
     return jsonify([dict(r) for r in rows])
 
 
@@ -977,7 +1036,7 @@ def api_status():
 
 @app.route("/api/add", methods=["POST"])
 def api_add():
-    link = request.json.get("link", "").strip()
+    link = (request.get_json(silent=True) or {}).get("link", "").strip()
     parsed = parse_vless(link)
     if not parsed:
         return jsonify(error="Invalid VLESS link"), 400
@@ -1043,17 +1102,25 @@ def api_test_all():
 def update_all():
     rows = db_q("SELECT id, link, host, country FROM proxies")
     if not rows:
+        add_log("WARN", "Test all: no proxies to test")
         return
+    ok_count = 0
+    fail_count = 0
     with ThreadPoolExecutor(max_workers=20) as pool:
         futures = {pool.submit(_check_one, dict(r)): r for r in rows}
         for fut in as_completed(futures):
             try:
                 pid, host, country, ok = fut.result()
+                if ok:
+                    ok_count += 1
+                else:
+                    fail_count += 1
                 if not country:
                     enrich_country(pid, host)
             except Exception:
                 pass
     apply_all_proxies()
+    add_log("INFO", f"Test all completed: {ok_count} working, {fail_count} failed ({len(rows)} total)")
 
 
 # ─────────────────────── Routes — API Sources ───────────────────────
@@ -1067,8 +1134,9 @@ def api_sources_list():
 
 @app.route("/api/sources", methods=["POST"])
 def api_sources_add():
-    name = request.json.get("name", "").strip()
-    url = request.json.get("url", "").strip()
+    body = request.get_json(silent=True) or {}
+    name = body.get("name", "").strip()
+    url = body.get("url", "").strip()
     if not name or not url:
         return jsonify(error="Name and URL required"), 400
     try:
@@ -1138,6 +1206,12 @@ def api_settings_set():
     return jsonify(success=True, diagnose=d, restart_hint=hint)
 
 
+@app.route("/api/rebuild", methods=["POST"])
+def api_rebuild():
+    threading.Thread(target=apply_all_proxies, daemon=True).start()
+    return jsonify(success=True, message="Config rebuild started")
+
+
 @app.route("/api/xray-restart", methods=["POST"])
 def api_xray_restart():
     ok = _systemctl_restart_xray()
@@ -1160,6 +1234,57 @@ def api_xray_status():
         config_mismatch=d["config_mismatch"],
         active_outbounds=active,
     )
+
+
+@app.route("/api/export/best")
+def api_export_best():
+    max_active = int(get_setting("max_active_proxies", "30"))
+    rows = db_q(
+        "SELECT link FROM proxies WHERE status='working' AND country != '' AND country != 'RU' ORDER BY latency LIMIT ?",
+        (max_active,),
+    )
+    links = "\n".join(r["link"] for r in rows)
+    return (
+        links,
+        200,
+        {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Content-Disposition": "attachment; filename=best_profile.txt",
+        },
+    )
+
+
+@app.route("/api/countries")
+def api_countries():
+    allowed_raw = get_setting("allowed_countries", "").strip()
+    allowed_set = set(c.strip() for c in allowed_raw.split(",") if c.strip())
+    rows = db_q(
+        "SELECT country, COUNT(*) cnt FROM proxies "
+        "WHERE country != '' AND country IS NOT NULL AND length(country)=2 "
+        "GROUP BY country ORDER BY country"
+    )
+    countries = []
+    for r in rows:
+        cc = r["country"]
+        working = db_q(
+            "SELECT COUNT(*) c FROM proxies WHERE country=? AND status='working'",
+            (cc,),
+        )[0]["c"]
+        countries.append({
+            "code": cc,
+            "total": r["cnt"],
+            "working": working,
+            "enabled": cc in allowed_set if allowed_raw else True,
+        })
+    return jsonify(countries=countries, allowed=allowed_raw)
+
+
+@app.route("/api/cleanup", methods=["POST"])
+def api_cleanup():
+    count = db_q("SELECT COUNT(*) c FROM proxies WHERE status='failed'")[0]["c"]
+    db_q("DELETE FROM proxies WHERE status='failed'")
+    add_log("INFO", f"Cleaned up {count} failed proxies")
+    return jsonify(success=True, deleted=count)
 
 
 @app.route("/api/xray/outbounds", methods=["GET"])
@@ -1216,7 +1341,7 @@ def api_xray_stop():
 
 @app.route("/api/import", methods=["POST"])
 def api_import():
-    url = request.json.get("url", "")
+    url = (request.get_json(silent=True) or {}).get("url", "")
     added = import_from_url(url)
     threading.Thread(target=update_all, daemon=True).start()
     return jsonify(success=True, added=added)
@@ -1230,13 +1355,18 @@ def import_from_url(url):
         add_log("ERROR", f"Import failed for {url[:80]}: {e}")
         return 0
     links = [line for line in content.splitlines() if line.startswith("vless://")]
+    safe_only = get_setting("safe_only_import", "false") == "true"
     added = 0
+    skipped = 0
     for link in links:
         parsed = parse_vless(link)
         if not parsed:
             continue
+        sec = parsed.get("security", "none") or "none"
+        if safe_only and sec == "none":
+            skipped += 1
+            continue
         try:
-            sec = parsed.get("security", "none") or "none"
             db_q(
                 "INSERT OR IGNORE INTO proxies (link,host,port,country,status,security,added_at) VALUES (?,?,?,?,?,?,?)",
                 (
@@ -1252,8 +1382,10 @@ def import_from_url(url):
             added += 1
         except sqlite3.IntegrityError:
             pass
-    if added:
-        add_log("INFO", f"Imported {added} proxies from {url[:60]}")
+    msg = f"Imported {added} proxies"
+    if skipped:
+        msg += f" (skipped {skipped} unencrypted)"
+    add_log("INFO", f"{msg} from {url[:60]}")
     return added
 
 
@@ -1263,8 +1395,11 @@ def import_from_url(url):
 def _systemctl_restart_xray():
     """Restart systemd xray via systemctl. Uses sudo only if not root."""
     cmd = ["systemctl", "restart", "xray"]
-    if os.geteuid() != 0:
-        cmd.insert(0, "sudo")
+    try:
+        if os.geteuid() != 0:
+            cmd.insert(0, "sudo")
+    except AttributeError:
+        pass
     try:
         r = subprocess.run(cmd, capture_output=True, timeout=15)
         if r.returncode == 0:
@@ -1286,12 +1421,8 @@ if __name__ == "__main__":
 
     # Write fresh config and hot-apply via API
     apply_all_proxies()
-
     # Clean up long country names from old imports
     enrich_all_unknown_countries()
 
     threading.Thread(target=background_checker, daemon=True).start()
-    print("  +- VLESS Manager -----------------------------+")
-    print("  |  http://127.0.0.1:5000                      |")
-    print("  +---------------------------------------------+")
-    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=5000, debug=False)

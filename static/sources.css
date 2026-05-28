@@ -65,6 +65,24 @@
   flex-shrink:0;
 }
 
+/* Safe-only checkbox */
+.chk-safe {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  font-size:0.78rem;
+  color:var(--text-secondary);
+  cursor:pointer;
+  user-select:none;
+  padding:4px 0;
+}
+.chk-safe input {
+  width:16px;
+  height:16px;
+  accent-color:var(--text-primary);
+  cursor:pointer;
+}
+
 @media(max-width:640px) {
   .container { padding:0 14px; }
   .nav { flex-wrap:wrap; gap:6px; }

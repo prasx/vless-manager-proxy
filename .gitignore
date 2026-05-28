@@ -1,1 +1,17 @@
-.vscode/PythonImportHelper-v2-Completion.json
+# Database
+proxies.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# Env
+.env

@@ -1,4 +1,24 @@
 .table-wrap { overflow-x:auto; }
 .level-INFO { color:var(--green); }
-.level-WARNING { color:#ed8936; }
+.level-WARN { color:#ed8936; }
 .level-ERROR { color:var(--red); }
+
+.toolbar {
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-bottom:16px;
+  align-items:center;
+}
+.pagination-bar {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:12px;
+  padding:16px;
+  border-top:1px solid var(--border);
+}
+.pagination-info {
+  font-size:0.72rem;
+  color:var(--text-muted);
+}

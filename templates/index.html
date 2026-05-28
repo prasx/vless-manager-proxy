@@ -6,7 +6,6 @@
 {% endblock %}
 {% block content %}
 
-<div id="activeNode" style="font-size:0.72rem;color:var(--green);margin-bottom:10px;padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px">// active: —</div>
 <div class="stats" id="statGrid">
   <div class="stat-card active" data-filter="">
     <div class="num" id="statTotal">0</div>
@@ -26,12 +25,20 @@
   </div>
 </div>
 
-<div class="toolbar">
-  <button class="btn" onclick="testAll()">Test All</button>
+<div id="activeNode">
+  <span id="activeInfo">// active: —</span>
   <div class="country-bar" id="countryBar">
-    <button class="btn btn-primary" id="countryAll" data-country="" onclick="setCountry('')">All</button>
-    <button class="btn" id="countryWorld" data-country="world" onclick="setCountry('world')">World 0</button>
-    <button class="btn" id="countryRu" data-country="RU" onclick="setCountry('RU')">RU 0</button>
+    <button class="btn btn-sm btn-primary" id="countryAll" data-country="" onclick="setCountry('')">All</button>
+    <button class="btn btn-sm" id="countryWorld" data-country="world" onclick="setCountry('world')">World 0</button>
+    <button class="btn btn-sm" id="countryRu" data-country="RU" onclick="setCountry('RU')">RU 0</button>
+  </div>
+</div>
+
+<div class="toolbar">
+  <div class="toolbar-actions">
+    <button class="btn" onclick="testAll()">Test All</button>
+    <button class="btn btn-primary" onclick="exportBest()">Export Best</button>
+    <button class="btn btn-danger" onclick="cleanupFailed()">Cleanup</button>
   </div>
 </div>
 
@@ -43,6 +50,10 @@
     <tbody id="tbodyDesktop"></tbody>
   </table>
   <div class="mobile-list" id="mobileList"></div>
+  <div class="pagination-bar" id="paginationBar" style="display:none">
+    <button class="btn" id="showMoreBtn" onclick="loadMore()">Show next 50</button>
+    <span class="pagination-info" id="paginationInfo"></span>
+  </div>
 </div>
 {% endblock %}
 {% block extra_js %}

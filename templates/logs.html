@@ -6,24 +6,23 @@
 {% endblock %}
 {% block content %}
 
+<div class="toolbar">
+  <button class="btn" onclick="clearLogs()">Clear</button>
+</div>
+
 <div class="table-wrap">
   <table>
     <thead>
       <tr><th>Time</th><th>Level</th><th>Message</th></tr>
     </thead>
-    <tbody>
-      {% if logs %}
-      {% for row in logs %}
-      <tr>
-        <td style="color:var(--text-muted)">{{ row['timestamp'] }}</td>
-        <td class="level-{{ row['level'] }}">{{ row['level'] }}</td>
-        <td>{{ row['message'] }}</td>
-      </tr>
-      {% endfor %}
-      {% else %}
-      <tr><td colspan="3" class="empty">no logs yet</td></tr>
-      {% endif %}
-    </tbody>
+    <tbody id="logBody"></tbody>
   </table>
+  <div class="pagination-bar" id="logPagination" style="display:none">
+    <button class="btn" id="logShowMoreBtn" onclick="loadMore()">Show next 50</button>
+    <span class="pagination-info" id="logPaginationInfo"></span>
+  </div>
 </div>
+{% endblock %}
+{% block extra_js %}
+<script src="{{ url_for('static', filename='logs.js') }}"></script>
 {% endblock %}

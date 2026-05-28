@@ -17,6 +17,10 @@
     <label>Proxy listen address</label>
     <input type="text" id="proxyListen" class="input" placeholder="0.0.0.0 for LAN, 127.0.0.1 for local only">
   </div>
+  <div class="form-row">
+    <label>Max active proxies</label>
+    <input type="number" id="maxActiveProxies" class="input" placeholder="30" min="1" max="500" style="max-width:120px">
+  </div>
   <div class="form-actions">
     <button class="btn btn-primary" onclick="saveSettings()">Save</button>
     <button class="btn btn-apply" onclick="restartXray()">Restart Xray</button>
@@ -30,6 +34,21 @@
     <button class="btn" id="btnXrayStart" onclick="startXrayDaemon()">Start</button>
     <button class="btn btn-danger" id="btnXrayStop" onclick="stopXrayDaemon()">Stop</button>
     <button class="btn btn-apply" onclick="restartXray()">Restart</button>
+  </div>
+</div>
+
+<div class="settings-section">
+  <h2>Country Filter</h2>
+  <p style="font-size:0.72rem;color:var(--text-muted);margin-bottom:12px">Only proxies from selected countries will be used in the working config.</p>
+  <div id="countryFilterWrap" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;padding:8px 0">
+    <table style="width:100%;font-size:0.82rem">
+      <tbody id="countryFilterBody"></tbody>
+    </table>
+  </div>
+  <div class="form-actions" style="margin-top:12px">
+    <button class="btn btn-primary" onclick="saveCountryFilter()">Save Country Filter</button>
+    <button class="btn" onclick="selectAllCountries(true)">Select All</button>
+    <button class="btn" onclick="selectAllCountries(false)">Clear All</button>
   </div>
 </div>
 

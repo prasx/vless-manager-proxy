@@ -35,16 +35,42 @@
   display:flex;
   gap:8px;
   flex-wrap:wrap;
-  margin-bottom:16px;
+  margin-bottom:10px;
   align-items:center;
+}
+.toolbar-actions {
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  align-items:center;
+}
+
+/* Active node bar */
+#activeNode {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  font-size:0.72rem;
+  color:var(--green);
+  margin-bottom:10px;
+  padding:6px 12px;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:4px;
+  min-height:34px;
+}
+#activeInfo {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
 }
 
 /* Country bar */
 .country-bar {
   display:flex;
-  gap:6px;
-  flex-wrap:wrap;
+  gap:4px;
   align-items:center;
+  flex-shrink:0;
 }
 
 /* Desktop table extras */
@@ -56,6 +82,20 @@
 }
 .desktop-table td.actions-cell { white-space:nowrap; text-align:right; }
 .mobile-list { display:none; }
+
+/* Pagination bar */
+.pagination-bar {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:12px;
+  padding:16px;
+  border-top:1px solid var(--border);
+}
+.pagination-info {
+  font-size:0.72rem;
+  color:var(--text-muted);
+}
 
 /* Mobile */
 @media(max-width:768px) {

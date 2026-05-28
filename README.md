@@ -35,7 +35,7 @@ sudo unzip -o "$f" -d /usr/local/bin/ xray geosite.dat geoip.dat && rm "$f"
 # Установка панели
 sudo mkdir -p /opt/vless-manager
 cd /opt/vless-manager
-wget https://github.com/prasx/vless-manager-proxy.git
+git clone https://github.com/prasx/vless-manager-proxy.git
 pip3 install flask
 
 # Настройка systemd-сервисов
@@ -124,6 +124,12 @@ vless-manager/
 | POST | `/api/xray/stop` | `systemctl stop xray` |
 | POST | `/api/xray-restart` | `systemctl restart xray` |
 | POST | `/api/import` | Импорт по URL `{"url":"..."}` |
+| GET | `/api/export/best` | Скачать лучшие vless:// ссылки |
+| POST | `/api/cleanup` | Удалить все упавшие прокси |
+| POST | `/api/rebuild` | Пересобрать конфиг |
+| GET | `/api/countries` | Список стран с количеством прокси |
+| GET | `/api/logs?limit=&offset=` | Логи с пагинацией |
+| POST | `/api/logs/clear` | Очистить логи |
 
 
 

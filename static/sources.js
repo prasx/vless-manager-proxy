@@ -7,32 +7,45 @@ function api(method, url, body) {
 }
 
 async function load() {
-  const sources = await api('GET','/api/sources');
+  const [sources, settings] = await Promise.all([
+    api('GET','/api/sources'),
+    api('GET','/api/settings'),
+  ]);
   const list = $('#list');
   list.innerHTML = '';
   if (!sources.length) {
     list.innerHTML = '<div class="empty">// no sources yet</div>';
-    return;
+  } else {
+    for (const s of sources) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      const imported = s.last_import
+        ? new Date(s.last_import).toLocaleString()
+        : 'never';
+      card.innerHTML = `
+        <div class="c-body">
+          <div class="c-name">${s.name}</div>
+          <div class="c-url" title="${s.url}">${s.url}</div>
+          <div class="c-meta">last import: ${imported}</div>
+        </div>
+        <div class="c-actions">
+          <button class="btn btn-sm" onclick="importOne(${s.id})">import</button>
+          <button class="btn btn-sm btn-danger" onclick="delSource(${s.id})">del</button>
+        </div>
+      `;
+      list.appendChild(card);
+    }
   }
-  for (const s of sources) {
-    const card = document.createElement('div');
-    card.className = 'card';
-    const imported = s.last_import
-      ? new Date(s.last_import).toLocaleString()
-      : 'never';
-    card.innerHTML = `
-      <div class="c-body">
-        <div class="c-name">${s.name}</div>
-        <div class="c-url" title="${s.url}">${s.url}</div>
-        <div class="c-meta">last import: ${imported}</div>
-      </div>
-      <div class="c-actions">
-        <button class="btn btn-sm" onclick="importOne(${s.id})">import</button>
-        <button class="btn btn-sm btn-danger" onclick="delSource(${s.id})">del</button>
-      </div>
-    `;
-    list.appendChild(card);
+  const chk = $('#chkSafeOnly');
+  if (chk && settings.safe_only_import === 'true') {
+    chk.checked = true;
   }
+}
+
+async function toggleSafeOnly() {
+  const val = $('#chkSafeOnly').checked ? 'true' : 'false';
+  await api('POST','/api/settings', { safe_only_import: val });
+  toast(`safe-only import ${val === 'true' ? 'ON' : 'OFF'}`);
 }
 
 async function addProxy() {
