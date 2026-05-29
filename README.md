@@ -1,7 +1,7 @@
 # VLESS Manager Proxy
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.1%2B-green)](https://flask.palletsprojects.com/)
 [![Xray](https://img.shields.io/badge/Xray-24.3%2B-orange)](https://github.com/XTLS/Xray-core)
 
@@ -29,44 +29,117 @@
 
 ## 🚀 Быстрая установка
 
-### 1. Установка Xray-core
+## 1. Подготовка системы
+
 ```bash
-# Установка зависимостей
-sudo apt update && sudo apt install unzip -y
+sudo apt update
+sudo apt install -y unzip wget git python3 python3-pip python3-venv
+```
 
-# Скачивание Xray под вашу архитектуру
-arch=$(uname -m); case "$arch" in x86_64) f="Xray-linux-64.zip" ;; aarch64) f="Xray-linux-arm64-v8a.zip" ;; *) echo "Unsupported arch: $arch"; exit 1 ;; esac
-wget "https://github.com/XTLS/Xray-core/releases/latest/download/$f"
+---
 
-# Установка в /usr/local/bin
-sudo unzip -o "$f" -d /usr/local/bin/ xray geosite.dat geoip.dat && rm "$f"
+## 2. Установка Xray
 
-# Установка панели
+```bash
+cd /tmp
+
+arch=$(uname -m)
+case "$arch" in
+  x86_64) f="Xray-linux-64.zip" ;;
+  aarch64) f="Xray-linux-arm64-v8a.zip" ;;
+  *) echo "Unsupported arch: $arch"; exit 1 ;;
+esac
+
+wget -q --show-progress "https://github.com/XTLS/Xray-core/releases/latest/download/$f"
+
+# директория под xray
+sudo mkdir -p /usr/local/share/xray
+
+# распаковка
+sudo unzip -o "$f" -d /usr/local/share/xray
+
+# бинарник
+sudo ln -sf /usr/local/share/xray/xray /usr/local/bin/xray
+
+rm "$f"
+```
+
+
+
+## 3. Базовый конфиг Xray
+
+```bash
+sudo mkdir -p /etc/xray
+
+sudo tee /etc/xray/config.json << 'EOF'
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [],
+  "outbounds": [
+    {
+      "protocol": "freedom"
+    }
+  ]
+}
+EOF
+```
+
+
+
+## 4. Установка VLESS Manager
+
+```bash
 sudo mkdir -p /opt/vless-manager
 cd /opt/vless-manager
-git clone https://github.com/prasx/vless-manager-proxy.git
-pip3 install flask
 
-# Настройка systemd-сервисов
-# xray.service
+sudo git clone https://github.com/prasx/vless-manager-proxy.git .
+
+# виртуальное окружение
+python3 -m venv venv
+source venv/bin/activate
+
+pip install --upgrade pip
+pip install -r requirements.txt || pip install flask
+
+deactivate
+```
+
+
+
+## 5. systemd сервисы
+
+### Xray
+
+```bash
 sudo tee /etc/systemd/system/xray.service << 'EOF'
 [Unit]
-Description=Xray VLESS Proxy
+Description=Xray Service
 After=network.target
 
 [Service]
-Type=simple
+User=nobody
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
 ExecStart=/usr/local/bin/xray run -config /etc/xray/config.json
+
 Restart=on-failure
 RestartSec=3
+
 LimitNOFILE=4096
-NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
 EOF
+```
 
-# vless-manager
+
+
+### VLESS Manager
+
+```bash
 sudo tee /etc/systemd/system/vless-manager.service << 'EOF'
 [Unit]
 Description=VLESS Manager
@@ -74,23 +147,38 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
 WorkingDirectory=/opt/vless-manager
-ExecStart=/usr/bin/python3 /opt/vless-manager/app.py
+ExecStart=/opt/vless-manager/venv/bin/python app.py
+
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
+```
 
 
-# Меняем адрес конфига
-sed -i 's|/etc/xray/config.json|/opt/vless-manager/xray_config.json|g' /etc/systemd/system/xray.service
 
-# Запуск
+## 6. Запуск
+
+```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now xray vless-manager
+sudo systemctl enable xray vless-manager
+sudo systemctl start xray vless-manager
+```
+
+---
+
+## 7. Проверка
+
+```bash
+systemctl status xray
+systemctl status vless-manager
+
+journalctl -u xray -f
+journalctl -u vless-manager -f
+
 ```
 Открой `http://<ip>:5000`.
 
