@@ -7,6 +7,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+def now_utc():
+    """Наивный UTC datetime для хранения в БД (совместимость с SQLite datetime('now'))."""
+    return datetime.now(ZoneInfo("UTC")).replace(tzinfo=None)
+
+def moscow_str(dt=None):
+    """Форматирование в московское время для отображения."""
+    if dt is None:
+        dt = datetime.now(MOSCOW_TZ)
+    elif dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(MOSCOW_TZ)
+    else:
+        dt = dt.astimezone(MOSCOW_TZ)
+    return dt.strftime("%Y-%m-%d %H:%M:%S %z")
 from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
@@ -179,7 +195,7 @@ def add_log(level, message):
     try:
         conn.execute(
             "INSERT INTO logs (timestamp, level, message) VALUES (?, ?, ?)",
-            (datetime.now(), level, message),
+            (now_utc(), level, message),
         )
         conn.commit()
     finally:
@@ -529,7 +545,7 @@ def test_proxy(link):
 
 
 def update_proxy_status(pid, ok, lat):
-    now = datetime.now()
+    now = now_utc()
     if ok:
         db_q(
             "UPDATE proxies SET status='working', latency=?, last_checked=?, failed_since=NULL WHERE id=?",
@@ -863,7 +879,7 @@ def _update_subscribe_cache():
     total_all = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
     total_working = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working'")[0]["c"]
     probe_url = get_setting("probe_url")
-    now = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M:%S %z")
+    now = moscow_str()
     lines = [
         "#profile-title: VLESS Manager",
         f"#profile-update-interval: 1",
@@ -905,7 +921,7 @@ def reimport_all_sources():
     total = 0
     for r in rows:
         added = import_from_url(r["url"])
-        db_q("UPDATE sources SET last_import=? WHERE id=?", (datetime.now(), r["id"]))
+        db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), r["id"]))
         total += added
     if total:
         add_log("INFO", f"Hourly re-import: {total} new proxies")
@@ -989,7 +1005,16 @@ def api_logs():
         "SELECT id, timestamp, level, message FROM logs ORDER BY id DESC LIMIT ? OFFSET ?",
         (limit, offset),
     )
-    return jsonify(logs=[dict(r) for r in rows], total=total)
+    logs = []
+    for r in rows:
+        d = dict(r)
+        if d.get("timestamp"):
+            try:
+                d["timestamp"] = moscow_str(d["timestamp"])
+            except Exception:
+                pass
+        logs.append(d)
+    return jsonify(logs=logs, total=total)
 
 
 @app.route("/api/logs/clear", methods=["POST"])
@@ -1082,7 +1107,7 @@ def api_add():
                 parsed.get("country", ""),
                 "pending",
                 sec,
-                datetime.now(),
+                now_utc(),
             ),
         )
         add_log("INFO", f"Added proxy: {parsed['host']}:{parsed['port']}")
@@ -1173,7 +1198,7 @@ def api_sources_add():
     try:
         db_q(
             "INSERT INTO sources (name, url, created_at) VALUES (?, ?, ?)",
-            (name, url, datetime.now()),
+            (name, url, now_utc()),
         )
         add_log("INFO", f"Added source: {name}")
         return jsonify(success=True)
@@ -1194,7 +1219,7 @@ def api_sources_import_one(sid):
     if not rows:
         return jsonify(error="Not found"), 404
     added = import_from_url(rows[0]["url"])
-    db_q("UPDATE sources SET last_import=? WHERE id=?", (datetime.now(), sid))
+    db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), sid))
     threading.Thread(target=update_all, daemon=True).start()
     return jsonify(success=True, added=added)
 
@@ -1205,7 +1230,7 @@ def api_sources_import_all():
     total = 0
     for r in rows:
         added = import_from_url(r["url"])
-        db_q("UPDATE sources SET last_import=? WHERE id=?", (datetime.now(), r["id"]))
+        db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), r["id"]))
         total += added
     threading.Thread(target=update_all, daemon=True).start()
     add_log("INFO", f"Imported {total} proxies from all sources")
@@ -1396,7 +1421,7 @@ def import_from_url(url):
                     parsed.get("country", ""),
                     "pending",
                     sec,
-                    datetime.now(),
+                    now_utc(),
                 ),
             )
             added += 1
