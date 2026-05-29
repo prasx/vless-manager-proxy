@@ -15,9 +15,15 @@
 *   **🎯 Observatory + Balancer** — Xray сам проверяет задержки узлов каждые 30 секунд и выбирает лучший по leastPing.
 *   **📡 Умное тестирование** — Фоновая проверка каждые 60 секунд. Кнопка "Test All" протестирует все прокси и автоматически пересоберет конфиг.
 *   **🌍 Автоопределение страны профиля** — Из фрагмента ссылки (`#RU`, `#NL`) или через ip-api.com.
-*   **🔄 Импорт** — Вручную (вставка `vless://...` ссылки) или по URL подписки (списком).
+*   **➕ Импорт** — Вручную (вставка `vless://...` ссылки), по URL подписки, или массовый из источников.
+*   **🛡 Safe-only import** — Флаг при импорте: пропускать прокси с `security=none`.
+*   **🌐 Фильтр по странам** — Выбор разрешённых стран в Settings, конфиг собирается только из них.
+*   **📄 Пагинация** — На Dashboard и Logs: показаны первые 50 записей, кнопка "Show next 50".
+*   **🔗 Subscription URL** — `/api/subscribe.txt` для v2rayNG, Streisand, Hiddify, Nekobox.
+*   **🧹 Cleanup** — Удалить все упавшие прокси одной кнопкой.
 *   **🎨 Тема** — Светлая/тёмная тема.
-*   **📊 Фильтры** — All / World / Failed.
+*   **📊 Фильтры** — All / Working / Failed.
+*   **⏰ Фоновые задачи** — Автоимпорт из источников каждый час, автотестирование каждые 60с, Observatory (30с).
 
 
 ## 🚀 Быстрая установка
@@ -117,6 +123,7 @@ vless-manager/
 | GET | `/api/sources` | Список источников |
 | POST | `/api/sources` | Добавить `{"name":"...","url":"..."}` |
 | POST | `/api/sources/<id>/import` | Импорт из источника |
+| DELETE | `/api/sources/<id>` | Удалить источник |
 | POST | `/api/sources/import-all` | Импорт из всех |
 | GET | `/api/settings` | Настройки |
 | POST | `/api/settings` | Сохранить настройки |
@@ -126,9 +133,8 @@ vless-manager/
 | POST | `/api/xray/stop` | `systemctl stop xray` |
 | POST | `/api/xray-restart` | `systemctl restart xray` |
 | POST | `/api/import` | Импорт по URL `{"url":"..."}` |
-| GET | `/api/export/best` | Скачать лучшие vless:// ссылки |
+| GET | `/api/subscribe.txt` | Subscription URL (v2rayNG, Streisand, Hiddify, Nekobox) |
 | POST | `/api/cleanup` | Удалить все упавшие прокси |
-| POST | `/api/rebuild` | Пересобрать конфиг |
 | GET | `/api/countries` | Список стран с количеством прокси |
 | GET | `/api/logs?limit=&offset=` | Логи с пагинацией |
 | POST | `/api/logs/clear` | Очистить логи |

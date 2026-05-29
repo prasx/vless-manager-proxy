@@ -44,23 +44,22 @@ async function saveSettings() {
   $('xrayConfigPath').disabled = false;
   $('proxyListen').disabled = false;
   if (r.error) { toast(r.error, 'error'); return; }
-  toast('Settings saved', 'success');
   if (r.restart_hint) {
     toast(r.restart_hint, 'success');
   } else if (data.proxy_listen || data.xray_config_path) {
-    toast('Restarting Xray...');
     const rr = await api('POST', '/api/xray-restart');
     if (rr.error) toast(rr.error, 'error');
     else toast(rr.message || 'Xray restarted', 'success');
+  } else {
+    toast('Settings saved', 'success');
   }
   loadSettings();
 }
 
 async function restartXray() {
-  toast('restarting xray...');
+  toast('restarting xray ...');
   const r = await api('POST', '/api/xray-restart');
-  if (r.error) { toast(r.error, 'error'); return; }
-  toast('xray restarted', 'success');
+  if (r && r.error) toast(r.error, 'error');
 }
 
 function resetProbeUrl() {
@@ -117,10 +116,9 @@ async function saveCountryFilter() {
     checked.push(cb.dataset.code);
   });
   const val = checked.join(',');
-  await api('POST', '/api/settings', { allowed_countries: val });
-  toast('Country filter saved — rebuilding config...');
-  await api('POST', '/api/rebuild');
-  toast('Config rebuilt with selected countries', 'success');
+  const r = await api('POST', '/api/settings', { allowed_countries: val });
+  if (r.error) { toast(r.error, 'error'); return; }
+  toast('Country filter saved — rebuilding config...', 'success');
 }
 
 // ─── Xray Daemon ───

@@ -84,7 +84,6 @@ async function fetchPage(reset) {
   $('#statTotal').textContent = status.total;
   $('#statWorking').textContent = status.working;
   $('#statFailedRecent').textContent = status.failed_recent;
-  $('#statFailedOld').textContent = status.failed_old;
 
   const allBtn = $('#countryAll');
   const worldBtn = $('#countryWorld');
@@ -248,10 +247,6 @@ async function testAll() {
   toast('testing all proxies, wait a minute...');
   await api('POST','/api/test-all');
   setTimeout(loadData, 3000);
-}
-
-function exportBest() {
-  window.location.href = '/api/export/best';
 }
 
 async function cleanupFailed() {

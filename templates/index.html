@@ -19,10 +19,6 @@
     <div class="num" id="statFailedRecent">0</div>
     <div class="label-s">failed &lt;24h</div>
   </div>
-  <div class="stat-card" data-filter="failed_old">
-    <div class="num" id="statFailedOld">0</div>
-    <div class="label-s">failed &gt;24h</div>
-  </div>
 </div>
 
 <div id="activeNode">
@@ -37,8 +33,7 @@
 <div class="toolbar">
   <div class="toolbar-actions">
     <button class="btn" onclick="testAll()">Test All</button>
-    <button class="btn btn-primary" onclick="exportBest()">Export Best</button>
-    <button class="btn btn-danger" onclick="cleanupFailed()">Cleanup</button>
+    <button class="btn btn-danger" onclick="cleanupFailed()">Cleanup failed</button>
   </div>
 </div>
 

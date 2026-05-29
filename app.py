@@ -5,6 +5,7 @@ import json, sqlite3, threading, time, urllib.request, re, subprocess, os, socke
 from urllib.parse import urlparse, parse_qs, unquote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify
 
@@ -13,6 +14,7 @@ app.config["JSON_AS_ASCII"] = False
 
 BASE_DIR = Path(__file__).parent
 DATABASE = BASE_DIR / "proxies.db"
+SUBSCRIBE_FILE = BASE_DIR / "subscribe.txt"
 
 _geo_cache: dict = {}
 _geo_cache_lock = threading.Lock()
@@ -346,6 +348,7 @@ def xray_config_path():
 # ─────────────────────── Парсинг VLESS ───────────────────────
 
 _VALID_FLOWS = frozenset({"xtls-rprx-vision", "xtls-rprx-direct"})
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 
 def sanitize_flow(flow):
@@ -430,6 +433,9 @@ def parse_vless(link):
     parsed = urlparse(link.replace("vless://", "https://", 1))
     uid, server, port = parsed.username, parsed.hostname, parsed.port
     if not uid or not server or port is None:
+        return None
+    uid = unquote(str(uid)).split("#")[0].split("&")[0].strip()
+    if not _UUID_RE.match(uid):
         return None
     result = {
         "uid": uid,
@@ -557,7 +563,7 @@ def stream_settings(parsed):
         if parsed.get("path"):
             ws["path"] = parsed["path"]
         if hdr_host:
-            ws["headers"] = {"Host": hdr_host}
+            ws["host"] = hdr_host
         if ws:
             s["wsSettings"] = ws
     elif net == "grpc":
@@ -700,7 +706,7 @@ def generate_full_config(max_outbounds=0):
     if proxy_obs:
         config["observatory"] = {
             "subjectSelector": ["node"],
-            "probeUrl": get_setting("probe_url", "https://www.gstatic.com/generate_204"),
+            "probeUrl": get_setting("probe_url"),
             "probeInterval": "30s",
             "enableConcurrency": True,
         }
@@ -755,7 +761,7 @@ def generate_base_config():
         },
         "observatory": {
             "subjectSelector": ["node"],
-            "probeUrl": get_setting("probe_url", "https://www.gstatic.com/generate_204"),
+            "probeUrl": get_setting("probe_url"),
             "probeInterval": "30s",
             "enableConcurrency": True,
         },
@@ -843,6 +849,34 @@ def _apply_all_proxies_impl():
             "WARN",
             f"Xray API unavailable — wrote {applied} proxies to disk (total working: {proxy_count})",
         )
+    _update_subscribe_cache()
+
+
+def _update_subscribe_cache():
+    """Build subscribe.txt with vless links + metadata for external clients (v2rayNG etc.)."""
+    max_active = int(get_setting("max_active_proxies", "30"))
+    allowed = get_setting("allowed_countries", "").strip()
+    rows = db_q(
+        "SELECT link FROM proxies WHERE status='working' AND country != '' AND country != 'RU' ORDER BY latency LIMIT ?",
+        (max_active,),
+    )
+    total_all = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
+    total_working = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working'")[0]["c"]
+    probe_url = get_setting("probe_url")
+    now = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M:%S %z")
+    lines = [
+        "#profile-title: VLESS Manager",
+        f"#profile-update-interval: 1",
+        f"# Updated: {now}",
+        f"# Configs: {len(rows)} / {total_working} working / {total_all} total",
+    ]
+    if allowed:
+        lines.append(f"# Filter: {allowed}")
+    lines.append(f"# Probe: {probe_url}")
+    lines.append("")
+    for r in rows:
+        lines.append(r["link"])
+    SUBSCRIBE_FILE.write_text("\n".join(lines), encoding="utf-8")
 
 
 def list_active_outbounds():
@@ -914,6 +948,8 @@ def background_checker():
 
         if cycle % 60 == 0:
             reimport_all_sources()
+            _update_subscribe_cache()
+            add_log("INFO", "Subscribe cache updated after hourly reimport")
 
 
 # ─────────────────────── Helpers ───────────────────────
@@ -924,8 +960,6 @@ def proxy_filter_clause(f):
         return "WHERE status='working'"
     elif f == "failed_recent":
         return "WHERE status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
-    elif f == "failed_old":
-        return "WHERE status='failed' AND failed_since < datetime('now', '-24 hours')"
     return ""
 
 
@@ -1016,9 +1050,6 @@ def api_status():
     failed_recent = db_q(
         "SELECT COUNT(*) c FROM proxies WHERE status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
     )[0]["c"]
-    failed_old = db_q(
-        "SELECT COUNT(*) c FROM proxies WHERE status='failed' AND failed_since < datetime('now', '-24 hours')"
-    )[0]["c"]
     ru = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working' AND country='RU'")[
         0
     ]["c"]
@@ -1029,7 +1060,6 @@ def api_status():
         total=total,
         working=working,
         failed_recent=failed_recent,
-        failed_old=failed_old,
         ru=ru,
         world=world,
     )
@@ -1194,9 +1224,12 @@ def api_settings_get():
 @app.route("/api/settings", methods=["POST"])
 def api_settings_set():
     data = request.json or {}
+    needs_rebuild = "allowed_countries" in data
     for k, v in data.items():
         set_setting(k, str(v))
     add_log("INFO", f"Settings updated: {', '.join(data.keys())}")
+    if needs_rebuild:
+        threading.Thread(target=apply_all_proxies, daemon=True).start()
     d = xray_diagnose()
     hint = None
     if d["systemd_active"]:
@@ -1205,12 +1238,6 @@ def api_settings_set():
         else:
             hint = "sudo systemctl restart xray"
     return jsonify(success=True, diagnose=d, restart_hint=hint)
-
-
-@app.route("/api/rebuild", methods=["POST"])
-def api_rebuild():
-    threading.Thread(target=apply_all_proxies, daemon=True).start()
-    return jsonify(success=True, message="Config rebuild started")
 
 
 @app.route("/api/xray-restart", methods=["POST"])
@@ -1237,22 +1264,14 @@ def api_xray_status():
     )
 
 
-@app.route("/api/export/best")
-def api_export_best():
-    max_active = int(get_setting("max_active_proxies", "30"))
-    rows = db_q(
-        "SELECT link FROM proxies WHERE status='working' AND country != '' AND country != 'RU' ORDER BY latency LIMIT ?",
-        (max_active,),
-    )
-    links = "\n".join(r["link"] for r in rows)
-    return (
-        links,
-        200,
-        {
+@app.route("/api/subscribe.txt")
+def api_subscribe():
+    """Subscription endpoint for v2rayNG / Nekobox / Streisand / Hiddify — serves cached subscribe.txt."""
+    if SUBSCRIBE_FILE.exists():
+        return SUBSCRIBE_FILE.read_text(encoding="utf-8"), 200, {
             "Content-Type": "text/plain; charset=utf-8",
-            "Content-Disposition": "attachment; filename=best_profile.txt",
-        },
-    )
+        }
+    return "// no proxies yet", 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/api/countries")
