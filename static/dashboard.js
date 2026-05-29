@@ -8,6 +8,7 @@ let totalCount = 0;
 let isLoading = false;
 const PAGE_SIZE = 50;
 const linkMap = {};
+const selected = new Set();
 
 function api(method, url, body) {
   const opts = { method, headers:{'Content-Type':'application/json'} };
@@ -49,6 +50,8 @@ async function loadData() {
   isLoading = true;
   allProxies = [];
   totalCount = 0;
+  selected.clear();
+  updateBatchButtons();
   await fetchPage(true);
   isLoading = false;
 }
@@ -93,26 +96,29 @@ async function fetchPage(reset) {
   if (ruBtn) ruBtn.textContent = 'RU ' + (status.ru || 0);
   updateCountryButtons();
 
-  const activeInfo = $('#activeInfo');
-  if (activeInfo) {
-    const nodes = ob.nodes || [];
-    const run = xr.running;
-    const xrayBadge = run
-      ? '<span class="badge badge-green" style="margin-left:8px;font-size:0.62rem">xray running</span>'
-      : '<span class="badge badge-red" style="margin-left:8px;font-size:0.62rem">xray stopped</span>';
-    if (nodes.length) {
-      const traffic = ob.traffic || {};
-      const withTraffic = nodes.filter(t => traffic[t]?.downlink);
-      activeInfo.innerHTML = `// status: <b>${withTraffic.length ? withTraffic.join(', ') : nodes.join(', ')}</b> (${nodes.length} nodes)${xrayBadge}`;
-    } else {
-      activeInfo.innerHTML = `// status: —${xrayBadge}`;
-    }
-  }
+  renderTraffic(ob, xr);
 
   if (window.innerWidth <= 768) renderMobile(allProxies);
   else renderDesktop(allProxies);
 
   updatePagination();
+}
+
+function renderTraffic(ob, xr) {
+  const el = $('#activeInfo');
+  if (!el) return;
+  const nodes = ob.nodes || [];
+  const run = xr.running;
+  const badge = run
+    ? '<span class="badge badge-green" style="margin-left:8px;font-size:0.62rem">running</span>'
+    : '<span class="badge badge-red" style="margin-left:8px;font-size:0.62rem">stopped</span>';
+  const traffic = ob.traffic || {};
+  const withTraffic = nodes.filter(t => traffic[t]?.downlink);
+  if (nodes.length) {
+    el.innerHTML = `// outbounds: <b>${nodes.length}</b> (${withTraffic.length} with traffic)${badge}`;
+  } else {
+    el.innerHTML = `// outbounds: —${badge}`;
+  }
 }
 
 function updatePagination() {
@@ -147,11 +153,53 @@ function securityBadge(sec) {
   return '';
 }
 
+function toggleSelect(id) {
+  if (selected.has(id)) selected.delete(id); else selected.add(id);
+  updateBatchButtons();
+  const cb = $(`#cb-${id}`);
+  if (cb) cb.checked = selected.has(id);
+}
+
+function toggleSelectAll() {
+  const checked = $('#selectAll').checked;
+  for (const p of allProxies) {
+    if (checked) selected.add(p.id); else selected.delete(p.id);
+    const cb = $(`#cb-${p.id}`);
+    if (cb) cb.checked = checked;
+  }
+  updateBatchButtons();
+}
+
+function updateBatchButtons() {
+  const cnt = selected.size;
+  const hasSel = cnt > 0;
+  $('#batchDeleteBtn').style.display = hasSel ? 'inline-flex' : 'none';
+  $('#batchTestBtn').style.display = hasSel ? 'inline-flex' : 'none';
+  $('#testAllBtn').style.display = hasSel ? 'none' : 'inline-flex';
+  $('#cleanupBtn').style.display = hasSel ? 'none' : 'inline-flex';
+  $('#batchCount').textContent = hasSel ? `${cnt} selected` : '';
+}
+
+async function batchDelete() {
+  if (!confirm(`Delete ${selected.size} selected proxies?`)) return;
+  const ids = Array.from(selected);
+  await api('POST', '/api/proxies/batch-delete', {ids});
+  toast(`deleted ${ids.length} proxies`, 'success');
+  loadData();
+}
+
+async function batchTest() {
+  const ids = Array.from(selected);
+  toast(`testing ${ids.length} proxies...`);
+  await api('POST', '/api/proxies/batch-test', {ids});
+  setTimeout(loadData, 3000);
+}
+
 function renderDesktop(proxies) {
   const tb = $('#tbodyDesktop');
   tb.innerHTML = '';
   if (!proxies.length) {
-    tb.innerHTML = '<tr><td colspan="7" class="empty">// no proxies</td></tr>';
+    tb.innerHTML = '<tr><td colspan="8" class="empty">// no proxies</td></tr>';
     return;
   }
   for (const p of proxies) {
@@ -159,6 +207,7 @@ function renderDesktop(proxies) {
     const badgeCls = statusBadge(p.status, p.failed_since);
     const latClass = p.latency && p.latency < 300 ? 'lat-good' : p.latency >= 300 ? 'lat-bad' : '';
     tr.innerHTML = `
+      <td class="chk"><input type="checkbox" class="chk-custom" id="cb-${p.id}" ${selected.has(p.id)?'checked':''} onchange="toggleSelect(${p.id})"></td>
       <td class="id">${p.id}</td>
       <td class="host-cell" title="${p.host}">${p.host}</td>
       <td>${p.port}</td>
@@ -188,6 +237,7 @@ function renderMobile(proxies) {
     const card = document.createElement('div');
     card.className = 'mobile-card';
     card.innerHTML = `
+      <div class="mc-chk"><input type="checkbox" class="chk-custom" id="cb-${p.id}" ${selected.has(p.id)?'checked':''} onchange="toggleSelect(${p.id})"></div>
       <div class="mc-host" title="${p.host}">${p.host}</div>
       <div class="mc-meta">
         <span>#${p.id}</span><span>${p.port}</span><span>${p.country || '—'}${securityBadge(p.security)}</span>

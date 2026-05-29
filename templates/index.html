@@ -32,15 +32,18 @@
 
 <div class="toolbar">
   <div class="toolbar-actions">
-    <button class="btn" onclick="testAll()">Test All</button>
-    <button class="btn btn-danger" onclick="cleanupFailed()">Cleanup failed</button>
+    <button class="btn" id="testAllBtn" onclick="testAll()">Test All</button>
+    <button class="btn btn-danger" id="cleanupBtn" onclick="cleanupFailed()">Cleanup failed</button>
+    <button class="btn btn-apply" id="batchTestBtn" style="display:none" onclick="batchTest()">Test selected</button>
+    <button class="btn btn-danger" id="batchDeleteBtn" style="display:none" onclick="batchDelete()">Delete selected</button>
   </div>
+  <span id="batchCount" style="font-size:0.72rem;color:var(--text-muted)"></span>
 </div>
 
 <div class="table-wrap">
   <table class="desktop-table">
     <thead>
-      <tr><th>#</th><th>Host</th><th>Port</th><th>Country</th><th>Status</th><th>Latency</th><th></th></tr>
+      <tr><th class="chk"><input type="checkbox" class="chk-custom" id="selectAll" onchange="toggleSelectAll()"></th><th>#</th><th>Host</th><th>Port</th><th>Country</th><th>Status</th><th>Latency</th><th></th></tr>
     </thead>
     <tbody id="tbodyDesktop"></tbody>
   </table>

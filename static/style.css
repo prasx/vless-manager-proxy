@@ -214,6 +214,37 @@ td.id { color:var(--text-muted); }
 }
 [data-theme="light"] .noise { opacity:0.015; }
 
+/* Custom checkboxes (dashboard + settings) */
+.chk-custom {
+  appearance:none;
+  -webkit-appearance:none;
+  width:16px; height:16px;
+  border:1px solid var(--border);
+  border-radius:3px;
+  background:transparent;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  transition:all var(--transition);
+  margin:0; padding:0;
+  position:relative;
+  vertical-align:middle;
+}
+.chk-custom:hover { border-color:var(--border-hover); }
+.chk-custom:checked {
+  background:var(--text-primary);
+  border-color:var(--text-primary);
+}
+.chk-custom:checked::after {
+  content:'✓';
+  color:var(--bg);
+  font-size:11px;
+  font-weight:bold;
+  line-height:1;
+  position:absolute;
+}
+
 /* Settings page */
 .settings-section {
   background:var(--bg-card);

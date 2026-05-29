@@ -10,6 +10,18 @@
   margin-bottom:16px;
   align-items:center;
 }
+.select-filter {
+  background:var(--bg-secondary);
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:7px 12px;
+  font:inherit;
+  font-size:0.8rem;
+  color:var(--text-primary);
+  cursor:pointer;
+  height:34px;
+}
+.select-filter:focus { outline:none; border-color:var(--border-hover); }
 .pagination-bar {
   display:flex;
   align-items:center;

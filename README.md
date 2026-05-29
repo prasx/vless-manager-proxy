@@ -20,9 +20,10 @@
 *   **🌐 Фильтр по странам** — Выбор разрешённых стран в Settings, конфиг собирается только из них.
 *   **📄 Пагинация** — На Dashboard и Logs: показаны первые 50 записей, кнопка "Show next 50".
 *   **🔗 Subscription URL** — `/api/subscribe.txt` для v2rayNG, Streisand, Hiddify, Nekobox.
-*   **🧹 Cleanup** — Удалить все упавшие прокси одной кнопкой.
+*   **🧹 Массовые операции** — Чекбоксы, выбор всех, удалить/протестировать выбранные. "Test All" / "Cleanup" скрываются при выборе.
 *   **🎨 Тема** — Светлая/тёмная тема.
-*   **📊 Фильтры** — All / Working / Failed.
+*   **📊 Фильтры** — All / Working / Failed. Логи фильтруются по уровню (INFO/WARN/ERROR).
+*   **📈 Traffic stats** — На Dashboard отображается количество активных outbound и узлов с трафиком.
 *   **⏰ Фоновые задачи** — Автоимпорт из источников каждый час, автотестирование каждые 60с, Observatory (30с).
 
 
@@ -98,13 +99,27 @@ sudo systemctl enable --now xray vless-manager
 
 ```
 vless-manager/
-├── app.py              # Flask-приложение
+├── app.py              # Entry point
+├── config.py           # Централизованная конфигурация
 ├── xray_config.json    # Активный конфиг Xray (генерируется automatic)
 ├── proxies.db          # SQLite (создаётся automatic)
 ├── requirements.txt
+├── app/
+│   ├── __init__.py     # Фабрика Flask
+│   ├── db.py           # SQLite запросы
+│   ├── vless.py        # Парсинг VLESS
+│   ├── utils.py        # Время, логи, диагностика
+│   ├── xray_api.py     # Xray API (add/remove outbound)
+│   ├── xray_config.py  # Генерация конфига + API-замена
+│   ├── tester.py       # Тестирование прокси
+│   ├── importer.py     # Импорт подписок
+│   ├── tasks.py        # Фоновые задачи
+│   └── routes/
+│       ├── pages.py    # HTML-роуты
+│       └── api.py      # REST API
 ├── static/
 │   ├── style.css / dashboard.css / sources.css / logs.css
-│   ├── dashboard.js / sources.js / settings.js
+│   ├── dashboard.js / sources.js / settings.js / logs.js
 │   ├── theme.js / toast.js
 └── templates/
     ├── base.html / index.html / sources.html / settings.html / logs.html
@@ -114,12 +129,14 @@ vless-manager/
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/proxies?filter=&country=` | Список прокси |
+| GET | `/api/proxies?filter=&country=&limit=&offset=` | Список прокси с пагинацией |
 | GET | `/api/status` | Статистика |
 | POST | `/api/add` | Добавить `{"link": "vless://..."}` |
 | POST | `/api/test/<id>` | Проверить один |
 | POST | `/api/test-all` | Проверить все, пересобрать конфиг |
 | DELETE | `/api/delete/<id>` | Удалить |
+| POST | `/api/proxies/batch-delete` | Удалить выбранные `{"ids": [1,2,3]}` |
+| POST | `/api/proxies/batch-test` | Протестировать выбранные `{"ids": [1,2,3]}` |
 | GET | `/api/sources` | Список источников |
 | POST | `/api/sources` | Добавить `{"name":"...","url":"..."}` |
 | POST | `/api/sources/<id>/import` | Импорт из источника |
@@ -136,9 +153,8 @@ vless-manager/
 | GET | `/api/subscribe.txt` | Subscription URL (v2rayNG, Streisand, Hiddify, Nekobox) |
 | POST | `/api/cleanup` | Удалить все упавшие прокси |
 | GET | `/api/countries` | Список стран с количеством прокси |
-| GET | `/api/logs?limit=&offset=` | Логи с пагинацией |
+| GET | `/api/logs?limit=&offset=&level=` | Логи с пагинацией и фильтром по уровню |
 | POST | `/api/logs/clear` | Очистить логи |
-
 
 
 

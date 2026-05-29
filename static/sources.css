@@ -27,7 +27,7 @@
 .add-form .inp-url { flex:1; min-width:200px; }
 
 /* Card list */
-.card-list { display:flex; flex-direction:column; gap:1px; }
+.card-list { display:flex; flex-direction:column; gap:10px; }
 .card {
   background:var(--bg-card);
   border:1px solid var(--border);

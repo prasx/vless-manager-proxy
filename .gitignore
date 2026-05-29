@@ -1,5 +1,6 @@
 # Database
 proxies.db
+subscribe.txt
 
 # Python
 __pycache__/

@@ -3,12 +3,18 @@ const $ = s => document.querySelector(s);
 let allLogs = [];
 let totalLogs = 0;
 let isLoading = false;
+let currentLevel = '';
 const PAGE_SIZE = 50;
 
 function api(method, url, body) {
   const opts = { method, headers:{'Content-Type':'application/json'} };
   if (body) opts.body = JSON.stringify(body);
   return fetch(url, opts).then(r => r.json());
+}
+
+function setLevel(level) {
+  currentLevel = level;
+  loadData();
 }
 
 async function loadData() {
@@ -28,7 +34,9 @@ async function loadMore() {
 
 async function fetchPage(reset) {
   const offset = reset ? 0 : allLogs.length;
-  const data = await api('GET', `/api/logs?limit=${PAGE_SIZE}&offset=${offset}`);
+  let url = `/api/logs?limit=${PAGE_SIZE}&offset=${offset}`;
+  if (currentLevel) url += `&level=${currentLevel}`;
+  const data = await api('GET', url);
   const logs = data.logs || [];
   totalLogs = data.total || logs.length;
 

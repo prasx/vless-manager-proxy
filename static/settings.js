@@ -93,8 +93,7 @@ function renderCountryFilter(allowedRaw) {
     tr.style.cssText = 'border-bottom:1px solid var(--border)';
     tr.innerHTML = `
       <td style="padding:4px 12px;width:40px">
-        <input type="checkbox" data-code="${c.code}" ${checked ? 'checked' : ''}
-               style="width:16px;height:16px;accent-color:var(--text-primary);cursor:pointer">
+        <input type="checkbox" class="chk-custom" data-code="${c.code}" ${checked ? 'checked' : ''}>
       </td>
       <td style="padding:4px 6px;font-weight:bold;color:var(--text-primary)">${c.code}</td>
       <td style="padding:4px 6px;color:var(--text-muted);font-size:0.72rem">
