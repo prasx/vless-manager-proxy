@@ -121,6 +121,8 @@ body {
 .lat-good { color:var(--green); }
 .lat-bad { color:var(--red); }
 
+
+
 /* Toast */
 .toast {
   position:fixed;

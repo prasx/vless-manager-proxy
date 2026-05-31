@@ -86,6 +86,7 @@ async function fetchPage(reset) {
 
   $('#statTotal').textContent = status.total;
   $('#statWorking').textContent = status.working;
+  $('#statVlessWorking').textContent = status.working_vless;
   $('#statFailedRecent').textContent = status.failed_recent;
 
   const allBtn = $('#countryAll');
@@ -175,7 +176,9 @@ function updateBatchButtons() {
   const hasSel = cnt > 0;
   $('#batchDeleteBtn').style.display = hasSel ? 'inline-flex' : 'none';
   $('#batchTestBtn').style.display = hasSel ? 'inline-flex' : 'none';
+  $('#batchTestVlessBtn').style.display = hasSel ? 'inline-flex' : 'none';
   $('#testAllBtn').style.display = hasSel ? 'none' : 'inline-flex';
+  $('#testAllVlessBtn').style.display = hasSel ? 'none' : 'inline-flex';
   $('#cleanupBtn').style.display = hasSel ? 'none' : 'inline-flex';
   $('#batchCount').textContent = hasSel ? `${cnt} selected` : '';
 }
@@ -195,6 +198,13 @@ async function batchTest() {
   setTimeout(loadData, 3000);
 }
 
+async function batchTestVless() {
+  const ids = Array.from(selected);
+  toast(`testing ${ids.length} VLESS proxies...`);
+  await api('POST', '/api/proxies/batch-test-vless', {ids});
+  setTimeout(loadData, 3000);
+}
+
 function renderDesktop(proxies) {
   const tb = $('#tbodyDesktop');
   tb.innerHTML = '';
@@ -206,6 +216,8 @@ function renderDesktop(proxies) {
     const tr = document.createElement('tr');
     const badgeCls = statusBadge(p.status, p.failed_since);
     const latClass = p.latency && p.latency < 300 ? 'lat-good' : p.latency >= 300 ? 'lat-bad' : '';
+    const vlessClass = p.latency_vless && p.latency_vless < 300 ? 'lat-good' : p.latency_vless >= 300 ? 'lat-bad' : 'dim';
+    const vlessHtml = p.latency_vless ? `<span class="${vlessClass}">${p.latency_vless}ms</span>` : '<span class="dim">—</span>';
     tr.innerHTML = `
       <td class="chk"><input type="checkbox" class="chk-custom" id="cb-${p.id}" ${selected.has(p.id)?'checked':''} onchange="toggleSelect(${p.id})"></td>
       <td class="id">${p.id}</td>
@@ -213,7 +225,7 @@ function renderDesktop(proxies) {
       <td>${p.port}</td>
       <td>${p.country || '—'}${securityBadge(p.security)}</td>
       <td><span class="badge ${badgeCls}">${p.status}</span></td>
-      <td class="${latClass}">${p.latency ? p.latency + 'ms' : '—'}</td>
+      <td class="lat-cell"><span class="${latClass}">${p.latency ? p.latency + 'ms' : '—'}</span> <span class="lat-sep">|</span> ${vlessHtml}</td>
       <td class="actions-cell">
         <button class="btn btn-sm" onclick="copyLink(${p.id})">copy</button>
         <button class="btn btn-sm" onclick="testOne(${p.id})">test</button>
@@ -234,6 +246,7 @@ function renderMobile(proxies) {
   for (const p of proxies) {
     const badgeCls = statusBadge(p.status, p.failed_since);
     const latClass = p.latency && p.latency < 300 ? 'lat-good' : p.latency >= 300 ? 'lat-bad' : '';
+    const vlessClass = p.latency_vless && p.latency_vless < 300 ? 'lat-good' : p.latency_vless >= 300 ? 'lat-bad' : 'dim';
     const card = document.createElement('div');
     card.className = 'mobile-card';
     card.innerHTML = `
@@ -249,7 +262,8 @@ function renderMobile(proxies) {
       </div>
       <div class="mc-status">
         <span class="badge ${badgeCls}">${p.status}</span>
-        <span class="${latClass}">${p.latency ? p.latency + 'ms' : '—'}</span>
+        <span class="${latClass}">TCP: ${p.latency ? p.latency + 'ms' : '—'}</span>
+        <span class="${vlessClass}">VLESS: ${p.latency_vless ? p.latency_vless + 'ms' : '—'}</span>
       </div>
     `;
     list.appendChild(card);
@@ -294,9 +308,15 @@ async function delOne(id) {
 }
 
 async function testAll() {
-  toast('testing all proxies, wait a minute...');
+  toast('testing all proxies TCP, wait a minute...');
   await api('POST','/api/test-all');
   setTimeout(loadData, 3000);
+}
+
+async function testAllVless() {
+  toast('testing all proxies VLESS, this may take a while...');
+  await api('POST','/api/test-all-vless');
+  setTimeout(loadData, 6000);
 }
 
 async function cleanupFailed() {

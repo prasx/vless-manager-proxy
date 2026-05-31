@@ -1,26 +1,36 @@
-"""Фоновые задачи: автотестирование, автоимпорт, обновление подписки."""
+"""Фоновые задачи: TCP всех параллельно + VLESS пачками, переимпорт."""
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .db import db_q
-from .utils import add_log, now_utc, enrich_all_unknown_countries
+from .utils import add_log, now_utc, enrich_country, enrich_all_unknown_countries
 from .importer import import_from_url
-from .xray_config import apply_all_proxies, _update_subscribe_cache
-from config import CHECK_INTERVAL, REIMPORT_CYCLES, TEST_WORKERS
+from .tester import (
+    test_proxy,
+    update_proxy_status,
+    test_vless_real,
+    update_vless_status,
+)
+from .xray_config import apply_all_proxies
+from config import (
+    CHECK_INTERVAL,
+    REIMPORT_CYCLES,
+    TEST_WORKERS,
+    VLESS_BATCH_SIZE,
+    VLESS_PER_PROXY_TIMEOUT,
+)
+
+_vless_busy = False
 
 
-def _check_one(row):
-    """Проверяет один прокси (для параллельного запуска в фоне)."""
-    from .tester import test_proxy, update_proxy_status
-
+def _tcp_check_one(row):
     ok, lat = test_proxy(row["link"])
     update_proxy_status(row["id"], ok, lat)
     return row["id"], row["host"], row["country"], ok
 
 
 def reimport_all_sources():
-    """Импортирует прокси из всех источников."""
     rows = db_q("SELECT id, url FROM sources")
     total = 0
     for r in rows:
@@ -32,7 +42,7 @@ def reimport_all_sources():
 
 
 def background_checker():
-    """Главный фоновый цикл: тестирует каждые 60с, переимпортирует каждый час."""
+    global _vless_busy
     cycle = 0
     while True:
         time.sleep(CHECK_INTERVAL)
@@ -44,24 +54,46 @@ def background_checker():
                 reimport_all_sources()
             continue
 
-        ok_count = 0
-        fail_count = 0
+        # ─── TCP всех прокси параллельно ───
+        tcp_ok = 0
         with ThreadPoolExecutor(max_workers=TEST_WORKERS) as pool:
-            futures = {pool.submit(_check_one, dict(r)): r for r in rows}
+            futures = {pool.submit(_tcp_check_one, dict(r)): r for r in rows}
             for fut in as_completed(futures):
                 try:
                     pid, host, country, ok = fut.result()
                     if ok:
-                        ok_count += 1
-                    else:
-                        fail_count += 1
+                        tcp_ok += 1
+                    if not country:
+                        enrich_country(pid, host)
                 except Exception:
                     pass
+        add_log("INFO", f"BG TCP: {tcp_ok}/{len(rows)} working")
+
+        # ─── VLESS пачка (не чаще одного одновременного запуска) ───
+        if not _vless_busy:
+            vless_rows = db_q(
+                "SELECT id, link FROM proxies WHERE status='working' ORDER BY latency_vless ASC, last_checked ASC NULLS FIRST LIMIT ?",
+                (VLESS_BATCH_SIZE,),
+            )
+            if vless_rows:
+                _vless_busy = True
+                vless_ok = 0
+                for r in vless_rows:
+                    ok, lat = test_vless_real(
+                        r["link"], timeout=VLESS_PER_PROXY_TIMEOUT
+                    )
+                    update_vless_status(r["id"], ok, lat if ok else 0)
+                    if ok:
+                        vless_ok += 1
+                _vless_busy = False
+                add_log(
+                    "INFO",
+                    f"BG VLESS: {vless_ok}/{len(vless_rows)} ok (batch {VLESS_BATCH_SIZE})",
+                )
+
         enrich_all_unknown_countries()
         apply_all_proxies()
-        add_log("INFO", f"BG check: {ok_count} working, {fail_count} failed ({len(rows)} total)")
 
-        if cycle % 60 == 0:
+        if cycle % REIMPORT_CYCLES == 0:
             reimport_all_sources()
-            _update_subscribe_cache()
-            add_log("INFO", "Subscribe cache updated after hourly reimport")
+            add_log("INFO", "Hourly reimport completed")

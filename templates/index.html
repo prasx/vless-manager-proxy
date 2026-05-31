@@ -13,7 +13,11 @@
   </div>
   <div class="stat-card" data-filter="working">
     <div class="num" id="statWorking">0</div>
-    <div class="label-s">working</div>
+    <div class="label-s">working (TCP)</div>
+  </div>
+  <div class="stat-card" data-filter="vless">
+    <div class="num" id="statVlessWorking">0</div>
+    <div class="label-s">working (VLESS)</div>
   </div>
   <div class="stat-card" data-filter="failed_recent">
     <div class="num" id="statFailedRecent">0</div>
@@ -32,9 +36,11 @@
 
 <div class="toolbar">
   <div class="toolbar-actions">
-    <button class="btn" id="testAllBtn" onclick="testAll()">Test All</button>
+    <button class="btn" id="testAllBtn" onclick="testAll()">Test All TCP</button>
+    <button class="btn btn-primary" id="testAllVlessBtn" onclick="testAllVless()">Test All VLESS</button>
     <button class="btn btn-danger" id="cleanupBtn" onclick="cleanupFailed()">Cleanup failed</button>
     <button class="btn btn-apply" id="batchTestBtn" style="display:none" onclick="batchTest()">Test selected</button>
+    <button class="btn btn-primary" id="batchTestVlessBtn" style="display:none" onclick="batchTestVless()">Test selected VLESS</button>
     <button class="btn btn-danger" id="batchDeleteBtn" style="display:none" onclick="batchDelete()">Delete selected</button>
   </div>
   <span id="batchCount" style="font-size:0.72rem;color:var(--text-muted)"></span>
@@ -43,7 +49,7 @@
 <div class="table-wrap">
   <table class="desktop-table">
     <thead>
-      <tr><th class="chk"><input type="checkbox" class="chk-custom" id="selectAll" onchange="toggleSelectAll()"></th><th>#</th><th>Host</th><th>Port</th><th>Country</th><th>Status</th><th>Latency</th><th></th></tr>
+      <tr><th class="chk"><input type="checkbox" class="chk-custom" id="selectAll" onchange="toggleSelectAll()"></th><th>#</th><th>Host</th><th>Port</th><th>Country</th><th>Status</th><th>TCP | VLESS</th><th></th></tr>
     </thead>
     <tbody id="tbodyDesktop"></tbody>
   </table>

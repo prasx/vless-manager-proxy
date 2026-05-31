@@ -7,8 +7,7 @@ from .db import db_q, get_setting, xray_config_path, proxy_listen
 from .utils import add_log, moscow_str, SUBSCRIBE_FILE
 from .vless import parse_vless, stream_settings, sanitize_flow, _sanitize_outbounds
 from .xray_api import xray_api_ok, remove_all_outbounds, add_outbound
-from config import (SOCKS_PORT, HTTP_PORT, API_PORT, API_LISTEN,
-                     PROBE_INTERVAL)
+from config import SOCKS_PORT, HTTP_PORT, API_PORT, API_LISTEN, PROBE_INTERVAL
 
 _apply_lock = threading.Lock()
 
@@ -103,7 +102,7 @@ def generate_full_config(max_outbounds=0):
             country_sql = f"AND country IN ({placeholders})"
             limit_sql = " ORDER BY latency" if max_outbounds > 0 else ""
             rows = db_q(
-                f"SELECT link FROM proxies WHERE status='working' {country_sql}{limit_sql}",
+                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql}{limit_sql}",
                 codes,
             )
         else:
@@ -111,7 +110,7 @@ def generate_full_config(max_outbounds=0):
     else:
         limit_sql = " ORDER BY latency" if max_outbounds > 0 else ""
         rows = db_q(
-            f"SELECT link FROM proxies WHERE status='working' AND country != '' AND country != 'RU'{limit_sql}"
+            f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 AND country != '' AND country != 'RU'{limit_sql}"
         )
     proxy_obs = []
     for i, r in enumerate(rows):
@@ -283,11 +282,13 @@ def _update_subscribe_cache():
     max_active = int(get_setting("max_active_proxies", "30"))
     allowed = get_setting("allowed_countries", "").strip()
     rows = db_q(
-        "SELECT link FROM proxies WHERE status='working' AND country != '' AND country != 'RU' ORDER BY latency LIMIT ?",
+        "SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 AND country != '' AND country != 'RU' ORDER BY latency LIMIT ?",
         (max_active,),
     )
     total_all = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
-    total_working = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working'")[0]["c"]
+    total_working = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working'")[0][
+        "c"
+    ]
     probe_url = get_setting("probe_url")
     now = moscow_str()
     lines = [

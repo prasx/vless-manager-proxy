@@ -70,6 +70,10 @@ def init_db():
         c.execute("ALTER TABLE proxies ADD COLUMN security TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass
+    try:
+        c.execute("ALTER TABLE proxies ADD COLUMN latency_vless INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
 
     # backfill security for existing rows
     from .vless import parse_vless
