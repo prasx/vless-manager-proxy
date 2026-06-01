@@ -14,36 +14,43 @@
 *   **⚡️ Hot-swap через API** — Добавление/удаление outbound на лету, без перезапуска Xray и без разрыва соединений.
 *   **🎯 Observatory + Balancer** — Xray сам проверяет задержки узлов каждые 30 секунд и выбирает лучший по leastPing. В Observatory попадают только VLESS-верифицированные прокси.
 *   **🧪 Двухуровневое тестирование** — TCP ping (быстрая проверка доступности) и реальный VLESS-тест (запуск Xray с прокси, HTTP-запрос через него, замер пинга). Оба пинга отображаются в колонке `TCP | VLESS`.
-*   **📡 Фоновое тестирование** — Каждые `CHECK_INTERVAL` секунд:  
-      1. **TCP всех прокси параллельно** (`TEST_WORKERS` потоков) — быстрая проверка доступности хостов.  
-      2. **Каждые ~10 мин** — VLESS-тест только рабочих прокси.  
-      3. **Каждые ~3 часа** — VLESS-тест ВСЕХ TCP-рабочих прокси + переимпорт источников.  
-      Конфиг и подписка пересобираются только по VLESS-верифицированным узлам.  
-      При лимите `max_active_proxies` в конфиг попадают прокси с лучшим VLESS-пингом.
+*   **📡 Фоновое тестирование** — Циклический TCP всех прокси, VLESS-тест рабочих/всех по расписанию. Интервалы настраиваются в UI (Settings → Check Intervals & Tuning).
 *   **🌍 Автоопределение страны профиля** — Из фрагмента ссылки (`#RU`, `#NL`) или через ip-api.com.
-*   **➕ Импорт** — Вручную (вставка `vless://...` ссылки), по URL подписки, или массовый из источников. После импорта сразу запускается VLESS-тест всех прокси.
+*   **➕ Импорт** — Вручную (вставка `vless://...` ссылки), по URL подписки, или массовый из источников. После импорта сразу запускается VLESS-тест всех прокси. Каждый импорт привязывается к источнику (`source_id`).
 *   **🛡 Safe-only import** — Флаг при импорте: пропускать прокси с `security=none`.
 *   **🌐 Фильтр по странам** — Выбор разрешённых стран в Settings, конфиг собирается только из них.
 *   **📄 Пагинация** — На Dashboard и Logs: показаны первые 50 записей, кнопка "Show next 50".
 *   **🔗 Subscription URL** — `/api/subscribe.txt` для v2rayNG, Streisand, Hiddify, Nekobox. Содержит только VLESS-верифицированные узлы.
 *   **🧹 Массовые операции** — Чекбоксы, выбор всех, удалить/протестировать выбранные. "Test All" / "Cleanup" скрываются при выборе.
 *   **🎨 Тема** — Светлая/тёмная тема.
-*   **📊 Фильтры** — All / Working (TCP) / Working (VLESS) / Failed. Логи фильтруются по уровню (INFO/WARN/ERROR).
+*   **📊 Фильтры** — All / Working (TCP) / Working (VLESS) / Failed. Логи фильтруются по уровню (DEBUG/INFO/WARN/ERROR).
 *   **📈 Traffic stats** — На Dashboard отображается количество активных outbound и узлов с трафиком.
+*   **⏱ Прогресс тестов** — Прогресс-бар с текущим статусом и временем последнего завершённого теста.
+*   **⚙️ Интервалы в UI** — Base interval, TCP interval, VLESS interval, TCP workers, VLESS timeout, чистка логов — настраиваются в Settings. На каждом tick пересобирается конфиг.
 
 ## ⚙️ Конфигурация
 
-Все параметры в `config.py`:
+Базовые параметры в `config.py`. Большинство интервалов и тюнинг-параметров переопределяются через UI (Settings → Check Intervals & Tuning):
 
 | Параметр | Значение по умолчанию | Описание |
 |----------|----------------------|----------|
-| `CHECK_INTERVAL` | 60 | Пауза между циклами фонового чекера, секунд |
-| `TEST_WORKERS` | 20 | Потоков для параллельного TCP-теста |
-| `VLESS_BATCH_SIZE` | 20 | Сколько прокси за цикл проверять через реальный VLESS |
-| `VLESS_PER_PROXY_TIMEOUT` | 15 | Таймаут VLESS-теста одного прокси, секунд |
-| `VLESS_CHECK_WORKING` | 10 | Каждый N-ный цикл — VLESS-тест только рабочих прокси (10 = ~10 мин) |
-| `VLESS_CHECK_ALL` | 180 | Каждый N-ный цикл — VLESS-тест ВСЕХ TCP-рабочих прокси (180 = ~3 часа) |
-| `REIMPORT_CYCLES` | 60 | Каждый N-ный цикл делать автоимпорт (60 × 60с = 1 час) |
+| `SOCKS_PORT` | 1080 | SOCKS5 inbound |
+| `HTTP_PORT` | 1081 | HTTP inbound |
+| `API_PORT` | 10085 | gRPC API Xray |
+| `DATABASE` | `proxies.db` | Файл SQLite |
+| `SUBSCRIBE_FILE` | `subscribe.txt` | Кеш подписки |
+
+Параметры, доступные через UI Settings → Check Intervals & Tuning:
+
+| UI-поле | config.py | По умолчанию | Описание |
+|---------|-----------|-------------|----------|
+| Base interval | `CHECK_INTERVAL` | 600 (10 мин) | Как часто просыпается фоновый процесс |
+| TCP interval | `TCP_INTERVAL` | 3600 (1 час) | Как часто пинговать все прокси |
+| VLESS interval | `VLESS_INTERVAL` | 10800 (3 часа) | Как часто VLESS-тест + reimport |
+| TCP threads | `TEST_WORKERS` | 20 | Потоков для параллельного TCP-теста |
+| Per-proxy timeout | `VLESS_PER_PROXY_TIMEOUT` | 5 | Таймаут VLESS-теста одного прокси |
+| Trim every | `LOG_TRIM_EVERY` | 500 | Чистить логи каждые N записей |
+| Keep last | `LOG_KEEP` | 2000 | Оставлять последние N записей
 
 ## 🚀 Быстрая установка
 
@@ -233,22 +240,23 @@ vless-manager/
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/proxies?filter=&country=&limit=&offset=` | Список прокси с пагинацией (поддерживает `filter=vless`) |
-| GET | `/api/status` | Статистика (включая `working_vless`) |
+| GET | `/api/proxies?filter=&source=&limit=&offset=` | Список прокси с пагинацией (`filter=vless/working/failed_recent`, `source=id/unknown`) |
+| GET | `/api/status` | Статистика (total, working, working_vless, failed_recent, sources[], unknown_count) |
+| GET | `/api/test-progress` | Статус фонового теста (running/total/done/ok/label/last_completed) |
 | POST | `/api/add` | Добавить `{"link": "vless://..."}` + VLESS-тест |
-| POST | `/api/test/<id>` | TCP-тест одного прокси |
+| POST | `/api/test/&lt;id&gt;` | TCP-тест одного прокси |
 | POST | `/api/test-all` | TCP-тест всех прокси |
 | POST | `/api/test-all-vless` | **Реальный VLESS-тест всех прокси, пересборка конфига** |
-| DELETE | `/api/delete/<id>` | Удалить |
+| DELETE | `/api/delete/&lt;id&gt;` | Удалить |
 | POST | `/api/proxies/batch-delete` | Удалить выбранные `{"ids": [1,2,3]}` |
 | POST | `/api/proxies/batch-test` | TCP-тест выбранных |
 | POST | `/api/proxies/batch-test-vless` | **Реальный VLESS-тест выбранных, пересборка конфига** |
 | GET | `/api/sources` | Список источников |
 | POST | `/api/sources` | Добавить `{"name":"...","url":"..."}` |
-| POST | `/api/sources/<id>/import` | Импорт из источника + VLESS-тест |
-| DELETE | `/api/sources/<id>` | Удалить источник |
+| POST | `/api/sources/&lt;id&gt;/import` | Импорт из источника + VLESS-тест |
+| DELETE | `/api/sources/&lt;id&gt;` | Удалить источник |
 | POST | `/api/sources/import-all` | Импорт из всех + VLESS-тест |
-| GET | `/api/settings` | Настройки |
+| GET | `/api/settings` | Все настройки (включая check_interval, test_workers и др.) |
 | POST | `/api/settings` | Сохранить настройки |
 | GET | `/api/xray/status` | Статус + активные outbound |
 | GET | `/api/xray/outbounds` | Список узлов и трафик |
@@ -259,8 +267,10 @@ vless-manager/
 | GET | `/api/subscribe.txt` | Subscription URL (только VLESS-верифицированные узлы) |
 | POST | `/api/cleanup` | Удалить все упавшие прокси |
 | GET | `/api/countries` | Список стран с количеством прокси |
-| GET | `/api/logs?limit=&offset=&level=` | Логи с пагинацией и фильтром по уровню |
+| GET | `/api/logs?limit=&offset=&level=` | Логи с пагинацией и фильтром (DEBUG/INFO/WARN/ERROR) |
 | POST | `/api/logs/clear` | Очистить логи |
+
+---
 
 
 

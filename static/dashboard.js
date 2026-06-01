@@ -128,7 +128,7 @@ function renderSourceButtons(sources, unknownCount, totalCount) {
       unknownBtn.onclick = () => setSource('unknown');
       bar.appendChild(unknownBtn);
     }
-    unknownBtn.textContent = 'Unknown ' + unknownCount;
+    unknownBtn.textContent = 'Custom ' + unknownCount;
     unknownBtn.style.display = '';
   } else if (unknownBtn) {
     unknownBtn.style.display = 'none';

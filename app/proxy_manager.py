@@ -297,64 +297,71 @@ class ProxyManager:
             self._record_completion(label)
 
     def background_checker(self):
-        """Циклический TCP/VLESS-чекер всех прокси, переимпорт источников.
+        """Фоновый циклический чекер.
 
-        - Каждый цикл: TCP всех прокси (параллельно)
-        - VLESS-тест рабочих/всех прокси в фоновом потоке по расписанию
-        - apply_all() вызывается сразу после TCP, не ждёт VLESS
+        - Каждый tick: пересборка конфига (Observatory + subscribe)
+        - Каждый tcp_interval: TCP-тест всех прокси
+        - Каждый vless_interval: VLESS-тест source-only → затем всех рабочих + reimport
         """
-        cycle = 0
+        last_tcp = 0.0
+        last_vless = 0.0
         while True:
             time.sleep(Settings.check_interval())
-            cycle += 1
 
-            rows = db_q("SELECT id, link, host, country FROM proxies")
-            if not rows:
-                if cycle % Settings.reimport_cycles() == 0:
-                    self.reimport_all_sources()
-                continue
-
-            tcp_ok = 0
-            with ThreadPoolExecutor(max_workers=Settings.test_workers()) as pool:
-                futures = {pool.submit(self._check_one_tcp, dict(r)): r for r in rows}
-                for fut in as_completed(futures):
-                    try:
-                        pid, host, country, ok = fut.result()
-                        if ok:
-                            tcp_ok += 1
-                        if not country:
-                            enrich_country(pid, host)
-                    except Exception as e:
-                        add_log("WARN", f"BG check future failed: {e}")
-            add_log("INFO", f"BG TCP: {tcp_ok}/{len(rows)} working")
-
-            if not self._vless_busy:
-                if cycle % Settings.vless_check_all() == 0:
-                    vless_rows = db_q("SELECT id, link FROM proxies WHERE status='working'")
-                    label = "all"
-                elif cycle % Settings.vless_check_working() == 0:
-                    vless_rows = db_q(
-                        "SELECT id, link FROM proxies WHERE latency_vless > 0 ORDER BY latency ASC",
-                    )
-                    label = "working"
-                else:
-                    vless_rows = []
-
-                if vless_rows:
-                    self._vless_busy = True
-                    threading.Thread(
-                        target=self._bg_vless_batch,
-                        args=(vless_rows, label),
-                        daemon=True,
-                    ).start()
-
-            enrich_all_unknown_countries()
             from .xray_configurator import xray_configurator
             xray_configurator.apply_all()
 
-            if cycle % Settings.reimport_cycles() == 0:
+            now = time.time()
+
+            if now - last_tcp >= Settings.tcp_interval():
+                last_tcp = now
+                rows = db_q("SELECT id, link, host, country FROM proxies")
+                if rows:
+                    tcp_ok = 0
+                    with ThreadPoolExecutor(max_workers=Settings.test_workers()) as pool:
+                        futures = {pool.submit(self._check_one_tcp, dict(r)): r for r in rows}
+                        for fut in as_completed(futures):
+                            try:
+                                pid, host, country, ok = fut.result()
+                                if ok:
+                                    tcp_ok += 1
+                                if not country:
+                                    enrich_country(pid, host)
+                            except Exception as e:
+                                add_log("WARN", f"BG TCP future failed: {e}")
+                    enrich_all_unknown_countries()
+                    xray_configurator.apply_all()
+                    add_log("INFO", f"BG TCP: {tcp_ok}/{len(rows)} working")
+
+            if now - last_vless >= Settings.vless_interval() and not self._vless_busy:
+                last_vless = now
+                self._vless_busy = True
+                threading.Thread(target=self._run_vless_chain, daemon=True).start()
                 self.reimport_all_sources()
-                add_log("INFO", "Hourly reimport completed")
+                add_log("INFO", "BG VLESS chain + reimport started")
+
+    def _run_vless_chain(self):
+        """VLESS-тест source-only → затем всех рабочих. Запускается в фоне."""
+        try:
+            src_rows = db_q(
+                "SELECT id, link FROM proxies WHERE status='working' AND source_id IS NOT NULL"
+            )
+            if src_rows:
+                add_log("INFO", f"VLESS source-only: {len(src_rows)} proxies")
+                self._bg_vless_batch(src_rows, "source-only")
+
+            all_rows = db_q("SELECT id, link FROM proxies WHERE status='working'")
+            if all_rows:
+                add_log("INFO", f"VLESS all: {len(all_rows)} proxies")
+                self._bg_vless_batch(all_rows, "all")
+
+            from .xray_configurator import xray_configurator
+            xray_configurator.apply_all()
+            add_log("INFO", "VLESS chain completed")
+        except Exception as e:
+            add_log("ERROR", f"VLESS chain crashed: {e}")
+        finally:
+            self._vless_busy = False
 
 
 proxy_manager = ProxyManager()

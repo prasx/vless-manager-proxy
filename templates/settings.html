@@ -68,45 +68,49 @@
 
   <div class="tuning-notice">
     <strong>⚠️</strong> Чем больше прокси — тем дольше полный цикл.
-    Уменьшите <em>таймаут VLESS</em> и увеличьте <em>TCP воркеров</em> для ускорения.
+    Уменьшите <em>VLESS timeout</em> и увеличьте <em>TCP workers</em> для ускорения.
     Изменения применяются без перезапуска.
   </div>
 
   <div class="tuning-group">
-    <h3>Checker Cycle</h3>
+    <h3>Background tick</h3>
     <div class="tuning-item">
-      <span class="tuning-label">Interval</span>
-      <input type="number" id="checkInterval" class="input" min="10" max="3600" style="width:90px">
-      <span class="tuning-suffix">sec<span class="tuning-comment">Пауза между TCP-циклами</span></span>
-    </div>
-    <div class="tuning-item">
-      <span class="tuning-label">Re-import every</span>
-      <input type="number" id="reimportCycles" class="input" min="1" max="9999" style="width:90px">
-      <span class="tuning-suffix">cycles<span class="tuning-comment">~каждый час при interval=60</span></span>
-    </div>
-    <div class="tuning-item">
-      <span class="tuning-label">TCP threads</span>
-      <input type="number" id="testWorkers" class="input" min="1" max="100" style="width:90px">
-      <span class="tuning-suffix">workers<span class="tuning-comment">Параллельных TCP-тестов за раз</span></span>
+      <span class="tuning-label">Base interval</span>
+      <input type="number" id="checkInterval" class="input" min="60" max="3600" style="width:90px">
+      <span class="tuning-suffix">sec</span>
+      <span class="tuning-comment">Как часто просыпается фоновый процесс. На этом интервале пересобирается конфиг и подписка</span>
     </div>
   </div>
 
   <div class="tuning-group">
-    <h3>VLESS Testing</h3>
+    <h3>TCP check</h3>
+    <div class="tuning-item">
+      <span class="tuning-label">Interval</span>
+      <input type="number" id="tcpInterval" class="input" min="60" max="86400" style="width:90px">
+      <span class="tuning-suffix">sec</span>
+      <span class="tuning-comment">Пинг всех прокси (3600 = 1 час)</span>
+    </div>
+    <div class="tuning-item">
+      <span class="tuning-label">Parallel threads</span>
+      <input type="number" id="testWorkers" class="input" min="1" max="100" style="width:90px">
+      <span class="tuning-suffix">workers</span>
+      <span class="tuning-comment">Сколько прокси пинговать одновременно</span>
+    </div>
+  </div>
+
+  <div class="tuning-group">
+    <h3>VLESS + Reimport</h3>
+    <div class="tuning-item">
+      <span class="tuning-label">VLESS interval</span>
+      <input type="number" id="vlessInterval" class="input" min="300" max="259200" style="width:90px">
+      <span class="tuning-suffix">sec</span>
+      <span class="tuning-comment">VLESS-тест source-only → всех рабочих + переимпорт (10800 = 3 часа)</span>
+    </div>
     <div class="tuning-item">
       <span class="tuning-label">Per-proxy timeout</span>
-      <input type="number" id="vlessPerProxyTimeout" class="input" min="3" max="60" style="width:90px">
-      <span class="tuning-suffix">sec<span class="tuning-comment">Чем меньше, тем быстрее тест пачки</span></span>
-    </div>
-    <div class="tuning-item">
-      <span class="tuning-label">Test working every</span>
-      <input type="number" id="vlessCheckWorking" class="input" min="1" max="9999" style="width:90px">
-      <span class="tuning-suffix">cycles<span class="tuning-comment">~10 мин при interval=60</span></span>
-    </div>
-    <div class="tuning-item">
-      <span class="tuning-label">Test ALL every</span>
-      <input type="number" id="vlessCheckAll" class="input" min="1" max="99999" style="width:90px">
-      <span class="tuning-suffix">cycles<span class="tuning-comment">~3 часа при interval=60</span></span>
+      <input type="number" id="vlessPerProxyTimeout" class="input" min="2" max="30" style="width:90px">
+      <span class="tuning-suffix">sec</span>
+      <span class="tuning-comment">Таймаут на один профиль. Меньше — быстрее тест пачки</span>
     </div>
   </div>
 
@@ -115,12 +119,14 @@
     <div class="tuning-item">
       <span class="tuning-label">Trim every</span>
       <input type="number" id="logTrimEvery" class="input" min="10" max="99999" style="width:90px">
-      <span class="tuning-suffix">entries<span class="tuning-comment">Чистить логи после каждых N записей</span></span>
+      <span class="tuning-suffix">entries</span>
+      <span class="tuning-comment">Чистить после каждых N записей</span>
     </div>
     <div class="tuning-item">
       <span class="tuning-label">Keep last</span>
       <input type="number" id="logKeep" class="input" min="100" max="99999" style="width:90px">
-      <span class="tuning-suffix">entries<span class="tuning-comment">Оставлять последние N записей</span></span>
+      <span class="tuning-suffix">entries</span>
+      <span class="tuning-comment">Оставлять последние N записей</span>
     </div>
   </div>
   <div class="form-actions" style="margin-top:8px">

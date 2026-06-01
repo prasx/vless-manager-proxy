@@ -108,13 +108,11 @@ def init_db():
         "allowed_countries": "",
         "probe_url": "https://www.gstatic.com/generate_204",
         # Интервалы и тюнинг
-        "check_interval": "60",
-        "reimport_cycles": "60",
+        "check_interval": "600",
+        "tcp_interval": "3600",
+        "vless_interval": "10800",
         "test_workers": "20",
-        "vless_batch_size": "20",
-        "vless_per_proxy_timeout": "10",
-        "vless_check_working": "10",
-        "vless_check_all": "180",
+        "vless_per_proxy_timeout": "5",
         "log_trim_every": "500",
         "log_keep": "2000",
     }
@@ -122,6 +120,11 @@ def init_db():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
     conn.commit()
     conn.close()
+
+    # Стартовая чистка логов по настройкам
+    from .utils import trim_logs_startup
+
+    trim_logs_startup()
 
 
 class Settings:
@@ -170,13 +173,18 @@ class Settings:
 
     @classmethod
     def check_interval(cls):
-        """Пауза между циклами фонового чекера, секунд."""
-        return int(cls.get("check_interval", "60"))
+        """Пауза между циклами фонового чекера, секунд (по умолчанию 600 = 10 мин)."""
+        return int(cls.get("check_interval", "600"))
 
     @classmethod
-    def reimport_cycles(cls):
-        """Каждый N-ный цикл делать переимпорт подписок."""
-        return int(cls.get("reimport_cycles", "60"))
+    def tcp_interval(cls):
+        """Как часто запускать TCP-тест всех прокси, секунд (по умолчанию 3600 = 1 час)."""
+        return int(cls.get("tcp_interval", "3600"))
+
+    @classmethod
+    def vless_interval(cls):
+        """Как часто запускать VLESS-тест + reimport, секунд (по умолчанию 10800 = 3 часа)."""
+        return int(cls.get("vless_interval", "10800"))
 
     @classmethod
     def test_workers(cls):
@@ -184,24 +192,9 @@ class Settings:
         return int(cls.get("test_workers", "20"))
 
     @classmethod
-    def vless_batch_size(cls):
-        """Сколько прокси за цикл тестировать VLESS."""
-        return int(cls.get("vless_batch_size", "20"))
-
-    @classmethod
     def vless_per_proxy_timeout(cls):
-        """Таймаут VLESS-теста одного прокси, секунд."""
-        return int(cls.get("vless_per_proxy_timeout", "10"))
-
-    @classmethod
-    def vless_check_working(cls):
-        """Каждый N-ный цикл — VLESS-тест только рабочих прокси."""
-        return int(cls.get("vless_check_working", "10"))
-
-    @classmethod
-    def vless_check_all(cls):
-        """Каждый N-ный цикл — VLESS-тест ВСЕХ TCP-рабочих прокси."""
-        return int(cls.get("vless_check_all", "180"))
+        """Таймаут VLESS-теста одного прокси, секунд (по умолчанию 5)."""
+        return int(cls.get("vless_per_proxy_timeout", "5"))
 
     @classmethod
     def log_trim_every(cls):
