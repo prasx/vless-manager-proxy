@@ -42,6 +42,7 @@ _SCHEMA = {
         ("failed_since", "TIMESTAMP"),
         ("security", "TEXT DEFAULT ''"),
         ("latency_vless", "INTEGER DEFAULT 0"),
+        ("source_id", "INTEGER"),
     ],
     "sources": [
         ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -106,6 +107,16 @@ def init_db():
         "safe_only_import": "false",
         "allowed_countries": "",
         "probe_url": "https://www.gstatic.com/generate_204",
+        # Интервалы и тюнинг
+        "check_interval": "60",
+        "reimport_cycles": "60",
+        "test_workers": "20",
+        "vless_batch_size": "20",
+        "vless_per_proxy_timeout": "10",
+        "vless_check_working": "10",
+        "vless_check_all": "180",
+        "log_trim_every": "500",
+        "log_keep": "2000",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
@@ -156,6 +167,51 @@ class Settings:
     def probe_url(cls):
         """URL для проверки работоспособности прокси (observatory)."""
         return cls.get("probe_url", "https://www.gstatic.com/generate_204")
+
+    @classmethod
+    def check_interval(cls):
+        """Пауза между циклами фонового чекера, секунд."""
+        return int(cls.get("check_interval", "60"))
+
+    @classmethod
+    def reimport_cycles(cls):
+        """Каждый N-ный цикл делать переимпорт подписок."""
+        return int(cls.get("reimport_cycles", "60"))
+
+    @classmethod
+    def test_workers(cls):
+        """Потоков для параллельного TCP-теста."""
+        return int(cls.get("test_workers", "20"))
+
+    @classmethod
+    def vless_batch_size(cls):
+        """Сколько прокси за цикл тестировать VLESS."""
+        return int(cls.get("vless_batch_size", "20"))
+
+    @classmethod
+    def vless_per_proxy_timeout(cls):
+        """Таймаут VLESS-теста одного прокси, секунд."""
+        return int(cls.get("vless_per_proxy_timeout", "10"))
+
+    @classmethod
+    def vless_check_working(cls):
+        """Каждый N-ный цикл — VLESS-тест только рабочих прокси."""
+        return int(cls.get("vless_check_working", "10"))
+
+    @classmethod
+    def vless_check_all(cls):
+        """Каждый N-ный цикл — VLESS-тест ВСЕХ TCP-рабочих прокси."""
+        return int(cls.get("vless_check_all", "180"))
+
+    @classmethod
+    def log_trim_every(cls):
+        """Чистить логи каждые N записей."""
+        return int(cls.get("log_trim_every", "500"))
+
+    @classmethod
+    def log_keep(cls):
+        """Оставлять последние N записей после чистки."""
+        return int(cls.get("log_keep", "2000"))
 
 
 def default_xray_config_path():

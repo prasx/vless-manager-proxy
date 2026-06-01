@@ -182,7 +182,7 @@ def stream_settings(parsed):
             s["xhttpSettings"] = xh
     if sec == "tls":
         s["security"] = "tls"
-        tls = {"serverName": _reality_server_name(parsed), "allowInsecure": False}
+        tls = {"serverName": _reality_server_name(parsed)}
         if parsed.get("alpn"):
             tls["alpn"] = parsed["alpn"].split(",")
         if parsed.get("fp"):

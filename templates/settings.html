@@ -63,6 +63,72 @@
   </div>
 </div>
 
+<div class="settings-section tuning-section">
+  <h2>Check Intervals &amp; Tuning</h2>
+
+  <div class="tuning-notice">
+    <strong>⚠️</strong> Чем больше прокси — тем дольше полный цикл.
+    Уменьшите <em>таймаут VLESS</em> и увеличьте <em>TCP воркеров</em> для ускорения.
+    Изменения применяются без перезапуска.
+  </div>
+
+  <div class="tuning-group">
+    <h3>Checker Cycle</h3>
+    <div class="tuning-item">
+      <span class="tuning-label">Interval</span>
+      <input type="number" id="checkInterval" class="input" min="10" max="3600" style="width:90px">
+      <span class="tuning-suffix">sec<span class="tuning-comment">Пауза между TCP-циклами</span></span>
+    </div>
+    <div class="tuning-item">
+      <span class="tuning-label">Re-import every</span>
+      <input type="number" id="reimportCycles" class="input" min="1" max="9999" style="width:90px">
+      <span class="tuning-suffix">cycles<span class="tuning-comment">~каждый час при interval=60</span></span>
+    </div>
+    <div class="tuning-item">
+      <span class="tuning-label">TCP threads</span>
+      <input type="number" id="testWorkers" class="input" min="1" max="100" style="width:90px">
+      <span class="tuning-suffix">workers<span class="tuning-comment">Параллельных TCP-тестов за раз</span></span>
+    </div>
+  </div>
+
+  <div class="tuning-group">
+    <h3>VLESS Testing</h3>
+    <div class="tuning-item">
+      <span class="tuning-label">Per-proxy timeout</span>
+      <input type="number" id="vlessPerProxyTimeout" class="input" min="3" max="60" style="width:90px">
+      <span class="tuning-suffix">sec<span class="tuning-comment">Чем меньше, тем быстрее тест пачки</span></span>
+    </div>
+    <div class="tuning-item">
+      <span class="tuning-label">Test working every</span>
+      <input type="number" id="vlessCheckWorking" class="input" min="1" max="9999" style="width:90px">
+      <span class="tuning-suffix">cycles<span class="tuning-comment">~10 мин при interval=60</span></span>
+    </div>
+    <div class="tuning-item">
+      <span class="tuning-label">Test ALL every</span>
+      <input type="number" id="vlessCheckAll" class="input" min="1" max="99999" style="width:90px">
+      <span class="tuning-suffix">cycles<span class="tuning-comment">~3 часа при interval=60</span></span>
+    </div>
+  </div>
+
+  <div class="tuning-group">
+    <h3>Logging</h3>
+    <div class="tuning-item">
+      <span class="tuning-label">Trim every</span>
+      <input type="number" id="logTrimEvery" class="input" min="10" max="99999" style="width:90px">
+      <span class="tuning-suffix">entries<span class="tuning-comment">Чистить логи после каждых N записей</span></span>
+    </div>
+    <div class="tuning-item">
+      <span class="tuning-label">Keep last</span>
+      <input type="number" id="logKeep" class="input" min="100" max="99999" style="width:90px">
+      <span class="tuning-suffix">entries<span class="tuning-comment">Оставлять последние N записей</span></span>
+    </div>
+  </div>
+  <div class="form-actions" style="margin-top:8px">
+    <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+    <button class="btn" onclick="resetTuning()">Reset to defaults</button>
+  </div>
+</div>
+
 <div class="settings-section" style="overflow-x:auto">
   <h2>API Reference</h2>
   <table style="width:100%;border-collapse:collapse;font-size:0.78rem">
@@ -75,7 +141,7 @@
     </thead>
     <tbody>
       <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/subscribe.txt</code></td><td style="padding:4px 8px">Subscription URL (v2rayNG, Streisand, Hiddify) — <a href="/api/subscribe.txt" target="_blank" style="color:var(--green)">open</a></td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/proxies?filter=&amp;country=&amp;limit=&amp;offset=</code></td><td style="padding:4px 8px">Список прокси с пагинацией</td></tr>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/proxies?filter=&amp;source=&amp;limit=&amp;offset=</code></td><td style="padding:4px 8px">Список прокси с пагинацией</td></tr>
       <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/status</code></td><td style="padding:4px 8px">Статистика прокси</td></tr>
       <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/countries</code></td><td style="padding:4px 8px">Список стран с количеством прокси</td></tr>
       <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/settings</code></td><td style="padding:4px 8px">Настройки</td></tr>

@@ -65,12 +65,13 @@
   white-space:nowrap;
 }
 
-/* Country bar */
-.country-bar {
+/* Source bar */
+.source-bar {
   display:flex;
   gap:4px;
   align-items:center;
   flex-shrink:0;
+  flex-wrap:wrap;
 }
 
 /* Desktop table extras */
@@ -111,7 +112,7 @@
   .stat-card { padding:14px 12px; }
   .stat-card .num { font-size:1.2rem; }
   .toolbar { gap:6px; }
-  .country-bar { gap:4px; }
+  .source-bar { gap:4px; }
   .desktop-table { display:none; }
   .table-wrap { background:transparent; border:none; border-radius:0; }
   .mobile-list { display:flex; flex-direction:column; gap:1px; }

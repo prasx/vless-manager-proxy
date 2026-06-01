@@ -5,8 +5,8 @@ import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .db import _get_conn
-from config import MOSCOW_TZ, UTC_TZ, LOG_TRIM_EVERY, LOG_KEEP
+from .db import _get_conn, Settings
+from config import MOSCOW_TZ, UTC_TZ
 
 _geo_cache = {}
 _geo_cache_lock = threading.Lock()
@@ -28,7 +28,6 @@ def moscow_str(dt=None):
     return dt.strftime("%Y-%m-%d %H:%M:%S %z")
 
 
-_LOG_TRIM_EVERY = LOG_TRIM_EVERY
 _log_insert_count = 0
 _log_count_lock = threading.Lock()
 
@@ -47,13 +46,14 @@ def add_log(level, message):
         conn.close()
     with _log_count_lock:
         _log_insert_count += 1
-        do_trim = _log_insert_count % _LOG_TRIM_EVERY == 0
+        do_trim = _log_insert_count % Settings.log_trim_every() == 0
     if do_trim:
         _trim_logs()
 
 
-def _trim_logs(keep=LOG_KEEP):
-    """Оставляет только last N записей в логах."""
+def _trim_logs():
+    """Оставляет только последние N записей в логах."""
+    keep = Settings.log_keep()
     conn = _get_conn()
     try:
         conn.execute(

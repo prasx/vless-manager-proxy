@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import socket
 import subprocess
 import tempfile
 import threading
@@ -173,8 +174,10 @@ class XrayConfigurator:
 
     @staticmethod
     def api_ok():
-        """Проверяет, отвечает ли Xray API."""
+        """Проверяет, отвечает ли Xray API (StatsService)."""
         try:
+            s = socket.create_connection((API_LISTEN, API_PORT), timeout=2)
+            s.close()
             r = subprocess.run(
                 [Settings.xray_bin(), "api", "statsquery", "-s", f"{API_LISTEN}:{API_PORT}"],
                 capture_output=True, timeout=5,
@@ -295,6 +298,11 @@ class XrayConfigurator:
             cfg_path.write_text(json.dumps(limited, indent=2))
             applied = sum(1 for o in limited["outbounds"] if o["tag"].startswith("node"))
             add_log("WARN", f"Xray API unavailable — wrote {applied} proxies to disk (total working: {proxy_count})")
+            # API нет — вероятно, Xray запущен без StatsService.
+            # Перезапускаем Xray с новым конфигом (в нём есть секция api со StatsService).
+            if applied > 0:
+                add_log("INFO", "Restarting Xray to enable API services...")
+                self.restart_via_systemd()
         self._update_subscribe_cache()
 
     # ─── Subscribe cache ───

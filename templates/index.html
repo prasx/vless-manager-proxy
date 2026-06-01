@@ -27,10 +27,9 @@
 
 <div id="activeNode">
   <span id="activeInfo">// active: —</span>
-  <div class="country-bar" id="countryBar">
-    <button class="btn btn-sm btn-primary" id="countryAll" data-country="" onclick="setCountry('')">All</button>
-    <button class="btn btn-sm" id="countryWorld" data-country="world" onclick="setCountry('world')">World 0</button>
-    <button class="btn btn-sm" id="countryRu" data-country="RU" onclick="setCountry('RU')">RU 0</button>
+  <div class="source-bar" id="sourceBar">
+    <button class="btn btn-sm btn-primary" id="sourceAll" data-source="" onclick="setSource('')">All</button>
+    <button class="btn btn-sm" id="sourceUnknown" data-source="unknown" onclick="setSource('unknown')">Unknown</button>
   </div>
 </div>
 
@@ -44,6 +43,10 @@
     <button class="btn btn-danger" id="batchDeleteBtn" style="display:none" onclick="batchDelete()">Delete selected</button>
   </div>
   <span id="batchCount" style="font-size:0.72rem;color:var(--text-muted)"></span>
+  <div id="testProgressBar" style="display:none;margin-top:8px;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
+    <div id="testProgressFill" style="height:100%;width:0%;background:var(--green);transition:width .5s"></div>
+  </div>
+  <div id="testProgressLabel" style="font-size:0.7rem;color:var(--text-muted);margin-top:2px"></div>
 </div>
 
 <div class="table-wrap">

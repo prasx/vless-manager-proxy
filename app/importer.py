@@ -8,10 +8,11 @@ from .utils import add_log, now_utc
 from .vless import parse_vless
 
 
-def import_from_url(url):
+def import_from_url(url, source_id=None):
     """Загружает подписку по URL, разбирает vless:// строки и сохраняет в БД.
 
     Учитывает флаг safe_only_import (пропускает security=none).
+    Принимает source_id для привязки импортированных прокси к источнику.
     Возвращает количество добавленных прокси.
     """
     try:
@@ -34,7 +35,7 @@ def import_from_url(url):
             continue
         try:
             db_q(
-                "INSERT OR IGNORE INTO proxies (link,host,port,country,status,security,added_at) VALUES (?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO proxies (link,host,port,country,status,security,added_at,source_id) VALUES (?,?,?,?,?,?,?,?)",
                 (
                     link,
                     parsed["host"],
@@ -43,6 +44,7 @@ def import_from_url(url):
                     "pending",
                     sec,
                     now_utc(),
+                    source_id,
                 ),
             )
             added += 1

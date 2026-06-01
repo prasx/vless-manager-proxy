@@ -29,7 +29,7 @@ def api_logs():
     level = request.args.get("level", "").strip().upper()
     where = ""
     params = []
-    if level in ("INFO", "WARN", "ERROR"):
+    if level in ("DEBUG", "INFO", "WARN", "ERROR"):
         where = "WHERE level = ?"
         params = [level]
     total = db_q(f"SELECT COUNT(*) c FROM logs {where}", params)[0]["c"]
@@ -65,7 +65,7 @@ def proxy_filter_clause(f):
     if f == "working":
         return "WHERE status='working'"
     elif f == "vless":
-        return "WHERE latency_vless > 0"
+        return "WHERE status='working' AND latency_vless > 0"
     elif f == "failed_recent":
         return "WHERE status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
     return ""
@@ -73,16 +73,16 @@ def proxy_filter_clause(f):
 
 @api_bp.route("/proxies")
 def api_proxies():
-    """GET /api/proxies?filter=&country=&limit=&offset= — список прокси с пагинацией."""
+    """GET /api/proxies?filter=&source=&limit=&offset= — список прокси с пагинацией."""
     f = request.args.get("filter", "")
-    c = request.args.get("country", "")
+    src = request.args.get("source", "")
     limit = request.args.get("limit", type=int)
     offset = request.args.get("offset", type=int, default=0)
     clause = proxy_filter_clause(f)
-    if c == "RU":
-        clause = (clause + " AND " if clause else "WHERE ") + "status='working' AND country='RU'"
-    elif c == "world":
-        clause = (clause + " AND " if clause else "WHERE ") + "status='working' AND country != '' AND country != 'RU'"
+    if src == "unknown":
+        clause = (clause + " AND " if clause else "WHERE ") + "source_id IS NULL"
+    elif src and src.isdigit():
+        clause = (clause + " AND " if clause else "WHERE ") + f"source_id = {int(src)}"
 
     total = db_q(f"SELECT COUNT(*) as c FROM proxies {clause}")[0]["c"]
     limit_sql = ""
@@ -109,9 +109,14 @@ def api_status():
     world = db_q(
         "SELECT COUNT(*) c FROM proxies WHERE status='working' AND country != '' AND country != 'RU'"
     )[0]["c"]
+    sources = db_q(
+        "SELECT s.id, s.name, COUNT(p.id) cnt FROM sources s LEFT JOIN proxies p ON p.source_id = s.id GROUP BY s.id HAVING cnt > 0 ORDER BY s.name"
+    )
+    unknown = db_q("SELECT COUNT(*) c FROM proxies WHERE source_id IS NULL")[0]["c"]
     return jsonify(
         total=total, working=working, working_vless=working_vless,
         failed_recent=failed_recent, ru=ru, world=world,
+        sources=[dict(r) for r in sources], unknown_count=unknown,
     )
 
 
@@ -262,7 +267,7 @@ def api_sources_import_one(sid):
     rows = db_q("SELECT url FROM sources WHERE id=?", (sid,))
     if not rows:
         return jsonify(error="Not found"), 404
-    added = import_from_url(rows[0]["url"])
+    added = import_from_url(rows[0]["url"], source_id=sid)
     db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), sid))
     threading.Thread(target=proxy_manager.test_all_vless, daemon=True).start()
     return jsonify(success=True, added=added)
@@ -274,7 +279,7 @@ def api_sources_import_all():
     rows = db_q("SELECT id, url FROM sources")
     total = 0
     for r in rows:
-        added = import_from_url(r["url"])
+        added = import_from_url(r["url"], source_id=r["id"])
         db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), r["id"]))
         total += added
     threading.Thread(target=proxy_manager.test_all_vless, daemon=True).start()
@@ -420,6 +425,26 @@ def api_countries():
             "enabled": cc in allowed_set if allowed_raw else True,
         })
     return jsonify(countries=countries, allowed=allowed_raw)
+
+
+# ─── Прогресс тестов ───
+
+
+@api_bp.route("/test-progress")
+def api_test_progress():
+    """GET /api/test-progress — текущий статус фонового VLESS-теста."""
+    p = proxy_manager.progress
+    return jsonify(
+        running=p["running"],
+        total=p["total"],
+        done=p["done"],
+        ok=p["ok"],
+        label=p["label"],
+        last_completed=p["last_completed"],
+        last_label=p["last_label"],
+        last_ok=p["last_ok"],
+        last_total=p["last_total"],
+    )
 
 
 # ─── Импорт ───

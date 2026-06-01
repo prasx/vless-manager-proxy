@@ -2,7 +2,7 @@ const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 
 let currentFilter = '';
-let currentCountry = '';
+let currentSource = '';
 let allProxies = [];
 let totalCount = 0;
 let isLoading = false;
@@ -18,8 +18,8 @@ function api(method, url, body) {
 
 function makeProxiesUrl(limit, offset) {
   let url = '/api/proxies?filter=' + currentFilter;
-  if (currentCountry) {
-    url += currentCountry === 'world' ? '&country=world' : '&country=RU';
+  if (currentSource) {
+    url += '&source=' + currentSource;
   }
   if (limit != null) url += `&limit=${limit}&offset=${offset}`;
   return url;
@@ -31,18 +31,15 @@ function setFilter(f) {
   loadData();
 }
 
-function setCountry(cc) {
-  currentCountry = cc;
-  updateCountryButtons();
+function setSource(src) {
+  currentSource = src;
+  updateSourceButtons();
   loadData();
 }
 
-function updateCountryButtons() {
-  const allBtn = $('#countryAll');
-  const worldBtn = $('#countryWorld');
-  const ruBtn = $('#countryRu');
-  [allBtn, worldBtn, ruBtn].forEach(el => {
-    if (el) el.classList.toggle('btn-primary', el.dataset.country === currentCountry);
+function updateSourceButtons() {
+  $$('.source-bar .btn').forEach(el => {
+    if (el) el.classList.toggle('btn-primary', el.dataset.source === currentSource);
   });
 }
 
@@ -89,13 +86,7 @@ async function fetchPage(reset) {
   $('#statVlessWorking').textContent = status.working_vless;
   $('#statFailedRecent').textContent = status.failed_recent;
 
-  const allBtn = $('#countryAll');
-  const worldBtn = $('#countryWorld');
-  const ruBtn = $('#countryRu');
-  if (allBtn) allBtn.textContent = 'All ' + (status.total || 0);
-  if (worldBtn) worldBtn.textContent = 'World ' + (status.world || 0);
-  if (ruBtn) ruBtn.textContent = 'RU ' + (status.ru || 0);
-  updateCountryButtons();
+  renderSourceButtons(status.sources, status.unknown_count, status.total);
 
   renderTraffic(ob, xr);
 
@@ -120,6 +111,43 @@ function renderTraffic(ob, xr) {
   } else {
     el.innerHTML = `// outbounds: —${badge}`;
   }
+}
+
+function renderSourceButtons(sources, unknownCount, totalCount) {
+  const bar = $('#sourceBar');
+  if (!bar) return;
+  const allBtn = $('#sourceAll');
+  if (allBtn) allBtn.textContent = 'All ' + (totalCount || 0);
+  let unknownBtn = $('#sourceUnknown');
+  if (unknownCount > 0) {
+    if (!unknownBtn) {
+      unknownBtn = document.createElement('button');
+      unknownBtn.className = 'btn btn-sm';
+      unknownBtn.id = 'sourceUnknown';
+      unknownBtn.dataset.source = 'unknown';
+      unknownBtn.onclick = () => setSource('unknown');
+      bar.appendChild(unknownBtn);
+    }
+    unknownBtn.textContent = 'Unknown ' + unknownCount;
+    unknownBtn.style.display = '';
+  } else if (unknownBtn) {
+    unknownBtn.style.display = 'none';
+  }
+  $$('.source-btn-src').forEach(el => el.remove());
+  for (const s of (sources || [])) {
+    const id = 'srcBtn-' + s.id;
+    let btn = document.getElementById(id);
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.className = 'btn btn-sm source-btn-src';
+      btn.id = id;
+      btn.dataset.source = String(s.id);
+      btn.onclick = () => setSource(String(s.id));
+      bar.appendChild(btn);
+    }
+    btn.textContent = s.name + ' ' + s.cnt;
+  }
+  updateSourceButtons();
 }
 
 function updatePagination() {
@@ -335,3 +363,38 @@ window.addEventListener('resize', () => {
 
 loadData();
 setInterval(loadData, 30000);
+
+// ─── Progress bar polling ───
+
+async function pollTestProgress() {
+  const p = await api('GET', '/api/test-progress');
+  const bar = $('#testProgressBar');
+  const fill = $('#testProgressFill');
+  const label = $('#testProgressLabel');
+  const btns = ['testAllBtn', 'testAllVlessBtn', 'batchTestBtn', 'batchTestVlessBtn'];
+  if (p.running && p.total > 0) {
+    bar.style.display = 'block';
+    bar.style.height = '4px';
+    bar.style.background = 'var(--border)';
+    fill.style.width = (p.done / p.total * 100) + '%';
+    fill.style.background = 'var(--green)';
+    fill.style.height = '100%';
+    const testType = p.label === 'tcp' ? 'TCP' : 'VLESS';
+    label.textContent = `${testType} test (${p.label}): ${p.done}/${p.total} (${p.ok} ok)`;
+    btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = true; });
+  } else {
+    bar.style.display = p.last_completed ? 'block' : 'none';
+    bar.style.height = 'auto';
+    bar.style.background = 'none';
+    fill.style.width = '100%';
+    fill.style.background = 'var(--text-muted)';
+    fill.style.height = '2px';
+    if (p.last_completed) {
+      const testType = p.last_label === 'tcp' ? 'TCP' : 'VLESS';
+      label.textContent = `Last ${testType} test: ${p.last_ok}/${p.last_total} ok — ${p.last_completed}`;
+    }
+    btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = false; });
+  }
+}
+setInterval(pollTestProgress, 2000);
+pollTestProgress();

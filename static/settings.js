@@ -23,6 +23,14 @@ async function loadSettings() {
     $('proxyListen').value = s.proxy_listen || '0.0.0.0';
     $('maxActiveProxies').value = s.max_active_proxies || '30';
     $('probeUrl').value = s.probe_url || 'https://www.gstatic.com/generate_204';
+    $('checkInterval').value = s.check_interval || '60';
+    $('testWorkers').value = s.test_workers || '20';
+    $('vlessPerProxyTimeout').value = s.vless_per_proxy_timeout || '10';
+    $('reimportCycles').value = s.reimport_cycles || '60';
+    $('vlessCheckWorking').value = s.vless_check_working || '10';
+    $('vlessCheckAll').value = s.vless_check_all || '180';
+    $('logTrimEvery').value = s.log_trim_every || '500';
+    $('logKeep').value = s.log_keep || '2000';
   }
   renderXrayStatus(status);
   loadCountries();
@@ -38,6 +46,14 @@ async function saveSettings() {
     proxy_listen: $('proxyListen').value.trim() || '0.0.0.0',
     max_active_proxies: $('maxActiveProxies').value.trim() || '30',
     probe_url: $('probeUrl').value.trim() || 'https://www.gstatic.com/generate_204',
+    check_interval: $('checkInterval').value.trim() || '60',
+    test_workers: $('testWorkers').value.trim() || '20',
+    vless_per_proxy_timeout: $('vlessPerProxyTimeout').value.trim() || '10',
+    reimport_cycles: $('reimportCycles').value.trim() || '60',
+    vless_check_working: $('vlessCheckWorking').value.trim() || '10',
+    vless_check_all: $('vlessCheckAll').value.trim() || '180',
+    log_trim_every: $('logTrimEvery').value.trim() || '500',
+    log_keep: $('logKeep').value.trim() || '2000',
   };
   const r = await api('POST', '/api/settings', data);
   $('xrayBin').disabled = false;
@@ -54,6 +70,18 @@ async function saveSettings() {
     toast('Settings saved', 'success');
   }
   loadSettings();
+}
+
+function resetTuning() {
+  $('checkInterval').value = '60';
+  $('testWorkers').value = '20';
+  $('vlessPerProxyTimeout').value = '10';
+  $('reimportCycles').value = '60';
+  $('vlessCheckWorking').value = '10';
+  $('vlessCheckAll').value = '180';
+  $('logTrimEvery').value = '500';
+  $('logKeep').value = '2000';
+  toast('Tuning values reset to defaults — click Save to apply');
 }
 
 async function restartXray() {

@@ -276,6 +276,67 @@ td.id { color:var(--text-muted); }
   flex:1;
   max-width:480px;
 }
+.field-hint {
+  font-size:0.68rem;
+  color:var(--text-muted);
+  white-space:nowrap;
+}
+
+/* Tuning section */
+.tuning-notice {
+  background:rgba(237,168,54,0.08);
+  border:1px solid rgba(237,168,54,0.25);
+  border-radius:4px;
+  padding:10px 14px;
+  margin-bottom:18px;
+  font-size:0.78rem;
+  color:var(--text-secondary);
+  line-height:1.6;
+}
+.tuning-group {
+  margin-bottom:16px;
+}
+.tuning-group:last-child {
+  margin-bottom:0;
+}
+.tuning-group h3 {
+  font-size:0.72rem;
+  color:var(--text-muted);
+  text-transform:uppercase;
+  letter-spacing:0.1em;
+  margin-bottom:8px;
+  font-weight:400;
+}
+.tuning-item {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:6px 0;
+  border-bottom:1px solid var(--border);
+}
+.tuning-item:last-child {
+  border-bottom:none;
+}
+.tuning-label {
+  min-width:150px;
+  color:var(--text-secondary);
+  font-size:0.82rem;
+}
+.tuning-suffix {
+  color:var(--text-muted);
+  font-size:0.72rem;
+  white-space:nowrap;
+}
+.tuning-comment {
+  color:var(--text-muted);
+  margin-left:8px;
+  font-style:italic;
+}
+@media(max-width:768px) {
+  .tuning-item { flex-wrap:wrap; gap:4px; }
+  .tuning-label { min-width:120px; }
+  .tuning-comment { display:none; }
+}
 .form-actions {
   display:flex;
   gap:8px;
