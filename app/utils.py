@@ -1,15 +1,12 @@
-"""Утилиты: работа со временем, логирование, константы, диагностика Xray."""
+"""Утилиты: работа со временем, логирование, гео-определение страны."""
 
 import json
-import subprocess
 import threading
 from datetime import datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .db import _get_conn, proxy_listen
-from config import (BASE_DIR, SUBSCRIBE_FILE, MOSCOW_TZ, UTC_TZ,
-                     LOG_TRIM_EVERY, LOG_KEEP)
+from .db import _get_conn
+from config import MOSCOW_TZ, UTC_TZ, LOG_TRIM_EVERY, LOG_KEEP
 
 _geo_cache = {}
 _geo_cache_lock = threading.Lock()
@@ -68,103 +65,6 @@ def _trim_logs(keep=LOG_KEEP):
         conn.close()
 
 
-# ─── Диагностика Xray ───
-
-
-def detect_systemd_xray_config():
-    """Извлекает путь к конфигу Xray из systemd unit (ExecStart)."""
-    try:
-        r = subprocess.run(
-            ["systemctl", "show", "xray", "-p", "ExecStart", "--value"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        if r.returncode != 0:
-            return None
-        text = r.stdout.strip()
-        for flag in ("-config", "-c"):
-            if flag not in text:
-                continue
-            parts = text.replace("=", " ").split()
-            for i, p in enumerate(parts):
-                if p == flag and i + 1 < len(parts):
-                    return parts[i + 1]
-    except Exception:
-        pass
-    return None
-
-
-def systemd_xray_active():
-    """Проверяет, активен ли systemd-сервис xray."""
-    try:
-        r = subprocess.run(
-            ["systemctl", "is-active", "xray"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        return r.stdout.strip() == "active"
-    except Exception:
-        return False
-
-
-def _ss_listen(port):
-    """Проверяет, слушает ли процесс указанный TCP-порт (через ss)."""
-    try:
-        r = subprocess.run(["ss", "-lntp"], capture_output=True, text=True, timeout=3)
-        for line in (r.stdout or "").splitlines():
-            if f":{port}" in line:
-                return line.strip()
-    except Exception:
-        pass
-    return None
-
-
-def _config_inbound_listeners(path=None):
-    """Читает входящие соединения (socks/http) из JSON-конфига."""
-    from .db import xray_config_path
-
-    p = Path(path) if path else xray_config_path()
-    if not p.exists():
-        return []
-    try:
-        data = json.loads(p.read_text())
-        return [
-            {
-                "protocol": ib.get("protocol"),
-                "port": ib.get("port"),
-                "listen": ib.get("listen"),
-            }
-            for ib in data.get("inbounds", [])
-            if ib.get("protocol") in ("socks", "http")
-        ]
-    except Exception:
-        return []
-
-
-def xray_diagnose():
-    """Собирает диагностическую информацию о состоянии Xray."""
-    from .db import xray_config_path
-
-    mgr = str(xray_config_path().resolve())
-    systemd_cfg = detect_systemd_xray_config()
-    inbounds = _config_inbound_listeners()
-    has_socks = any(
-        ib.get("port") == 1080 and ib.get("protocol") == "socks" for ib in inbounds
-    )
-    return {
-        "manager_config_path": mgr,
-        "systemd_config_path": systemd_cfg,
-        "config_mismatch": bool(systemd_cfg and systemd_cfg != mgr),
-        "systemd_active": systemd_xray_active(),
-        "config_inbounds": inbounds,
-        "socks_in_config": has_socks,
-        "ports": {str(p): _ss_listen(p) for p in (1080, 1081, 10085)},
-        "proxy_listen": proxy_listen(),
-    }
-
-
 # ─── Определение страны ───
 
 
@@ -188,6 +88,7 @@ def detect_country(host):
             return cc
     except Exception:
         pass
+    add_log("WARN", f"Failed to detect country for {host}")
     return ""
 
 

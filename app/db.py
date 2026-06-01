@@ -3,7 +3,7 @@
 import sqlite3
 from pathlib import Path
 
-from config import BASE_DIR, DATABASE, ETC_XRAY_CONFIG, DEFAULT_XRAY_CONFIG
+from config import DATABASE, ETC_XRAY_CONFIG, DEFAULT_XRAY_CONFIG
 
 
 def _get_conn():
@@ -27,55 +27,66 @@ def db_q(sql, params=()):
         conn.close()
 
 
+# Эталонная схема таблиц — все ожидаемые колонки и их типы
+_SCHEMA = {
+    "proxies": [
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("link", "TEXT UNIQUE"),
+        ("host", "TEXT"),
+        ("port", "INTEGER"),
+        ("country", "TEXT"),
+        ("status", "TEXT DEFAULT 'pending'"),
+        ("latency", "INTEGER DEFAULT 0"),
+        ("last_checked", "TIMESTAMP"),
+        ("added_at", "TIMESTAMP"),
+        ("failed_since", "TIMESTAMP"),
+        ("security", "TEXT DEFAULT ''"),
+        ("latency_vless", "INTEGER DEFAULT 0"),
+    ],
+    "sources": [
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("name", "TEXT"),
+        ("url", "TEXT UNIQUE"),
+        ("last_import", "TIMESTAMP"),
+        ("created_at", "TIMESTAMP"),
+    ],
+    "logs": [
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("timestamp", "TIMESTAMP"),
+        ("level", "TEXT"),
+        ("message", "TEXT"),
+    ],
+    "settings": [
+        ("key", "TEXT PRIMARY KEY"),
+        ("value", "TEXT"),
+    ],
+}
+
+
+def _ensure_schema(conn):
+    """Проверяет эталонную схему и добавляет недостающие таблицы/колонки."""
+    c = conn.cursor()
+    for table, columns in _SCHEMA.items():
+        # Собираем полный CREATE TABLE со всеми колонками
+        cols_sql = ", ".join(f"{name} {typ}" for name, typ in columns)
+        c.execute(f"CREATE TABLE IF NOT EXISTS {table} ({cols_sql})")
+        # Какие колонки уже есть в существующей таблице
+        existing = {row[1] for row in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        for col_name, col_type in columns:
+            if col_name not in existing:
+                try:
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                except sqlite3.OperationalError:
+                    pass
+
+
 def init_db():
-    """Создаёт таблицы и дефолтные настройки при первом запуске."""
+    """Создаёт/дополняет таблицы и устанавливает настройки по умолчанию."""
     conn = _get_conn()
     c = conn.cursor()
-    c.executescript("""
-        CREATE TABLE IF NOT EXISTS proxies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            link TEXT UNIQUE,
-            host TEXT,
-            port INTEGER,
-            country TEXT,
-            status TEXT DEFAULT 'pending',
-            latency INTEGER DEFAULT 0,
-            last_checked TIMESTAMP,
-            added_at TIMESTAMP,
-            failed_since TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS sources (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            url TEXT UNIQUE,
-            last_import TIMESTAMP,
-            created_at TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TIMESTAMP,
-            level TEXT,
-            message TEXT
-        );
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        );
-    """)
-    try:
-        c.execute("ALTER TABLE proxies ADD COLUMN failed_since TIMESTAMP")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE proxies ADD COLUMN security TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE proxies ADD COLUMN latency_vless INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
+    _ensure_schema(conn)
 
-    # backfill security for existing rows
+    # backfill security для старых строк
     from .vless import parse_vless
 
     c.execute("SELECT id, link FROM proxies WHERE security IS NULL OR security = ''")
@@ -102,20 +113,49 @@ def init_db():
     conn.close()
 
 
-def get_setting(key, default=""):
-    """Возвращает значение настройки из БД."""
-    rows = db_q("SELECT value FROM settings WHERE key=?", (key,))
-    return rows[0]["value"] if rows else default
+class Settings:
+    """Работа с настройками из таблицы settings в БД."""
 
+    @staticmethod
+    def get(key, default=""):
+        """Возвращает значение настройки из БД."""
+        rows = db_q("SELECT value FROM settings WHERE key=?", (key,))
+        return rows[0]["value"] if rows else default
 
-def set_setting(key, value):
-    """Сохраняет значение настройки в БД."""
-    db_q("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    @staticmethod
+    def set(key, value):
+        """Сохраняет значение настройки в БД."""
+        db_q("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
 
+    @classmethod
+    def xray_bin(cls):
+        """Путь к бинарнику Xray из настроек."""
+        return cls.get("xray_bin", "xray")
 
-def xray_bin():
-    """Возвращает путь к бинарнику Xray из настроек."""
-    return get_setting("xray_bin", "xray")
+    @classmethod
+    def proxy_listen(cls):
+        """Адрес для SOCKS/HTTP inbounds (0.0.0.0 для LAN)."""
+        return cls.get("proxy_listen", "0.0.0.0")
+
+    @classmethod
+    def max_active_proxies(cls):
+        """Максимальное количество активных прокси в конфиге."""
+        return int(cls.get("max_active_proxies", "30"))
+
+    @classmethod
+    def safe_only_import(cls):
+        """True если импортировать только прокси с шифрованием (reality/tls)."""
+        return cls.get("safe_only_import", "false") == "true"
+
+    @classmethod
+    def allowed_countries(cls):
+        """Список разрешённых стран (строка с кодами через запятую)."""
+        return cls.get("allowed_countries", "").strip()
+
+    @classmethod
+    def probe_url(cls):
+        """URL для проверки работоспособности прокси (observatory)."""
+        return cls.get("probe_url", "https://www.gstatic.com/generate_204")
 
 
 def default_xray_config_path():
@@ -125,15 +165,10 @@ def default_xray_config_path():
     return DEFAULT_XRAY_CONFIG
 
 
-def proxy_listen():
-    """Адрес для SOCKS/HTTP inbounds (0.0.0.0 для LAN)."""
-    return get_setting("proxy_listen", "0.0.0.0")
-
-
 def xray_config_path():
     """Определяет актуальный путь к конфигу Xray с учётом настроек и автоисправления."""
     default_path = default_xray_config_path()
-    configured = get_setting("xray_config_path", "")
+    configured = Settings.get("xray_config_path", "")
     if not configured:
         return default_path
     p = Path(configured)
@@ -142,10 +177,9 @@ def xray_config_path():
             return p
     except Exception:
         pass
-    # Если в БД устаревший/неверный путь — исправляем
     if default_path.exists() and str(default_path) != configured:
         try:
-            set_setting("xray_config_path", str(default_path))
+            Settings.set("xray_config_path", str(default_path))
         except Exception:
             pass
     return default_path

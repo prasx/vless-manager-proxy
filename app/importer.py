@@ -3,7 +3,7 @@
 import sqlite3
 import urllib.request
 
-from .db import db_q, get_setting
+from .db import db_q, Settings
 from .utils import add_log, now_utc
 from .vless import parse_vless
 
@@ -21,7 +21,7 @@ def import_from_url(url):
         add_log("ERROR", f"Import failed for {url[:80]}: {e}")
         return 0
     links = [line for line in content.splitlines() if line.startswith("vless://")]
-    safe_only = get_setting("safe_only_import", "false") == "true"
+    safe_only = Settings.safe_only_import()
     added = 0
     skipped = 0
     for link in links:

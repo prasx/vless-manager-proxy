@@ -75,17 +75,30 @@
     </thead>
     <tbody>
       <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/subscribe.txt</code></td><td style="padding:4px 8px">Subscription URL (v2rayNG, Streisand, Hiddify) — <a href="/api/subscribe.txt" target="_blank" style="color:var(--green)">open</a></td></tr>
-      
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/proxies?filter=&amp;country=</code></td><td style="padding:4px 8px">List all proxies</td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/status</code></td><td style="padding:4px 8px">Proxy statistics</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/add</code></td><td style="padding:4px 8px">Add proxy <code>{"link":"vless://..."}</code></td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/test/&lt;id&gt;</code></td><td style="padding:4px 8px">Test single proxy</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/test-all</code></td><td style="padding:4px 8px">Test all + rebuild config</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources</code></td><td style="padding:4px 8px">Add source <code>{"name":"...","url":"..."}</code></td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources/&lt;id&gt;/import</code></td><td style="padding:4px 8px">Import from source</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources/import-all</code></td><td style="padding:4px 8px">Import from all sources</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/import</code></td><td style="padding:4px 8px">Import by URL <code>{"url":"..."}</code></td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/settings</code></td><td style="padding:4px 8px">Save settings</td></tr>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/proxies?filter=&amp;country=&amp;limit=&amp;offset=</code></td><td style="padding:4px 8px">Список прокси с пагинацией</td></tr>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/status</code></td><td style="padding:4px 8px">Статистика прокси</td></tr>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/countries</code></td><td style="padding:4px 8px">Список стран с количеством прокси</td></tr>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/settings</code></td><td style="padding:4px 8px">Настройки</td></tr>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/sources</code></td><td style="padding:4px 8px">Список источников</td></tr>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/xray/status</code></td><td style="padding:4px 8px">Статус Xray + outbound</td></tr>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/xray/outbounds</code></td><td style="padding:4px 8px">Outbound + трафик</td></tr>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/logs?limit=&amp;offset=&amp;level=</code></td><td style="padding:4px 8px">Логи с пагинацией</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/add</code></td><td style="padding:4px 8px">Добавить прокси <code>{"link":"vless://..."}</code></td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/test/&lt;id&gt;</code></td><td style="padding:4px 8px">TCP-тест одного прокси</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/test-all</code></td><td style="padding:4px 8px">TCP-тест всех прокси</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/test-all-vless</code></td><td style="padding:4px 8px">VLESS-тест всех + пересборка конфига</td></tr>
+      <tr><td style="padding:4px 8px;color:#fc8181">DELETE</td><td style="padding:4px 8px"><code>/api/delete/&lt;id&gt;</code></td><td style="padding:4px 8px">Удалить прокси</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/cleanup</code></td><td style="padding:4px 8px">Удалить все failed-прокси</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/proxies/batch-delete</code></td><td style="padding:4px 8px">Удалить выбранные <code>{"ids":[1,2,3]}</code></td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/proxies/batch-test</code></td><td style="padding:4px 8px">TCP-тест выбранных</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/proxies/batch-test-vless</code></td><td style="padding:4px 8px">VLESS-тест выбранных + пересборка</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources</code></td><td style="padding:4px 8px">Добавить источник <code>{"name":"...","url":"..."}</code></td></tr>
+      <tr><td style="padding:4px 8px;color:#fc8181">DELETE</td><td style="padding:4px 8px"><code>/api/sources/&lt;id&gt;</code></td><td style="padding:4px 8px">Удалить источник</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources/&lt;id&gt;/import</code></td><td style="padding:4px 8px">Импорт из источника</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources/import-all</code></td><td style="padding:4px 8px">Импорт из всех источников</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/import</code></td><td style="padding:4px 8px">Импорт по URL <code>{"url":"..."}</code></td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/settings</code></td><td style="padding:4px 8px">Сохранить настройки</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/logs/clear</code></td><td style="padding:4px 8px">Очистить логи</td></tr>
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray/start</code></td><td style="padding:4px 8px">systemctl start xray</td></tr>
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray/stop</code></td><td style="padding:4px 8px">systemctl stop xray</td></tr>
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray-restart</code></td><td style="padding:4px 8px">systemctl restart xray</td></tr>
