@@ -276,12 +276,6 @@ td.id { color:var(--text-muted); }
   flex:1;
   max-width:480px;
 }
-.field-hint {
-  font-size:0.68rem;
-  color:var(--text-muted);
-  white-space:nowrap;
-}
-
 /* Tuning section */
 .tuning-notice {
   background:rgba(237,168,54,0.08);

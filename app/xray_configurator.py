@@ -29,7 +29,12 @@ class XrayConfigurator:
     def _proxy_inbounds(listen):
         """Возвращает SOCKS и HTTP inbound для заданного адреса прослушивания."""
         return [
-            {"port": SOCKS_PORT, "listen": listen, "protocol": "socks", "settings": {"udp": True}},
+            {
+                "port": SOCKS_PORT,
+                "listen": listen,
+                "protocol": "socks",
+                "settings": {"udp": True},
+            },
             {"port": HTTP_PORT, "listen": listen, "protocol": "http", "settings": {}},
         ]
 
@@ -45,10 +50,15 @@ class XrayConfigurator:
     def _inject_api(self, cfg):
         """Добавляет в конфиг API-секцию, inbound, outbound и routing rule."""
         self._apply_proxy_listen(cfg)
-        cfg.setdefault("api", {"tag": "api", "services": ["HandlerService", "RoutingService"]})
+        cfg.setdefault(
+            "api", {"tag": "api", "services": ["HandlerService", "RoutingService"]}
+        )
         api_inbound = {
-            "listen": API_LISTEN, "port": API_PORT, "protocol": "dokodemo-door",
-            "settings": {"address": API_LISTEN}, "tag": "api",
+            "listen": API_LISTEN,
+            "port": API_PORT,
+            "protocol": "dokodemo-door",
+            "settings": {"address": API_LISTEN},
+            "tag": "api",
         }
         if not any(ib.get("tag") == "api" for ib in cfg.get("inbounds", [])):
             cfg.setdefault("inbounds", []).append(api_inbound)
@@ -60,6 +70,7 @@ class XrayConfigurator:
         if not any(r.get("outboundTag") == "api" for r in rules):
             rules.append(api_rule)
         from .vless import _sanitize_outbounds
+
         _sanitize_outbounds(cfg)
         return cfg
 
@@ -67,11 +78,17 @@ class XrayConfigurator:
     def _build_outbound(parsed, tag):
         """Строит один VLESS outbound из распарсенной ссылки."""
         ob = {
-            "protocol": "vless", "tag": tag,
-            "settings": {"vnext": [{
-                "address": parsed["server"], "port": parsed["port"],
-                "users": [{"id": parsed["uid"], "encryption": "none"}],
-            }]},
+            "protocol": "vless",
+            "tag": tag,
+            "settings": {
+                "vnext": [
+                    {
+                        "address": parsed["server"],
+                        "port": parsed["port"],
+                        "users": [{"id": parsed["uid"], "encryption": "none"}],
+                    }
+                ]
+            },
             "streamSettings": stream_settings(parsed),
         }
         flow = sanitize_flow(parsed.get("flow"))
@@ -118,13 +135,25 @@ class XrayConfigurator:
             {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
         ]
         if proxy_obs:
-            routing_rules.append({"type": "field", "network": "tcp,udp", "balancerTag": "auto"})
+            routing_rules.append(
+                {"type": "field", "network": "tcp,udp", "balancerTag": "auto"}
+            )
         config = {
-            "api": {"tag": "api", "services": ["HandlerService", "RoutingService", "StatsService"]},
+            "api": {
+                "tag": "api",
+                "services": ["HandlerService", "RoutingService", "StatsService"],
+            },
             "log": {"loglevel": "warning"},
             "inbounds": self._proxy_inbounds(Settings.proxy_listen())
-                        + [{"listen": API_LISTEN, "port": API_PORT, "protocol": "dokodemo-door",
-                            "settings": {"address": API_LISTEN}, "tag": "api"}],
+            + [
+                {
+                    "listen": API_LISTEN,
+                    "port": API_PORT,
+                    "protocol": "dokodemo-door",
+                    "settings": {"address": API_LISTEN},
+                    "tag": "api",
+                }
+            ],
             "outbounds": outbounds,
             "routing": {"domainStrategy": "IPIfNonMatch", "rules": routing_rules},
         }
@@ -135,17 +164,29 @@ class XrayConfigurator:
                 "probeInterval": PROBE_INTERVAL,
                 "enableConcurrency": True,
             }
-            config["routing"]["balancers"] = [{"tag": "auto", "selector": ["node"], "strategy": {"type": "leastPing"}}]
+            config["routing"]["balancers"] = [
+                {"tag": "auto", "selector": ["node"], "strategy": {"type": "leastPing"}}
+            ]
         return self._inject_api(config)
 
     def generate_base_config(self):
         """Минимальный конфиг для диска — прокси управляются только через API."""
         base = {
-            "api": {"tag": "api", "services": ["HandlerService", "RoutingService", "StatsService"]},
+            "api": {
+                "tag": "api",
+                "services": ["HandlerService", "RoutingService", "StatsService"],
+            },
             "log": {"loglevel": "warning"},
             "inbounds": self._proxy_inbounds(Settings.proxy_listen())
-                        + [{"listen": API_LISTEN, "port": API_PORT, "protocol": "dokodemo-door",
-                            "settings": {"address": API_LISTEN}, "tag": "api"}],
+            + [
+                {
+                    "listen": API_LISTEN,
+                    "port": API_PORT,
+                    "protocol": "dokodemo-door",
+                    "settings": {"address": API_LISTEN},
+                    "tag": "api",
+                }
+            ],
             "outbounds": [
                 {"protocol": "freedom", "tag": "direct"},
                 {"protocol": "freedom", "tag": "api"},
@@ -153,13 +194,23 @@ class XrayConfigurator:
             "routing": {
                 "domainStrategy": "IPIfNonMatch",
                 "rules": [
-                    {"type": "field", "protocol": ["bittorrent"], "outboundTag": "direct"},
+                    {
+                        "type": "field",
+                        "protocol": ["bittorrent"],
+                        "outboundTag": "direct",
+                    },
                     {"inboundTag": ["api"], "outboundTag": "api"},
                     {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
                     {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
                     {"type": "field", "network": "tcp,udp", "balancerTag": "auto"},
                 ],
-                "balancers": [{"tag": "auto", "selector": ["node"], "strategy": {"type": "leastPing"}}],
+                "balancers": [
+                    {
+                        "tag": "auto",
+                        "selector": ["node"],
+                        "strategy": {"type": "leastPing"},
+                    }
+                ],
             },
             "observatory": {
                 "subjectSelector": ["node"],
@@ -179,8 +230,15 @@ class XrayConfigurator:
             s = socket.create_connection((API_LISTEN, API_PORT), timeout=2)
             s.close()
             r = subprocess.run(
-                [Settings.xray_bin(), "api", "statsquery", "-s", f"{API_LISTEN}:{API_PORT}"],
-                capture_output=True, timeout=5,
+                [
+                    Settings.xray_bin(),
+                    "api",
+                    "statsquery",
+                    "-s",
+                    f"{API_LISTEN}:{API_PORT}",
+                ],
+                capture_output=True,
+                timeout=5,
             )
             return r.returncode == 0
         except Exception as e:
@@ -192,8 +250,16 @@ class XrayConfigurator:
         """Возвращает список тегов активных outbound через Xray API statsquery."""
         try:
             r = subprocess.run(
-                [Settings.xray_bin(), "api", "statsquery", "-s", f"{API_LISTEN}:{API_PORT}"],
-                capture_output=True, text=True, timeout=5,
+                [
+                    Settings.xray_bin(),
+                    "api",
+                    "statsquery",
+                    "-s",
+                    f"{API_LISTEN}:{API_PORT}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if r.returncode != 0:
                 return []
@@ -214,8 +280,17 @@ class XrayConfigurator:
             if tag.startswith("node"):
                 try:
                     subprocess.run(
-                        [Settings.xray_bin(), "api", "removeoutbound", "-s", f"{API_LISTEN}:{API_PORT}", "--tag", tag],
-                        capture_output=True, timeout=10,
+                        [
+                            Settings.xray_bin(),
+                            "api",
+                            "removeoutbound",
+                            "-s",
+                            f"{API_LISTEN}:{API_PORT}",
+                            "--tag",
+                            tag,
+                        ],
+                        capture_output=True,
+                        timeout=10,
                     )
                 except Exception as e:
                     add_log("DEBUG", f"Failed to remove outbound {tag}: {e}")
@@ -229,8 +304,16 @@ class XrayConfigurator:
             tmp_path = tmp.name
         try:
             subprocess.run(
-                [Settings.xray_bin(), "api", "addoutbound", "-s", f"{API_LISTEN}:{API_PORT}", tmp_path],
-                capture_output=True, timeout=10,
+                [
+                    Settings.xray_bin(),
+                    "api",
+                    "addoutbound",
+                    "-s",
+                    f"{API_LISTEN}:{API_PORT}",
+                    tmp_path,
+                ],
+                capture_output=True,
+                timeout=10,
             )
         except Exception as e:
             add_log("DEBUG", f"Failed to add outbound: {e}")
@@ -258,12 +341,13 @@ class XrayConfigurator:
 
     # ─── Apply config ───
 
-    def apply_all(self):
+    def apply_all(self, blocking=False):
         """Пишет минимальный конфиг на диск, прокси добавляет через Xray API.
 
-        Блокировка _apply_lock предотвращает конкурентные вызовы.
+        blocking=True — ждать освобождения _apply_lock (для финального apply после тестов).
+        blocking=False — пропустить, если другой apply уже выполняется.
         """
-        if not self._apply_lock.acquire(blocking=False):
+        if not self._apply_lock.acquire(blocking=blocking):
             add_log("WARN", "Config rebuild already in progress — skipping")
             return
         try:
@@ -287,17 +371,27 @@ class XrayConfigurator:
             add_log("INFO", "Base config written to disk")
 
             limited = self.generate_full_config(max_outbounds=max_active)
-            limited_obs = [o for o in limited["outbounds"] if o["tag"].startswith("node")]
+            limited_obs = [
+                o for o in limited["outbounds"] if o["tag"].startswith("node")
+            ]
 
             self.remove_all_outbounds()
             for ob in limited_obs:
                 self.add_outbound(ob)
-            add_log("INFO", f"Applied {len(limited_obs)} proxies via API (total working: {proxy_count})")
+            add_log(
+                "INFO",
+                f"Applied {len(limited_obs)} proxies via API (total working: {proxy_count})",
+            )
         else:
             limited = self.generate_full_config(max_outbounds=max_active)
             cfg_path.write_text(json.dumps(limited, indent=2))
-            applied = sum(1 for o in limited["outbounds"] if o["tag"].startswith("node"))
-            add_log("WARN", f"Xray API unavailable — wrote {applied} proxies to disk (total working: {proxy_count})")
+            applied = sum(
+                1 for o in limited["outbounds"] if o["tag"].startswith("node")
+            )
+            add_log(
+                "WARN",
+                f"Xray API unavailable — wrote {applied} proxies to disk (total working: {proxy_count})",
+            )
             # API нет — вероятно, Xray запущен без StatsService.
             # Перезапускаем Xray с новым конфигом (в нём есть секция api со StatsService).
             if applied > 0:
@@ -309,37 +403,45 @@ class XrayConfigurator:
 
     def _update_subscribe_cache(self):
         """Собирает subscribe.txt с vless-ссылками + метаданными для внешних клиентов."""
-        max_active = Settings.max_active_proxies()
-        allowed = Settings.allowed_countries()
-        codes = [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
-        if codes:
-            placeholders = ",".join("?" * len(codes))
-            country_sql = f"AND country IN ({placeholders})"
-        else:
-            placeholders = ""
-            country_sql = ""
-            codes = []
-        rows = db_q(
-            f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} ORDER BY latency LIMIT ?",
-            codes + [max_active],
-        )
-        total_all = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
-        total_working = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working'")[0]["c"]
-        probe_url = Settings.probe_url()
-        now = moscow_str()
-        lines = [
-            "#profile-title: VLESS Manager",
-            "#profile-update-interval: 1",
-            f"# Updated: {now}",
-            f"# Configs: {len(rows)} / {total_working} working / {total_all} total",
-        ]
-        if allowed:
-            lines.append(f"# Filter: {allowed}")
-        lines.append(f"# Probe: {probe_url}")
-        lines.append("")
-        for r in rows:
-            lines.append(r["link"])
-        SUBSCRIBE_FILE.write_text("\n".join(lines), encoding="utf-8")
+        try:
+            max_active = Settings.max_active_proxies()
+            allowed = Settings.allowed_countries()
+            codes = (
+                [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
+            )
+            if codes:
+                placeholders = ",".join("?" * len(codes))
+                country_sql = f"AND country IN ({placeholders})"
+            else:
+                placeholders = ""
+                country_sql = ""
+                codes = []
+            rows = db_q(
+                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} ORDER BY latency_vless LIMIT ?",
+                codes + [max_active],
+            )
+            total_all = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
+            total_working = db_q(
+                "SELECT COUNT(*) c FROM proxies WHERE status='working'"
+            )[0]["c"]
+            probe_url = Settings.probe_url()
+            now = moscow_str()
+            lines = [
+                "#profile-title: VLESS Manager",
+                "#profile-update-interval: 1",
+                f"# Updated: {now}",
+                f"# Configs: {len(rows)} / {total_working} working / {total_all} total",
+            ]
+            if allowed:
+                lines.append(f"# Filter: {allowed}")
+            lines.append(f"# Probe: {probe_url}")
+            lines.append("")
+            for r in rows:
+                lines.append(r["link"])
+            SUBSCRIBE_FILE.write_text("\n".join(lines), encoding="utf-8")
+            add_log("DEBUG", f"Subscribe cache updated: {len(rows)} proxies")
+        except Exception as e:
+            add_log("ERROR", f"Failed to update subscribe cache: {e}")
 
     # ─── Diagnosis ───
 
@@ -349,7 +451,9 @@ class XrayConfigurator:
         try:
             r = subprocess.run(
                 ["systemctl", "show", "xray", "-p", "ExecStart", "--value"],
-                capture_output=True, text=True, timeout=3,
+                capture_output=True,
+                text=True,
+                timeout=3,
             )
             if r.returncode != 0:
                 return None
@@ -369,7 +473,12 @@ class XrayConfigurator:
     def _systemd_active():
         """Проверяет, активен ли systemd-сервис xray."""
         try:
-            r = subprocess.run(["systemctl", "is-active", "xray"], capture_output=True, text=True, timeout=3)
+            r = subprocess.run(
+                ["systemctl", "is-active", "xray"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
             return r.stdout.strip() == "active"
         except Exception as e:
             add_log("DEBUG", f"Failed to check systemd active: {e}")
@@ -379,7 +488,9 @@ class XrayConfigurator:
     def _ss_listen(port):
         """Проверяет, слушает ли процесс указанный TCP-порт (через ss)."""
         try:
-            r = subprocess.run(["ss", "-lntp"], capture_output=True, text=True, timeout=3)
+            r = subprocess.run(
+                ["ss", "-lntp"], capture_output=True, text=True, timeout=3
+            )
             for line in (r.stdout or "").splitlines():
                 if f":{port}" in line:
                     return line.strip()
@@ -395,7 +506,11 @@ class XrayConfigurator:
         try:
             data = json.loads(p.read_text())
             return [
-                {"protocol": ib.get("protocol"), "port": ib.get("port"), "listen": ib.get("listen")}
+                {
+                    "protocol": ib.get("protocol"),
+                    "port": ib.get("port"),
+                    "listen": ib.get("listen"),
+                }
                 for ib in data.get("inbounds", [])
                 if ib.get("protocol") in ("socks", "http")
             ]

@@ -50,6 +50,11 @@ def import_from_url(url, source_id=None):
             added += 1
         except sqlite3.IntegrityError:
             pass
+    if added:
+        import threading
+        from .utils import enrich_all_unknown_countries
+
+        threading.Thread(target=enrich_all_unknown_countries, daemon=True).start()
     msg = f"Imported {added} proxies"
     if skipped:
         msg += f" (skipped {skipped} unencrypted)"

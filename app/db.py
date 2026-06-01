@@ -37,7 +37,6 @@ _SCHEMA = {
         ("country", "TEXT"),
         ("status", "TEXT DEFAULT 'pending'"),
         ("latency", "INTEGER DEFAULT 0"),
-        ("last_checked", "TIMESTAMP"),
         ("added_at", "TIMESTAMP"),
         ("failed_since", "TIMESTAMP"),
         ("security", "TEXT DEFAULT ''"),
@@ -72,7 +71,9 @@ def _ensure_schema(conn):
         cols_sql = ", ".join(f"{name} {typ}" for name, typ in columns)
         c.execute(f"CREATE TABLE IF NOT EXISTS {table} ({cols_sql})")
         # Какие колонки уже есть в существующей таблице
-        existing = {row[1] for row in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        existing = {
+            row[1] for row in c.execute(f"PRAGMA table_info({table})").fetchall()
+        }
         for col_name, col_type in columns:
             if col_name not in existing:
                 try:
@@ -109,9 +110,7 @@ def init_db():
         "probe_url": "https://www.gstatic.com/generate_204",
         # Интервалы и тюнинг
         "check_interval": "600",
-        "tcp_interval": "3600",
         "vless_interval": "10800",
-        "test_workers": "20",
         "vless_per_proxy_timeout": "5",
         "log_trim_every": "500",
         "log_keep": "2000",
@@ -177,19 +176,9 @@ class Settings:
         return int(cls.get("check_interval", "600"))
 
     @classmethod
-    def tcp_interval(cls):
-        """Как часто запускать TCP-тест всех прокси, секунд (по умолчанию 3600 = 1 час)."""
-        return int(cls.get("tcp_interval", "3600"))
-
-    @classmethod
     def vless_interval(cls):
         """Как часто запускать VLESS-тест + reimport, секунд (по умолчанию 10800 = 3 часа)."""
         return int(cls.get("vless_interval", "10800"))
-
-    @classmethod
-    def test_workers(cls):
-        """Потоков для параллельного TCP-теста."""
-        return int(cls.get("test_workers", "20"))
 
     @classmethod
     def vless_per_proxy_timeout(cls):

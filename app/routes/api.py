@@ -104,8 +104,9 @@ def api_status():
     failed_recent = db_q(
         "SELECT COUNT(*) c FROM proxies WHERE status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
     )[0]["c"]
-    working_vless = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0")[0]["c"]
-    ru = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working' AND country='RU'")[0]["c"]
+    ru = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working' AND country='RU'")[
+        0
+    ]["c"]
     world = db_q(
         "SELECT COUNT(*) c FROM proxies WHERE status='working' AND country != '' AND country != 'RU'"
     )[0]["c"]
@@ -114,9 +115,13 @@ def api_status():
     )
     unknown = db_q("SELECT COUNT(*) c FROM proxies WHERE source_id IS NULL")[0]["c"]
     return jsonify(
-        total=total, working=working, working_vless=working_vless,
-        failed_recent=failed_recent, ru=ru, world=world,
-        sources=[dict(r) for r in sources], unknown_count=unknown,
+        total=total,
+        working=working,
+        failed_recent=failed_recent,
+        ru=ru,
+        world=world,
+        sources=[dict(r) for r in sources],
+        unknown_count=unknown,
     )
 
 
@@ -131,10 +136,24 @@ def api_add():
         sec = parsed.get("security", "none") or "none"
         db_q(
             "INSERT INTO proxies (link,host,port,country,status,security,added_at) VALUES (?,?,?,?,?,?,?)",
-            (link, parsed["host"], parsed["port"], parsed.get("country", ""), "pending", sec, now_utc()),
+            (
+                link,
+                parsed["host"],
+                parsed["port"],
+                parsed.get("country", ""),
+                "pending",
+                sec,
+                now_utc(),
+            ),
         )
         add_log("INFO", f"Added proxy: {parsed['host']}:{parsed['port']}")
-        threading.Thread(target=lambda: proxy_manager.test_and_update_vless(link), daemon=True).start()
+        if not parsed.get("country"):
+            from ..utils import enrich_all_unknown_countries
+
+            threading.Thread(target=enrich_all_unknown_countries, daemon=True).start()
+        threading.Thread(
+            target=lambda: proxy_manager.test_and_update_vless(link), daemon=True
+        ).start()
         return jsonify(success=True)
     except sqlite3.IntegrityError:
         return jsonify(error="Already exists"), 409
@@ -142,12 +161,12 @@ def api_add():
 
 @api_bp.route("/test/<int:pid>", methods=["POST"])
 def api_test(pid):
-    """POST /api/test/<id> — тестирует один прокси."""
+    """POST /api/test/<id> — тестирует один прокси (VLESS)."""
     rows = db_q("SELECT link FROM proxies WHERE id=?", (pid,))
     if not rows:
         return jsonify(error="Not found"), 404
-    ok, lat = proxy_manager.test_proxy(rows[0]["link"])
-    proxy_manager._update_tcp_status(pid, ok, lat)
+    ok, lat = proxy_manager.test_vless_real(rows[0]["link"])
+    proxy_manager._update_vless_status(pid, ok, lat if ok else 0)
     status = "working" if ok else "failed"
     add_log("INFO", f"Tested proxy #{pid} → {status} ({lat}ms)")
     if ok:
@@ -165,14 +184,7 @@ def api_delete(pid):
 
 @api_bp.route("/test-all", methods=["POST"])
 def api_test_all():
-    """POST /api/test-all — запускает TCP-тестирование всех прокси в фоне."""
-    threading.Thread(target=proxy_manager.test_all, daemon=True).start()
-    return jsonify(success=True)
-
-
-@api_bp.route("/test-all-vless", methods=["POST"])
-def api_test_all_vless():
-    """POST /api/test-all-vless — запускает реальное VLESS-тестирование всех прокси."""
+    """POST /api/test-all — запускает VLESS-тестирование всех прокси в фоне."""
     threading.Thread(target=proxy_manager.test_all_vless, daemon=True).start()
     return jsonify(success=True)
 
@@ -200,30 +212,15 @@ def api_proxies_batch_delete():
 
 @api_bp.route("/proxies/batch-test", methods=["POST"])
 def api_proxies_batch_test():
-    """POST /api/proxies/batch-test — тестирует несколько прокси по IDs."""
+    """POST /api/proxies/batch-test — тестирует несколько прокси по IDs (VLESS)."""
     ids = (request.get_json(silent=True) or {}).get("ids", [])
     if not ids:
         return jsonify(error="No ids provided"), 400
     placeholders = ",".join("?" * len(ids))
     rows = db_q(f"SELECT id, link FROM proxies WHERE id IN ({placeholders})", ids)
-    threading.Thread(target=proxy_manager.batch_test_tcp, args=(rows,), daemon=True).start()
-    return jsonify(success=True, queued=len(rows))
-
-
-@api_bp.route("/proxies/batch-test-vless", methods=["POST"])
-def api_proxies_batch_test_vless():
-    """POST /api/proxies/batch-test-vless — тестирует только VLESS прокси реальным подключением."""
-    ids = (request.get_json(silent=True) or {}).get("ids", [])
-    if not ids:
-        return jsonify(error="No ids provided"), 400
-    placeholders = ",".join("?" * len(ids))
-    rows = db_q(
-        f"SELECT id, link FROM proxies WHERE id IN ({placeholders}) AND link LIKE 'vless://%'",
-        ids,
-    )
-    if not rows:
-        return jsonify(error="No VLESS proxies found in selection"), 400
-    threading.Thread(target=proxy_manager.batch_test_vless, args=(rows,), daemon=True).start()
+    threading.Thread(
+        target=proxy_manager.batch_test_vless, args=(rows,), daemon=True
+    ).start()
     return jsonify(success=True, queued=len(rows))
 
 
@@ -246,7 +243,10 @@ def api_sources_add():
     if not name or not url:
         return jsonify(error="Name and URL required"), 400
     try:
-        db_q("INSERT INTO sources (name, url, created_at) VALUES (?, ?, ?)", (name, url, now_utc()))
+        db_q(
+            "INSERT INTO sources (name, url, created_at) VALUES (?, ?, ?)",
+            (name, url, now_utc()),
+        )
         add_log("INFO", f"Added source: {name}")
         return jsonify(success=True)
     except sqlite3.IntegrityError:
@@ -328,7 +328,8 @@ def api_xray_status():
     running = api_ok or (d["systemd_active"] and d["ports"].get("1080"))
     active = xray_configurator.list_active_outbounds() if api_ok else []
     return jsonify(
-        running=bool(running), api_accessible=api_ok,
+        running=bool(running),
+        api_accessible=api_ok,
         api_endpoint="127.0.0.1:10085",
         systemd_active=d["systemd_active"],
         config_mismatch=d["config_mismatch"],
@@ -345,7 +346,9 @@ def api_xray_outbounds():
     try:
         r = subprocess.run(
             [Settings.xray_bin(), "api", "statsquery", "-s", "127.0.0.1:10085"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         for line in r.stdout.splitlines():
             m = re.search(r"outbound>>>([^>]+)>>>traffic>>>([a-z]+)", line)
@@ -361,7 +364,9 @@ def api_xray_outbounds():
 def api_xray_start():
     """POST /api/xray/start — запускает Xray через systemctl."""
     try:
-        r = subprocess.run(["systemctl", "start", "xray"], capture_output=True, timeout=15)
+        r = subprocess.run(
+            ["systemctl", "start", "xray"], capture_output=True, timeout=15
+        )
         ok = r.returncode == 0
         msg = "started via systemd" if ok else r.stderr.decode()[:200]
     except Exception as e:
@@ -399,8 +404,14 @@ def api_xray_restart():
 @api_bp.route("/subscribe.txt")
 def api_subscribe():
     """GET /api/subscribe.txt — кешированный subscription file для клиентов."""
+    if not SUBSCRIBE_FILE.exists():
+        xray_configurator._update_subscribe_cache()
     if SUBSCRIBE_FILE.exists():
-        return SUBSCRIBE_FILE.read_text(encoding="utf-8"), 200, {"Content-Type": "text/plain; charset=utf-8"}
+        return (
+            SUBSCRIBE_FILE.read_text(encoding="utf-8"),
+            200,
+            {"Content-Type": "text/plain; charset=utf-8"},
+        )
     return "// no proxies yet", 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
@@ -418,12 +429,17 @@ def api_countries():
     for r in rows:
         cc = r["country"]
         working = db_q(
-            "SELECT COUNT(*) c FROM proxies WHERE country=? AND status='working'", (cc,),
+            "SELECT COUNT(*) c FROM proxies WHERE country=? AND status='working'",
+            (cc,),
         )[0]["c"]
-        countries.append({
-            "code": cc, "total": r["cnt"], "working": working,
-            "enabled": cc in allowed_set if allowed_raw else True,
-        })
+        countries.append(
+            {
+                "code": cc,
+                "total": r["cnt"],
+                "working": working,
+                "enabled": cc in allowed_set if allowed_raw else True,
+            }
+        )
     return jsonify(countries=countries, allowed=allowed_raw)
 
 

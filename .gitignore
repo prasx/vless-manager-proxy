@@ -14,5 +14,8 @@ venv/
 .vscode/
 .idea/
 
+# Local config
+xray_config.json
+
 # Env
 .env

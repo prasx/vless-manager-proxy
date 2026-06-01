@@ -86,7 +86,6 @@
 }
 .desktop-table td.actions-cell { white-space:nowrap; text-align:right; }
 .desktop-table td.lat-cell { white-space:nowrap; }
-.lat-cell .lat-sep { color:var(--text-muted); margin:0 4px; }
 .dim { color:var(--text-muted); }
 .mobile-list { display:none; }
 

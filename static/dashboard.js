@@ -83,7 +83,7 @@ async function fetchPage(reset) {
 
   $('#statTotal').textContent = status.total;
   $('#statWorking').textContent = status.working;
-  $('#statVlessWorking').textContent = status.working_vless;
+
   $('#statFailedRecent').textContent = status.failed_recent;
 
   renderSourceButtons(status.sources, status.unknown_count, status.total);
@@ -204,9 +204,7 @@ function updateBatchButtons() {
   const hasSel = cnt > 0;
   $('#batchDeleteBtn').style.display = hasSel ? 'inline-flex' : 'none';
   $('#batchTestBtn').style.display = hasSel ? 'inline-flex' : 'none';
-  $('#batchTestVlessBtn').style.display = hasSel ? 'inline-flex' : 'none';
   $('#testAllBtn').style.display = hasSel ? 'none' : 'inline-flex';
-  $('#testAllVlessBtn').style.display = hasSel ? 'none' : 'inline-flex';
   $('#cleanupBtn').style.display = hasSel ? 'none' : 'inline-flex';
   $('#batchCount').textContent = hasSel ? `${cnt} selected` : '';
 }
@@ -226,13 +224,6 @@ async function batchTest() {
   setTimeout(loadData, 3000);
 }
 
-async function batchTestVless() {
-  const ids = Array.from(selected);
-  toast(`testing ${ids.length} VLESS proxies...`);
-  await api('POST', '/api/proxies/batch-test-vless', {ids});
-  setTimeout(loadData, 3000);
-}
-
 function renderDesktop(proxies) {
   const tb = $('#tbodyDesktop');
   tb.innerHTML = '';
@@ -243,7 +234,6 @@ function renderDesktop(proxies) {
   for (const p of proxies) {
     const tr = document.createElement('tr');
     const badgeCls = statusBadge(p.status, p.failed_since);
-    const latClass = p.latency && p.latency < 300 ? 'lat-good' : p.latency >= 300 ? 'lat-bad' : '';
     const vlessClass = p.latency_vless && p.latency_vless < 300 ? 'lat-good' : p.latency_vless >= 300 ? 'lat-bad' : 'dim';
     const vlessHtml = p.latency_vless ? `<span class="${vlessClass}">${p.latency_vless}ms</span>` : '<span class="dim">—</span>';
     tr.innerHTML = `
@@ -253,7 +243,7 @@ function renderDesktop(proxies) {
       <td>${p.port}</td>
       <td>${p.country || '—'}${securityBadge(p.security)}</td>
       <td><span class="badge ${badgeCls}">${p.status}</span></td>
-      <td class="lat-cell"><span class="${latClass}">${p.latency ? p.latency + 'ms' : '—'}</span> <span class="lat-sep">|</span> ${vlessHtml}</td>
+      <td class="lat-cell">${vlessHtml}</td>
       <td class="actions-cell">
         <button class="btn btn-sm" onclick="copyLink(${p.id})">copy</button>
         <button class="btn btn-sm" onclick="testOne(${p.id})">test</button>
@@ -273,7 +263,6 @@ function renderMobile(proxies) {
   }
   for (const p of proxies) {
     const badgeCls = statusBadge(p.status, p.failed_since);
-    const latClass = p.latency && p.latency < 300 ? 'lat-good' : p.latency >= 300 ? 'lat-bad' : '';
     const vlessClass = p.latency_vless && p.latency_vless < 300 ? 'lat-good' : p.latency_vless >= 300 ? 'lat-bad' : 'dim';
     const card = document.createElement('div');
     card.className = 'mobile-card';
@@ -290,7 +279,6 @@ function renderMobile(proxies) {
       </div>
       <div class="mc-status">
         <span class="badge ${badgeCls}">${p.status}</span>
-        <span class="${latClass}">TCP: ${p.latency ? p.latency + 'ms' : '—'}</span>
         <span class="${vlessClass}">VLESS: ${p.latency_vless ? p.latency_vless + 'ms' : '—'}</span>
       </div>
     `;
@@ -336,15 +324,9 @@ async function delOne(id) {
 }
 
 async function testAll() {
-  toast('testing all proxies TCP, wait a minute...');
+  toast('testing all proxies VLESS...');
   await api('POST','/api/test-all');
   setTimeout(loadData, 3000);
-}
-
-async function testAllVless() {
-  toast('testing all proxies VLESS, this may take a while...');
-  await api('POST','/api/test-all-vless');
-  setTimeout(loadData, 6000);
 }
 
 async function cleanupFailed() {
@@ -366,22 +348,29 @@ setInterval(loadData, 30000);
 
 // ─── Progress bar polling ───
 
+let _wasRunning = false;
+let _lastLoadDuringTest = 0;
+
 async function pollTestProgress() {
   const p = await api('GET', '/api/test-progress');
   const bar = $('#testProgressBar');
   const fill = $('#testProgressFill');
   const label = $('#testProgressLabel');
-  const btns = ['testAllBtn', 'testAllVlessBtn', 'batchTestBtn', 'batchTestVlessBtn'];
+  const btns = ['testAllBtn', 'batchTestBtn'];
   if (p.running && p.total > 0) {
+    _wasRunning = true;
     bar.style.display = 'block';
     bar.style.height = '4px';
     bar.style.background = 'var(--border)';
     fill.style.width = (p.done / p.total * 100) + '%';
     fill.style.background = 'var(--green)';
     fill.style.height = '100%';
-    const testType = p.label === 'tcp' ? 'TCP' : 'VLESS';
-    label.textContent = `${testType} test (${p.label}): ${p.done}/${p.total} (${p.ok} ok)`;
+    label.textContent = `VLESS (${p.label}): ${p.done}/${p.total} (${p.ok} ok)`;
     btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = true; });
+    if (Date.now() - _lastLoadDuringTest > 5000) {
+      _lastLoadDuringTest = Date.now();
+      loadData();
+    }
   } else {
     bar.style.display = p.last_completed ? 'block' : 'none';
     bar.style.height = 'auto';
@@ -390,10 +379,14 @@ async function pollTestProgress() {
     fill.style.background = 'var(--text-muted)';
     fill.style.height = '2px';
     if (p.last_completed) {
-      const testType = p.last_label === 'tcp' ? 'TCP' : 'VLESS';
-      label.textContent = `Last ${testType} test: ${p.last_ok}/${p.last_total} ok — ${p.last_completed}`;
+      label.textContent = `Last VLESS test: ${p.last_ok}/${p.last_total} ok — ${p.last_completed}`;
     }
     btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = false; });
+    if (_wasRunning) {
+      _wasRunning = false;
+      _lastLoadDuringTest = 0;
+      loadData();
+    }
   }
 }
 setInterval(pollTestProgress, 2000);

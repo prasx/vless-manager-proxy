@@ -22,7 +22,7 @@ if __name__ == "__main__":
         print(f"    {r['key']}: {r['value'][:60]}")
 
     xray_configurator.apply_all()
-    enrich_all_unknown_countries()
 
+    threading.Thread(target=enrich_all_unknown_countries, daemon=True).start()
     threading.Thread(target=proxy_manager.background_checker, daemon=True).start()
     app.run(host="0.0.0.0", port=5000, debug=False)
