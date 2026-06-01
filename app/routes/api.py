@@ -317,6 +317,60 @@ def api_settings_set():
     return jsonify(success=True, diagnose=d, restart_hint=hint)
 
 
+# ─── Бекап настроек и источников ───
+
+
+@api_bp.route("/backup")
+def api_backup_export():
+    """GET /api/backup — экспорт всех настроек и источников в JSON."""
+    settings = {
+        r["key"]: r["value"]
+        for r in db_q("SELECT key, value FROM settings ORDER BY key")
+    }
+    sources = [
+        dict(r) for r in db_q("SELECT name, url FROM sources ORDER BY created_at")
+    ]
+    return jsonify(
+        version=1,
+        exported_at=moscow_str(),
+        settings=settings,
+        sources=sources,
+    )
+
+
+@api_bp.route("/backup/import", methods=["POST"])
+def api_backup_import():
+    """POST /api/backup/import — импорт настроек и источников из JSON."""
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict) or "settings" not in data or "sources" not in data:
+        return jsonify(error="Invalid backup format: need settings + sources"), 400
+
+    imported = {"settings": 0, "sources": 0}
+
+    for k, v in data["settings"].items():
+        Settings.set(k, str(v))
+        imported["settings"] += 1
+
+    for src in data["sources"]:
+        name = (src.get("name") or "").strip()
+        url = (src.get("url") or "").strip()
+        if name and url:
+            try:
+                db_q(
+                    "INSERT OR IGNORE INTO sources (name, url, created_at) VALUES (?, ?, ?)",
+                    (name, url, now_utc()),
+                )
+                imported["sources"] += 1
+            except Exception:
+                pass
+
+    add_log(
+        "INFO",
+        f"Backup imported: {imported['settings']} settings, {imported['sources']} sources",
+    )
+    return jsonify(success=True, imported=imported)
+
+
 # ─── Xray ───
 
 

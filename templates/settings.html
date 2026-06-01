@@ -119,6 +119,15 @@
   </div>
 </div>
 
+<div class="settings-section">
+  <h2>Backup</h2>
+  <div class="form-actions">
+    <button class="btn btn-primary" onclick="exportBackup()">Export settings + sources</button>
+    <button class="btn" onclick="document.getElementById('backupFile').click()">Import from JSON</button>
+    <input type="file" id="backupFile" accept=".json" style="display:none" onchange="importBackup(event)">
+  </div>
+</div>
+
 <div class="settings-section" style="overflow-x:auto">
   <h2>API Reference</h2>
   <table style="width:100%;border-collapse:collapse;font-size:0.78rem">
@@ -153,6 +162,8 @@
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources/import-all</code></td><td style="padding:4px 8px">Импорт из всех + тест + страны</td></tr>
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/import</code></td><td style="padding:4px 8px">Импорт по URL + тест + страны</td></tr>
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/settings</code></td><td style="padding:4px 8px">Сохранить настройки</td></tr>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/backup</code></td><td style="padding:4px 8px">Экспорт настроек + источников в JSON</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/backup/import</code></td><td style="padding:4px 8px">Импорт настроек + источников из JSON</td></tr>
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/logs/clear</code></td><td style="padding:4px 8px">Очистить логи</td></tr>
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray/start</code></td><td style="padding:4px 8px">systemctl start xray</td></tr>
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray/stop</code></td><td style="padding:4px 8px">systemctl stop xray</td></tr>

@@ -303,6 +303,15 @@ class ProxyManager:
 
     def _run_vless_chain(self):
         try:
+            # Реимпорт из всех источников
+            src_list = db_q("SELECT id, url FROM sources")
+            for src in src_list:
+                import_from_url(src["url"], source_id=src["id"])
+
+            from .utils import enrich_all_unknown_countries
+
+            enrich_all_unknown_countries()
+
             src_rows = db_q(
                 "SELECT id, link FROM proxies WHERE status='working' AND source_id IS NOT NULL"
             )

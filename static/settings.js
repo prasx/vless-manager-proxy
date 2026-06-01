@@ -169,6 +169,36 @@ async function stopXrayDaemon() {
   loadSettings();
 }
 
+// ─── Backup ───
+
+async function exportBackup() {
+  const r = await api('GET', '/api/backup');
+  if (r.error) { toast(r.error, 'error'); return; }
+  const blob = new Blob([JSON.stringify(r, null, 2)], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `vless-backup-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('Backup downloaded', 'success');
+}
+
+async function importBackup(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    const r = await api('POST', '/api/backup/import', data);
+    if (r.error) { toast(r.error, 'error'); return; }
+    toast(`Imported: ${r.imported.settings} settings, ${r.imported.sources} sources`, 'success');
+    loadSettings();
+  } catch (e) {
+    toast('Invalid JSON file: ' + e.message, 'error');
+  }
+  event.target.value = '';
+}
+
 loadSettings();
 setInterval(() => {
   api('GET', '/api/xray/status').then(renderXrayStatus).catch(() => {});
