@@ -126,15 +126,15 @@ EOF
 
 ```bash
 sudo mkdir -p /opt/vless-manager
+sudo chown $USER:$USER /opt/vless-manager
 cd /opt/vless-manager
 
-sudo git clone https://github.com/prasx/vless-manager-proxy.git .
+git clone https://github.com/prasx/vless-manager-proxy.git .
 
 # виртуальное окружение
 python3 -m venv venv
 source venv/bin/activate
 
-pip install --upgrade pip
 pip install -r requirements.txt
 
 deactivate
