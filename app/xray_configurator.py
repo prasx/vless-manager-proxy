@@ -131,8 +131,9 @@ class XrayConfigurator:
         return False
 
     @classmethod
-    def _geosite_rules(cls):
-        """Возвращает список routing-правил из настроек geosite_rules."""
+    def _geosite_rules(cls, has_balancer=True):
+        """Возвращает список routing-правил из настроек geosite_rules.
+        has_balancer=False — правило proxy → direct (нет рабочих прокси)."""
         if not cls._geosite_available_check():
             return []
         rules = []
@@ -142,7 +143,10 @@ class XrayConfigurator:
             if not domain:
                 continue
             if tag == "proxy":
-                rules.append({"type": "field", "domain": [domain], "balancerTag": "auto"})
+                if has_balancer:
+                    rules.append({"type": "field", "domain": [domain], "balancerTag": "auto"})
+                else:
+                    rules.append({"type": "field", "domain": [domain], "outboundTag": "direct"})
             elif tag == "direct":
                 rules.append({"type": "field", "domain": [domain], "outboundTag": "direct"})
         return rules
@@ -190,7 +194,7 @@ class XrayConfigurator:
                 {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
             ])
             if not skip_geosite:
-                routing_rules.extend(self._geosite_rules())
+                routing_rules.extend(self._geosite_rules(has_balancer=bool(proxy_obs)))
         if proxy_obs:
             routing_rules.append(
                 {"type": "field", "network": "tcp,udp", "balancerTag": "auto"}
