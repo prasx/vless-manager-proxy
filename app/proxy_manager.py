@@ -85,15 +85,47 @@ class ProxyManager:
         config = {
             "log": {"loglevel": "none"},
             "inbounds": [
-                {"port": socks_port, "listen": "127.0.0.1", "protocol": "socks", "settings": {"udp": True}, "tag": "socks-in"},
-                {"port": http_port, "listen": "127.0.0.1", "protocol": "http", "settings": {}, "tag": "http-in"},
+                {
+                    "port": socks_port,
+                    "listen": "127.0.0.1",
+                    "protocol": "socks",
+                    "settings": {"udp": True},
+                    "tag": "socks-in",
+                },
+                {
+                    "port": http_port,
+                    "listen": "127.0.0.1",
+                    "protocol": "http",
+                    "settings": {},
+                    "tag": "http-in",
+                },
             ],
-            "outbounds": [{
-                "protocol": "vless", "tag": "proxy",
-                "settings": {"vnext": [{"address": parsed["server"], "port": parsed["port"], "users": [{"id": parsed["uid"], "encryption": "none"}]}]},
-                "streamSettings": stream_settings(parsed),
-            }],
-            "routing": {"domainStrategy": "AsIs", "rules": [{"type": "field", "inboundTag": ["socks-in", "http-in"], "outboundTag": "proxy"}]},
+            "outbounds": [
+                {
+                    "protocol": "vless",
+                    "tag": "proxy",
+                    "settings": {
+                        "vnext": [
+                            {
+                                "address": parsed["server"],
+                                "port": parsed["port"],
+                                "users": [{"id": parsed["uid"], "encryption": "none"}],
+                            }
+                        ]
+                    },
+                    "streamSettings": stream_settings(parsed),
+                }
+            ],
+            "routing": {
+                "domainStrategy": "AsIs",
+                "rules": [
+                    {
+                        "type": "field",
+                        "inboundTag": ["socks-in", "http-in"],
+                        "outboundTag": "proxy",
+                    }
+                ],
+            },
         }
         flow = parsed.get("flow")
         if flow:
@@ -115,7 +147,11 @@ class ProxyManager:
         tmp_path = tmp.name
         proc = None
         try:
-            proc = subprocess.Popen([xbin, "run", "-c", tmp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            proc = subprocess.Popen(
+                [xbin, "run", "-c", tmp_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             for _ in range(30):
                 try:
                     s = socket.create_connection(("127.0.0.1", http_port), timeout=0.5)
@@ -173,9 +209,12 @@ class ProxyManager:
         )
         opener = urllib.request.build_opener(proxy_handler)
         try:
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            })
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                },
+            )
             req_start = time.time()
             resp = opener.open(req, timeout=timeout)
             total = 0
@@ -202,7 +241,9 @@ class ProxyManager:
         if not rows:
             return
         add_log("INFO", f"Speed test: {len(rows)} proxies")
-        self.progress.update(running=True, total=len(rows), done=0, ok=0, label="Speed test")
+        self.progress.update(
+            running=True, total=len(rows), done=0, ok=0, label="Speed test"
+        )
         changed = False
         for r in rows:
             kbps = self._test_speed_single(r["link"])
@@ -216,6 +257,7 @@ class ProxyManager:
             add_log("INFO", f"Speed #{r['id']}: {kbps} kbps")
         if changed:
             from .xray_configurator import xray_configurator
+
             xray_configurator.apply_all(blocking=True)
             add_log("INFO", "Config reapplied after speed test")
 
@@ -335,10 +377,10 @@ class ProxyManager:
         if not rows:
             add_log("WARN", "Test all VLESS: no proxies to test")
             return
-        self._run_batch(rows, "all", 3)
+        self._bg_vless_batch(rows, "all")
 
     def batch_test_vless(self, rows):
-        self._run_batch(rows, "batch-test", 3)
+        self._bg_vless_batch(rows, "batch-test")
 
     # ─── Background tasks ───
 
@@ -365,7 +407,10 @@ class ProxyManager:
 
                 xray_configurator.apply_all()
                 now = time.time()
-                if now - last_vless >= Settings.vless_interval() and not self._vless_busy:
+                if (
+                    now - last_vless >= Settings.vless_interval()
+                    and not self._vless_busy
+                ):
                     last_vless = now
                     threading.Thread(target=self._run_vless_chain, daemon=True).start()
                     add_log("INFO", "BG VLESS chain started")
@@ -391,8 +436,10 @@ class ProxyManager:
                 add_log("INFO", f"VLESS source-only: {len(src_rows)} proxies")
                 self._bg_vless_batch(src_rows, "source-only")
 
-            # Тестируем все working
-            all_rows = db_q("SELECT id, link FROM proxies WHERE status='working'")
+            # Тестируем все working (без source-only — уже протестированы выше)
+            all_rows = db_q(
+                "SELECT id, link FROM proxies WHERE status='working' AND source_id IS NULL"
+            )
             if all_rows:
                 add_log("INFO", f"VLESS all: {len(all_rows)} proxies")
                 self._bg_vless_batch(all_rows, "all")
@@ -400,9 +447,7 @@ class ProxyManager:
             # Каждый 3-й цикл — ретест failed прокси
             self._failed_cycle += 1
             if self._failed_cycle % 3 == 0:
-                failed_rows = db_q(
-                    "SELECT id, link FROM proxies WHERE status='failed'"
-                )
+                failed_rows = db_q("SELECT id, link FROM proxies WHERE status='failed'")
                 if failed_rows:
                     add_log(
                         "INFO",

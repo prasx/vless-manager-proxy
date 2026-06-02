@@ -26,7 +26,7 @@ API_PORT = 10085  # gRPC API Xray (add/remove outbound)
 API_LISTEN = "127.0.0.1"  # Слушать API только на localhost
 
 # ─── Фоновый чекер ────────────────────────────────────
-PROBE_INTERVAL = "10s"  # Интервал Observatory в конфиге Xray
+PROBE_INTERVAL = "20s"  # Интервал Observatory в конфиге Xray
 
 # ─── Логирование ──────────────────────────────────────
 LOG_TRIM_EVERY = 500  # Чистить логи каждые N записей
