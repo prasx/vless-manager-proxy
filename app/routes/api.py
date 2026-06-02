@@ -302,7 +302,7 @@ def api_settings_get():
 def api_settings_set():
     """POST /api/settings — сохраняет настройки; при изменении allowed_countries пересобирает конфиг."""
     data = request.get_json(silent=True) or {}
-    needs_rebuild = "allowed_countries" in data
+    needs_rebuild = "allowed_countries" in data or "geo_enabled" in data
     for k, v in data.items():
         Settings.set(k, str(v))
     add_log("INFO", f"Settings updated: {', '.join(data.keys())}")
@@ -352,7 +352,13 @@ def api_backup_import():
     imported = {"settings": 0, "sources": 0}
 
     for k, v in data["settings"].items():
-        Settings.set(k, str(v))
+        cur = Settings.get(k)
+        val = str(v)
+        # Не затираем настроенные geosite-правила пустым массивом из старого бекапа
+        if k == "geosite_rules" and val == "[]" and cur and cur != "[]":
+            add_log("DEBUG", f"Backup: skipped empty geosite_rules (preserving {len(json_module.loads(cur))} existing rules)")
+            continue
+        Settings.set(k, val)
         imported["settings"] += 1
 
     for src in data["sources"]:

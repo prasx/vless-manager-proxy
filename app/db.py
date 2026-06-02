@@ -115,6 +115,7 @@ def init_db():
         "log_trim_every": "500",
         "log_keep": "2000",
         "geosite_rules": '[]',
+        "geo_enabled": "true",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))

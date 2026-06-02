@@ -348,6 +348,22 @@ td.id { color:var(--text-muted); }
   gap:8px;
   margin-top:16px;
 }
+.settings-cols {
+  display:flex;
+  gap:24px;
+}
+.settings-col {
+  flex:1;
+  min-width:0;
+}
+.settings-col-narrow {
+  max-width:340px;
+  flex-shrink:0;
+}
+@media(max-width:900px) {
+  .settings-cols { flex-direction:column; }
+  .settings-col-narrow { max-width:none; }
+}
 /* Footer */
 .footer {
   margin-top:32px;

@@ -32,6 +32,7 @@ async function loadSettings() {
   renderXrayStatus(status);
   loadCountries();
   loadGeositeRules();
+  $('geoEnabled').checked = s.geo_enabled !== 'false';
 }
 
 async function saveSettings() {
@@ -87,6 +88,13 @@ function resetProbeUrl() {
   toast('Probe URL reset to default');
 }
 
+async function toggleGeo() {
+  const val = $('geoEnabled').checked ? 'true' : 'false';
+  const r = await api('POST', '/api/settings', { geo_enabled: val });
+  if (r.error) { toast(r.error, 'error'); $('geoEnabled').checked = val === 'true'; return; }
+  toast(`Geo routing ${val === 'true' ? 'enabled' : 'disabled'}`, 'success');
+}
+
 // ─── GeoSite Rules ───
 
 let geositeRules = [];
@@ -122,16 +130,12 @@ function renderGeositeRules() {
 }
 
 function addGeositeRule() {
+  syncGeositeDomToArray();
   geositeRules.push({ domain: 'geosite:google', outboundTag: 'direct' });
   renderGeositeRules();
 }
 
-function removeGeositeRule(idx) {
-  geositeRules.splice(idx, 1);
-  renderGeositeRules();
-}
-
-async function saveGeositeRules() {
+function syncGeositeDomToArray() {
   const items = document.querySelectorAll('#geositeRulesWrap .tuning-item');
   const rules = [];
   items.forEach(item => {
@@ -141,6 +145,17 @@ async function saveGeositeRules() {
       rules.push({ domain: domain.value.trim(), outboundTag: outbound.value });
     }
   });
+  if (rules.length) geositeRules = rules;
+}
+
+function removeGeositeRule(idx) {
+  geositeRules.splice(idx, 1);
+  renderGeositeRules();
+}
+
+async function saveGeositeRules() {
+  syncGeositeDomToArray();
+  const rules = geositeRules;
   const r = await api('POST', '/api/geosite-rules', { rules });
   if (r.error) { toast(r.error, 'error'); return; }
   toast(`Saved ${r.count} GeoSite rules — config rebuilding...`, 'success');

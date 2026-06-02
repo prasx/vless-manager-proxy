@@ -149,11 +149,12 @@ class XrayConfigurator:
 
     # ─── Config generation ───
 
-    def generate_full_config(self, max_outbounds=0):
+    def generate_full_config(self, max_outbounds=0, skip_geosite=False):
         """Генерирует полный конфиг с observatory + balancer.
 
         Если max_outbounds > 0 — только N самых быстрых outbound.
         Учитывает фильтр allowed_countries.
+        skip_geosite=True — временно исключить geosite-правила (для recovery).
         """
         allowed = Settings.allowed_countries()
         codes = [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
@@ -182,10 +183,14 @@ class XrayConfigurator:
         routing_rules = [
             {"type": "field", "protocol": ["bittorrent"], "outboundTag": "direct"},
             {"inboundTag": ["api"], "outboundTag": "api"},
-            {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
-            {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
         ]
-        routing_rules.extend(self._geosite_rules())
+        if Settings.get("geo_enabled", "true") == "true":
+            routing_rules.extend([
+                {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
+                {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
+            ])
+            if not skip_geosite:
+                routing_rules.extend(self._geosite_rules())
         if proxy_obs:
             routing_rules.append(
                 {"type": "field", "network": "tcp,udp", "balancerTag": "auto"}
@@ -252,10 +257,11 @@ class XrayConfigurator:
                         "outboundTag": "direct",
                     },
                     {"inboundTag": ["api"], "outboundTag": "api"},
+                    {"type": "field", "network": "tcp,udp", "balancerTag": "auto"},
+                ] + ([] if Settings.get("geo_enabled", "true") != "true" else [
                     {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
                     {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
-                    {"type": "field", "network": "tcp,udp", "balancerTag": "auto"},
-                ] + self._geosite_rules(),
+                ] + self._geosite_rules()),
                 "balancers": [
                     {
                         "tag": "auto",
@@ -281,6 +287,10 @@ class XrayConfigurator:
         try:
             s = socket.create_connection((API_LISTEN, API_PORT), timeout=2)
             s.close()
+        except Exception as e:
+            add_log("DEBUG", f"Xray API check failed (TCP): {e}")
+            return False
+        try:
             r = subprocess.run(
                 [
                     Settings.xray_bin(),
@@ -292,10 +302,12 @@ class XrayConfigurator:
                 capture_output=True,
                 timeout=5,
             )
+            if r.returncode != 0:
+                add_log("DEBUG", f"Xray statsquery failed (exit={r.returncode}): {r.stderr.decode()[:200]}")
             return r.returncode == 0
         except Exception as e:
-            add_log("DEBUG", f"Xray API check failed: {e}")
-            return False
+            add_log("DEBUG", f"Xray statsquery exception: {e}")
+            return True  # TCP alive, binary issue — Xray is running
 
     @staticmethod
     def list_active_outbounds():
@@ -454,9 +466,9 @@ class XrayConfigurator:
             self._write_and_restart(cfg_path, max_active)
         self._update_subscribe_cache()
 
-    def _write_and_restart(self, cfg_path, max_active, attempt=1):
+    def _write_and_restart(self, cfg_path, max_active, attempt=1, skip_geosite=False):
         """Пишет конфиг на диск и перезапускает Xray. При неудаче пробует без geosite."""
-        limited = self.generate_full_config(max_outbounds=max_active)
+        limited = self.generate_full_config(max_outbounds=max_active, skip_geosite=skip_geosite)
         rule_count = len(self._geosite_rules())
         cfg_path.write_text(json.dumps(limited, indent=2))
         applied = sum(
@@ -473,16 +485,15 @@ class XrayConfigurator:
             return
         add_log("INFO", "Restarting Xray to enable API services...")
         self.restart_via_systemd()
-        # Ждём немного и проверяем, взлетел ли Xray
+        # Ждём и проверяем, взлетел ли Xray
         import time
-        time.sleep(2)
+        time.sleep(5)
         if not self.api_ok() and rule_count > 0 and attempt < 2:
             add_log(
                 "WARN",
                 "Xray failed to start with GeoSite rules — retrying without them",
             )
-            Settings.set("geosite_rules", "[]")
-            self._write_and_restart(cfg_path, max_active, attempt=2)
+            self._write_and_restart(cfg_path, max_active, attempt=2, skip_geosite=True)
         elif not self.api_ok():
             add_log(
                 "ERROR",
