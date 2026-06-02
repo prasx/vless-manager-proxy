@@ -114,6 +114,7 @@ def init_db():
         "vless_per_proxy_timeout": "5",
         "log_trim_every": "500",
         "log_keep": "2000",
+        "geosite_rules": '[]',
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
@@ -194,6 +195,16 @@ class Settings:
     def log_keep(cls):
         """Оставлять последние N записей после чистки."""
         return int(cls.get("log_keep", "2000"))
+
+    @classmethod
+    def geosite_rules(cls):
+        """Список geosite-правил для routing Xray (JSON-строка)."""
+        import json
+        raw = cls.get("geosite_rules", "[]")
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
 
 
 def default_xray_config_path():

@@ -272,6 +272,18 @@ td.id { color:var(--text-muted); }
   color:var(--text-secondary);
   font-size:0.82rem;
 }
+.input {
+  background:var(--bg-secondary);
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:7px 12px;
+  font:inherit;
+  font-size:0.8rem;
+  color:var(--text-primary);
+  height:34px;
+  transition:border-color var(--transition);
+}
+.input:focus { outline:none; border-color:var(--border-hover); }
 .form-row .input {
   flex:1;
   max-width:480px;

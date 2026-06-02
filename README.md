@@ -12,7 +12,7 @@
 ## 🌟 Особенности
 
 *   **🎯 Observatory + Balancer** — Xray сам проверяет задержки узлов каждые 30 секунд и выбирает лучший по leastPing. В Observatory попадают только VLESS-верифицированные прокси.
-*   **🧪 Реальный VLESS-тест** — Каждый прокси проверяется через запуск временного Xray с его конфигом и HTTP-запрос через него. Замер реальной задержки, как в v2rayN.
+*   **🧪 Реальный VLESS-тест** — Каждый прокси проверяется через запуск временного Xray с его конфигом и HTTP-запрос через него.
 *   **⚡ Параллельное тестирование** — До 5 прокси одновременно. 50 прокси за 15–30 секунд (таймаут 3с).
 *   **📡 Фоновое тестирование + реимпорт** — По расписанию: реимпорт из всех источников → enrich стран → VLESS-тест source-only → всех рабочих. Устаревшие прокси источника автоматически удаляются.
 *   **🌍 Автоопределение страны профиля** — Из фрагмента ссылки (`#RU`, `#NL`) или через ip-api.com.
@@ -20,6 +20,7 @@
 *   **🛡 Safe-only import** — Флаг при импорте: пропускать прокси с `security=none`.
 *   **🧹 Автоочистка при реимпорте** — Прокси, пропавшие из подписки источника, удаляются при следующем импорте.
 *   **🌐 Фильтр по странам** — Выбор разрешённых стран в Settings, конфиг и подписка собираются только из них.
+*   **🌍 GeoSite-роутинг** — Настраиваемые правила geosite из Settings: доменные категории (<code>geosite:ru</code>, <code>geosite:youtube</code>, <code>geosite:netflix</code>, ...) направляются напрямую или через прокси-балансер.
 *   **📄 Пагинация** — На Dashboard и Logs: показаны первые 50 записей, кнопка "Show next 50".
 *   **🔗 Subscription URL** — `/api/subscribe.txt` для v2rayNG, Streisand, Hiddify, Nekobox. Только VLESS-верифицированные узлы, on-demand сборка.
 *   **💾 Backup** — Экспорт/импорт настроек и источников в JSON через UI Settings.
@@ -79,13 +80,22 @@ wget -q --show-progress "https://github.com/XTLS/Xray-core/releases/latest/downl
 # директория под xray
 sudo mkdir -p /usr/local/share/xray
 
-# распаковка
+# распаковка (включает xray, geoip.dat, geosite.dat)
 sudo unzip -o "$f" -d /usr/local/share/xray
 
 # бинарник
 sudo ln -sf /usr/local/share/xray/xray /usr/local/bin/xray
 
 rm "$f"
+
+# geosite.dat из Xray-core не содержит категорий стран
+# Скачиваем от runetfreedom — с ru-blocked, ru-blocked-all и всеми стандартными категориями:
+sudo wget -qO /usr/local/share/xray/geosite.dat \
+  "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/geosite.dat"
+
+# geoip.dat тоже обновляем оттуда (с ru-blocked, cloudflare, telegram и т.д.):
+sudo wget -qO /usr/local/share/xray/geoip.dat \
+  "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/geoip.dat"
 ```
 
 
@@ -125,7 +135,7 @@ python3 -m venv venv
 source venv/bin/activate
 
 pip install --upgrade pip
-pip install -r requirements.txt || pip install flask
+pip install -r requirements.txt
 
 deactivate
 ```
@@ -146,6 +156,7 @@ After=network.target
 User=nobody
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
+Environment="XRAY_LOCATION_ASSET=/usr/local/share/xray"
 
 ExecStart=/usr/local/bin/xray run -config /etc/xray/config.json
 
@@ -167,7 +178,8 @@ EOF
 sudo tee /etc/systemd/system/vless-manager.service << 'EOF'
 [Unit]
 Description=VLESS Manager
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -258,6 +270,8 @@ vless-manager/
 | POST | `/api/settings` | Сохранить настройки |
 | GET | `/api/backup` | Экспорт настроек + источников в JSON |
 | POST | `/api/backup/import` | Импорт настроек + источников из JSON |
+| GET | `/api/geosite-rules` | Список geosite-правил |
+| POST | `/api/geosite-rules` | Сохранить geosite-правила `{"rules":[...]}` |
 | GET | `/api/countries` | Список стран с enabled-статусом |
 | GET | `/api/xray/status` | Статус Xray (running, API, systemd, outbounds) |
 | GET | `/api/xray/outbounds` | Список узлов и трафик |

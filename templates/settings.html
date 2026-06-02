@@ -49,6 +49,34 @@
 </div>
 
 <div class="settings-section">
+  <h2>GeoSite Rules</h2>
+  <div class="tuning-notice" style="font-size:0.74rem;line-height:1.8">
+    <strong>geosite.dat</strong> от <a href="https://github.com/runetfreedom/russia-v2ray-rules-dat" target="_blank" style="color:var(--green)">runetfreedom</a>.
+    Категории направляются <strong>direct</strong> (напрямую) или <strong>proxy</strong> (через балансер).<br>
+
+    <span style="color:var(--text-muted)">— Стандартные:</span>
+    <code>google</code> <code>youtube</code> <code>netflix</code> <code>telegram</code> <code>twitter</code> <code>instagram</code> <code>discord</code> <code>meta</code> <code>openai</code> <code>category-ads</code><br>
+
+    <span style="color:var(--text-muted)">— Россия:</span>
+    <code>ru-blocked</code> — заблокированные домены РФ,
+    <code>ru-blocked-all</code> — все известные (осторожно, 700k+),
+    <code>ru-available-only-inside</code> — доступные только в РФ,
+    <code>antifilter-download</code> / <code>antifilter-download-community</code> / <code>refilter</code><br>
+
+    <span style="color:var(--text-muted)">— Windows:</span>
+    <code>win-spy</code> (слежка), <code>win-update</code> (обновления), <code>win-extra</code><br>
+
+    <span style="color:var(--text-muted)">— IP (в коде, всегда direct):</span>
+    <code>geoip:ru</code> <code>geoip:private</code> (10.0.0.0/8, 192.168.0.0/16)
+  </div>
+  <div id="geositeRulesWrap"></div>
+  <div class="form-actions" style="margin-top:12px">
+    <button class="btn" onclick="addGeositeRule()">+ Add Rule</button>
+    <button class="btn btn-primary" onclick="saveGeositeRules()">Save GeoSite Rules</button>
+  </div>
+</div>
+
+<div class="settings-section">
   <h2>Country Filter</h2>
   <p style="font-size:0.72rem;color:var(--text-muted);margin-bottom:12px">Only proxies from selected countries will be used in the working config.</p>
   <div id="countryFilterWrap" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;padding:8px 0">
@@ -147,6 +175,8 @@
       <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/sources</code></td><td style="padding:4px 8px">Список источников</td></tr>
       <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/xray/status</code></td><td style="padding:4px 8px">Статус Xray (running, API, systemd, outbounds)</td></tr>
       <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/xray/outbounds</code></td><td style="padding:4px 8px">Список узлов и трафик</td></tr>
+      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/geosite-rules</code></td><td style="padding:4px 8px">Список geosite-правил</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/geosite-rules</code></td><td style="padding:4px 8px">Сохранить geosite-правила <code>{"rules":[...]}</code></td></tr>
       <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/logs?limit=&amp;offset=&amp;level=</code></td><td style="padding:4px 8px">Логи с пагинацией и фильтром</td></tr>
       <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/subscribe.txt</code></td><td style="padding:4px 8px">Подписка (только VLESS-верифицированные) — <a href="/api/subscribe.txt" target="_blank" style="color:var(--green)">open</a></td></tr>
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/add</code></td><td style="padding:4px 8px">Добавить прокси + тест + определение страны</td></tr>

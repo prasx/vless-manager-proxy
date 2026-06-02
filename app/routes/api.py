@@ -14,6 +14,7 @@ from ..vless import parse_vless
 from ..proxy_manager import proxy_manager
 from ..importer import import_from_url
 from ..xray_configurator import xray_configurator
+import json as json_module
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -328,10 +329,13 @@ def api_backup_export():
         for r in db_q("SELECT key, value FROM settings ORDER BY key")
     }
     sources = [
-        dict(r) for r in db_q("SELECT name, url FROM sources ORDER BY created_at")
+        dict(r)
+        for r in db_q(
+            "SELECT id, name, url, last_import, created_at FROM sources ORDER BY created_at"
+        )
     ]
     return jsonify(
-        version=1,
+        version=2,
         exported_at=moscow_str(),
         settings=settings,
         sources=sources,
@@ -354,19 +358,22 @@ def api_backup_import():
     for src in data["sources"]:
         name = (src.get("name") or "").strip()
         url = (src.get("url") or "").strip()
-        if name and url:
-            try:
-                db_q(
-                    "INSERT OR IGNORE INTO sources (name, url, created_at) VALUES (?, ?, ?)",
-                    (name, url, now_utc()),
-                )
-                imported["sources"] += 1
-            except Exception:
-                pass
+        if not name or not url:
+            continue
+        try:
+            last_import = src.get("last_import") or None
+            created_at = src.get("created_at") or now_utc()
+            db_q(
+                "INSERT OR IGNORE INTO sources (name, url, last_import, created_at) VALUES (?, ?, ?, ?)",
+                (name, url, last_import, created_at),
+            )
+            imported["sources"] += 1
+        except Exception:
+            pass
 
     add_log(
         "INFO",
-        f"Backup imported: {imported['settings']} settings, {imported['sources']} sources",
+        f"Backup imported: {imported['settings']} settings, {imported['sources']} sources (v{data.get('version', 1)})",
     )
     return jsonify(success=True, imported=imported)
 
@@ -515,6 +522,29 @@ def api_test_progress():
         last_ok=p["last_ok"],
         last_total=p["last_total"],
     )
+
+
+# ─── GeoSite Rules ───
+
+
+@api_bp.route("/geosite-rules", methods=["GET"])
+def api_geosite_rules_get():
+    """GET /api/geosite-rules — возвращает список geosite-правил."""
+    return jsonify(rules=Settings.geosite_rules())
+
+
+@api_bp.route("/geosite-rules", methods=["POST"])
+def api_geosite_rules_set():
+    """POST /api/geosite-rules — сохраняет список geosite-правил."""
+    data = request.get_json(silent=True) or {}
+    rules = data.get("rules", [])
+    for r in rules:
+        if not r.get("domain") or not r.get("outboundTag"):
+            return jsonify(error="Each rule needs 'domain' and 'outboundTag'"), 400
+    Settings.set("geosite_rules", json_module.dumps(rules))
+    add_log("INFO", f"GeoSite rules updated: {len(rules)} rules")
+    threading.Thread(target=xray_configurator.apply_all, daemon=True).start()
+    return jsonify(success=True, count=len(rules))
 
 
 # ─── Импорт ───

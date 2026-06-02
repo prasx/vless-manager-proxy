@@ -7,6 +7,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from .db import db_q, Settings, xray_config_path
@@ -91,10 +92,60 @@ class XrayConfigurator:
             },
             "streamSettings": stream_settings(parsed),
         }
-        flow = sanitize_flow(parsed.get("flow"))
+        flow =         sanitize_flow(parsed.get("flow"))
         if flow:
             ob["settings"]["vnext"][0]["users"][0]["flow"] = flow
         return ob
+
+    _geosite_checked = False
+    _geosite_available = False
+
+    @classmethod
+    def _geosite_available_check(cls):
+        """Проверяет, доступен ли geosite.dat (один раз, с кешированием)."""
+        if cls._geosite_checked:
+            return cls._geosite_available
+        cls._geosite_checked = True
+        # Стандартные пути, где Xray ищет geosite.dat
+        candidates = [
+            "/usr/local/share/xray",
+            "/usr/local/lib/xray",
+            "/etc/xray",
+            "/opt/xray",
+        ]
+        # XRAY_LOCATION_ASSET
+        env_asset = os.environ.get("XRAY_LOCATION_ASSET", "")
+        if env_asset:
+            candidates.insert(0, env_asset)
+        # Директория бинарника Xray
+        xray_bin = Settings.xray_bin()
+        if "/" in xray_bin:
+            candidates.insert(0, os.path.dirname(xray_bin))
+        for d in candidates:
+            p = os.path.join(d, "geosite.dat")
+            if os.path.isfile(p):
+                cls._geosite_available = True
+                return True
+        cls._geosite_available = False
+        add_log("WARN", "geosite.dat not found — GeoSite rules disabled. Set XRAY_LOCATION_ASSET or verify Xray installation")
+        return False
+
+    @classmethod
+    def _geosite_rules(cls):
+        """Возвращает список routing-правил из настроек geosite_rules."""
+        if not cls._geosite_available_check():
+            return []
+        rules = []
+        for item in Settings.geosite_rules():
+            domain = (item.get("domain") or "").strip()
+            tag = (item.get("outboundTag") or "").strip()
+            if not domain:
+                continue
+            if tag == "proxy":
+                rules.append({"type": "field", "domain": [domain], "balancerTag": "auto"})
+            elif tag == "direct":
+                rules.append({"type": "field", "domain": [domain], "outboundTag": "direct"})
+        return rules
 
     # ─── Config generation ───
 
@@ -134,6 +185,7 @@ class XrayConfigurator:
             {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
             {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
         ]
+        routing_rules.extend(self._geosite_rules())
         if proxy_obs:
             routing_rules.append(
                 {"type": "field", "network": "tcp,udp", "balancerTag": "auto"}
@@ -203,7 +255,7 @@ class XrayConfigurator:
                     {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
                     {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
                     {"type": "field", "network": "tcp,udp", "balancerTag": "auto"},
-                ],
+                ] + self._geosite_rules(),
                 "balancers": [
                     {
                         "tag": "auto",
@@ -357,6 +409,12 @@ class XrayConfigurator:
 
     def _apply_all_impl(self):
         """Внутренняя реализация применения конфига (без блокировки)."""
+        try:
+            self._apply_all_impl_safe()
+        except Exception as e:
+            add_log("ERROR", f"Config rebuild failed: {e}")
+
+    def _apply_all_impl_safe(self):
         cfg_path = xray_config_path()
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -364,6 +422,16 @@ class XrayConfigurator:
         proxy_obs = [o for o in config["outbounds"] if o["tag"].startswith("node")]
         proxy_count = len(proxy_obs)
         max_active = Settings.max_active_proxies()
+
+        geosite_rules = self._geosite_rules()
+        if geosite_rules:
+            domains = [r["domain"][0] for r in geosite_rules if "domain" in r]
+            add_log(
+                "INFO",
+                f"GeoSite rules active ({len(geosite_rules)}): {', '.join(domains)}",
+            )
+        else:
+            add_log("DEBUG", "No GeoSite rules configured — all domains via balancer")
 
         if self.api_ok():
             base = self.generate_base_config()
@@ -383,21 +451,43 @@ class XrayConfigurator:
                 f"Applied {len(limited_obs)} proxies via API (total working: {proxy_count})",
             )
         else:
-            limited = self.generate_full_config(max_outbounds=max_active)
-            cfg_path.write_text(json.dumps(limited, indent=2))
-            applied = sum(
-                1 for o in limited["outbounds"] if o["tag"].startswith("node")
-            )
+            self._write_and_restart(cfg_path, max_active)
+        self._update_subscribe_cache()
+
+    def _write_and_restart(self, cfg_path, max_active, attempt=1):
+        """Пишет конфиг на диск и перезапускает Xray. При неудаче пробует без geosite."""
+        limited = self.generate_full_config(max_outbounds=max_active)
+        rule_count = len(self._geosite_rules())
+        cfg_path.write_text(json.dumps(limited, indent=2))
+        applied = sum(
+            1 for o in limited["outbounds"] if o["tag"].startswith("node")
+        )
+        all_working = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working'")[0][
+            "c"
+        ]
+        add_log(
+            "WARN" if attempt > 1 else "INFO",
+            f"Xray API unavailable — wrote {applied} proxies to disk (total working: {all_working})",
+        )
+        if applied == 0:
+            return
+        add_log("INFO", "Restarting Xray to enable API services...")
+        self.restart_via_systemd()
+        # Ждём немного и проверяем, взлетел ли Xray
+        import time
+        time.sleep(2)
+        if not self.api_ok() and rule_count > 0 and attempt < 2:
             add_log(
                 "WARN",
-                f"Xray API unavailable — wrote {applied} proxies to disk (total working: {proxy_count})",
+                "Xray failed to start with GeoSite rules — retrying without them",
             )
-            # API нет — вероятно, Xray запущен без StatsService.
-            # Перезапускаем Xray с новым конфигом (в нём есть секция api со StatsService).
-            if applied > 0:
-                add_log("INFO", "Restarting Xray to enable API services...")
-                self.restart_via_systemd()
-        self._update_subscribe_cache()
+            Settings.set("geosite_rules", "[]")
+            self._write_and_restart(cfg_path, max_active, attempt=2)
+        elif not self.api_ok():
+            add_log(
+                "ERROR",
+                "Xray still not running after restart — check journalctl -u xray",
+            )
 
     # ─── Subscribe cache ───
 

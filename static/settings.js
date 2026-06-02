@@ -31,6 +31,7 @@ async function loadSettings() {
   }
   renderXrayStatus(status);
   loadCountries();
+  loadGeositeRules();
 }
 
 async function saveSettings() {
@@ -84,6 +85,66 @@ async function restartXray() {
 function resetProbeUrl() {
   $('probeUrl').value = 'https://www.gstatic.com/generate_204';
   toast('Probe URL reset to default');
+}
+
+// ─── GeoSite Rules ───
+
+let geositeRules = [];
+
+async function loadGeositeRules() {
+  const r = await api('GET', '/api/geosite-rules');
+  if (r.error) return;
+  geositeRules = r.rules || [];
+  renderGeositeRules();
+}
+
+function renderGeositeRules() {
+  const wrap = $('geositeRulesWrap');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!geositeRules.length) {
+    wrap.innerHTML = '<div class="tuning-item" style="justify-content:center;color:var(--text-muted);font-size:0.82rem;padding:12px 0">no rules — all domains go through balancer</div>';
+    return;
+  }
+  geositeRules.forEach((rule, i) => {
+    const item = document.createElement('div');
+    item.className = 'tuning-item';
+    item.innerHTML = `
+      <input type="text" class="input geosite-domain" value="${rule.domain}" style="flex:1;font-family:monospace;max-width:360px" placeholder="geosite:google">
+      <select class="input geosite-outbound" style="width:auto;min-width:110px">
+        <option value="direct" ${rule.outboundTag === 'direct' ? 'selected' : ''}>direct</option>
+        <option value="proxy" ${rule.outboundTag === 'proxy' ? 'selected' : ''}>proxy (balancer)</option>
+      </select>
+      <button class="btn btn-danger" onclick="removeGeositeRule(${i})" style="padding:2px 10px;font-size:12px;line-height:1.6">✕</button>
+    `;
+    wrap.appendChild(item);
+  });
+}
+
+function addGeositeRule() {
+  geositeRules.push({ domain: 'geosite:google', outboundTag: 'direct' });
+  renderGeositeRules();
+}
+
+function removeGeositeRule(idx) {
+  geositeRules.splice(idx, 1);
+  renderGeositeRules();
+}
+
+async function saveGeositeRules() {
+  const items = document.querySelectorAll('#geositeRulesWrap .tuning-item');
+  const rules = [];
+  items.forEach(item => {
+    const domain = item.querySelector('.geosite-domain');
+    const outbound = item.querySelector('.geosite-outbound');
+    if (domain && outbound && domain.value.trim()) {
+      rules.push({ domain: domain.value.trim(), outboundTag: outbound.value });
+    }
+  });
+  const r = await api('POST', '/api/geosite-rules', { rules });
+  if (r.error) { toast(r.error, 'error'); return; }
+  toast(`Saved ${r.count} GeoSite rules — config rebuilding...`, 'success');
+  loadGeositeRules();
 }
 
 // ─── Country Filter ───
