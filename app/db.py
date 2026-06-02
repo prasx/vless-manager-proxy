@@ -1,6 +1,7 @@
 """Работа с SQLite: инициализация схемы, запросы, настройки."""
 
 import sqlite3
+import time
 from pathlib import Path
 
 from config import DATABASE, ETC_XRAY_CONFIG, DEFAULT_XRAY_CONFIG
@@ -16,15 +17,22 @@ def _get_conn():
 
 
 def db_q(sql, params=()):
-    """Выполняет SQL-запрос с параметрами, коммитит и возвращает результаты."""
-    conn = _get_conn()
-    try:
-        c = conn.cursor()
-        c.execute(sql, params)
-        conn.commit()
-        return c.fetchall()
-    finally:
-        conn.close()
+    """Выполняет SQL-запрос с параметрами, коммитит и возвращает результаты.
+    При SQLITE_BUSY повторяет до 5 раз с экспоненциальной задержкой."""
+    for attempt in range(5):
+        conn = _get_conn()
+        try:
+            c = conn.cursor()
+            c.execute(sql, params)
+            conn.commit()
+            return c.fetchall()
+        except sqlite3.OperationalError as e:
+            if "busy" in str(e).lower() and attempt < 4:
+                time.sleep(0.1 * (2 ** attempt))
+                continue
+            raise
+        finally:
+            conn.close()
 
 
 # Эталонная схема таблиц — все ожидаемые колонки и их типы
@@ -41,6 +49,7 @@ _SCHEMA = {
         ("failed_since", "TIMESTAMP"),
         ("security", "TEXT DEFAULT ''"),
         ("latency_vless", "INTEGER DEFAULT 0"),
+        ("speed_kbps", "INTEGER DEFAULT 0"),
         ("source_id", "INTEGER"),
     ],
     "sources": [
@@ -116,6 +125,10 @@ def init_db():
         "log_keep": "2000",
         "geosite_rules": '[]',
         "geo_enabled": "true",
+        "observatory_probe_interval": "10s",
+        "speed_test_enabled": "true",
+        "speed_test_max": "20",
+        "speed_test_url": "http://proof.ovh.net/files/100Kb.dat",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))

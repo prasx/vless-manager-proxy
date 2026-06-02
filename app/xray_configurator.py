@@ -1,5 +1,6 @@
 """Генерация конфига Xray, горячее применение через API, диагностика, подписка."""
 
+import hashlib
 import json
 import os
 import re
@@ -14,7 +15,7 @@ from .db import db_q, Settings, xray_config_path
 from .utils import add_log, moscow_str
 from config import SUBSCRIBE_FILE
 from .vless import parse_vless, stream_settings, sanitize_flow
-from config import SOCKS_PORT, HTTP_PORT, API_PORT, API_LISTEN, PROBE_INTERVAL
+from config import SOCKS_PORT, HTTP_PORT, API_PORT, API_LISTEN
 
 
 class XrayConfigurator:
@@ -23,6 +24,7 @@ class XrayConfigurator:
     def __init__(self):
         """Инициализирует блокировку для предотвращения конкурентных применений конфига."""
         self._apply_lock = threading.Lock()
+        self._last_config_hash = ""
 
     # ─── Inbounds / Base config helpers ───
 
@@ -101,8 +103,13 @@ class XrayConfigurator:
     _geosite_available = False
 
     @classmethod
+    def _reset_geosite_cache(cls):
+        """Сбрасывает кеш geosite.dat — принудительная перепроверка."""
+        cls._geosite_checked = False
+
+    @classmethod
     def _geosite_available_check(cls):
-        """Проверяет, доступен ли geosite.dat (один раз, с кешированием)."""
+        """Проверяет, доступен ли geosite.dat (с кешированием)."""
         if cls._geosite_checked:
             return cls._geosite_available
         cls._geosite_checked = True
@@ -168,18 +175,25 @@ class XrayConfigurator:
         else:
             codes = []
             country_sql = ""
-        limit_sql = " ORDER BY latency_vless" if max_outbounds > 0 else ""
-        rows = db_q(
-            f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql}{limit_sql}",
-            codes,
-        )
         proxy_obs = []
-        for i, r in enumerate(rows):
-            if max_outbounds > 0 and i >= max_outbounds:
-                break
-            parsed = parse_vless(r["link"])
-            if parsed:
-                proxy_obs.append(self._build_outbound(parsed, f"node{i}"))
+        if max_outbounds > 0:
+            rows = db_q(
+                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} ORDER BY COALESCE(NULLIF(speed_kbps, 0), 999999999) DESC, latency_vless ASC LIMIT ?",
+                codes + [max_outbounds],
+            )
+            for r in rows:
+                parsed = parse_vless(r["link"])
+                if parsed:
+                    proxy_obs.append(self._build_outbound(parsed, f"node{len(proxy_obs)}"))
+        else:
+            rows = db_q(
+                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql}",
+                codes,
+            )
+            for r in rows:
+                parsed = parse_vless(r["link"])
+                if parsed:
+                    proxy_obs.append(self._build_outbound(parsed, f"node{len(proxy_obs)}"))
         outbounds = proxy_obs + [
             {"protocol": "freedom", "tag": "direct"},
             {"protocol": "freedom", "tag": "api"},
@@ -222,7 +236,7 @@ class XrayConfigurator:
             config["observatory"] = {
                 "subjectSelector": ["node"],
                 "probeUrl": Settings.probe_url(),
-                "probeInterval": PROBE_INTERVAL,
+                "probeInterval": Settings.get("observatory_probe_interval", "10s"),
                 "enableConcurrency": True,
             }
             config["routing"]["balancers"] = [
@@ -277,7 +291,7 @@ class XrayConfigurator:
             "observatory": {
                 "subjectSelector": ["node"],
                 "probeUrl": Settings.probe_url(),
-                "probeInterval": PROBE_INTERVAL,
+                "probeInterval": Settings.get("observatory_probe_interval", "10s"),
                 "enableConcurrency": True,
             },
         }
@@ -287,67 +301,51 @@ class XrayConfigurator:
 
     @staticmethod
     def api_ok():
-        """Проверяет, отвечает ли Xray API (StatsService)."""
-        try:
-            s = socket.create_connection((API_LISTEN, API_PORT), timeout=2)
-            s.close()
-        except Exception as e:
-            add_log("DEBUG", f"Xray API check failed (TCP): {e}")
-            return False
+        """Проверяет, отвечает ли Xray API (xray api adi)."""
         try:
             r = subprocess.run(
-                [
-                    Settings.xray_bin(),
-                    "api",
-                    "statsquery",
-                    "-s",
-                    f"{API_LISTEN}:{API_PORT}",
-                ],
+                [Settings.xray_bin(), "api", "adi", "-s", f"{API_LISTEN}:{API_PORT}"],
                 capture_output=True,
                 timeout=5,
             )
-            if r.returncode != 0:
-                add_log("DEBUG", f"Xray statsquery failed (exit={r.returncode}): {r.stderr.decode()[:200]}")
-            return r.returncode == 0
+            if r.returncode == 0:
+                return True
+            add_log("DEBUG", f"Xray API adi returned code {r.returncode}")
+        except subprocess.TimeoutExpired:
+            add_log("DEBUG", "Xray API check timed out (adi)")
         except Exception as e:
-            add_log("DEBUG", f"Xray statsquery exception: {e}")
-            return True  # TCP alive, binary issue — Xray is running
+            add_log("DEBUG", f"Xray API check failed: {e}")
+        return False
 
     @staticmethod
     def list_active_outbounds():
-        """Возвращает список тегов активных outbound через Xray API statsquery."""
+        """Возвращает список тегов активных outbound через xray api adi."""
         try:
             r = subprocess.run(
-                [
-                    Settings.xray_bin(),
-                    "api",
-                    "statsquery",
-                    "-s",
-                    f"{API_LISTEN}:{API_PORT}",
-                ],
+                [Settings.xray_bin(), "api", "adi", "-s", f"{API_LISTEN}:{API_PORT}"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
             if r.returncode != 0:
                 return []
-            tags = set()
-            for line in r.stdout.splitlines():
-                m = re.search(r"outbound>>>([^>]+)>>>traffic>>>([a-z]+)", line)
-                if m:
-                    tags.add(m.group(1))
-            return sorted(tags)
+            data = json.loads(r.stdout)
+            return sorted(
+                ob.get("tag", "")
+                for ob in data.get("outbounds", [])
+                if ob.get("tag")
+            )
         except Exception as e:
             add_log("DEBUG", f"Failed to list active outbounds: {e}")
             return []
 
     @staticmethod
     def remove_all_outbounds():
-        """Удаляет все node* outbound из Xray через API."""
+        """Удаляет все node* outbound из Xray через API. Логирует ошибки."""
         for tag in XrayConfigurator.list_active_outbounds():
             if tag.startswith("node"):
                 try:
-                    subprocess.run(
+                    r = subprocess.run(
                         [
                             Settings.xray_bin(),
                             "api",
@@ -360,18 +358,21 @@ class XrayConfigurator:
                         capture_output=True,
                         timeout=10,
                     )
+                    if r.returncode != 0:
+                        add_log("DEBUG", f"Remove outbound {tag} failed (code {r.returncode}): {r.stderr.decode(errors='replace')[:200]}")
                 except Exception as e:
                     add_log("DEBUG", f"Failed to remove outbound {tag}: {e}")
 
     @staticmethod
     def add_outbound(ob):
-        """Добавляет один outbound в Xray через API (через временный JSON-файл)."""
+        """Добавляет один outbound в Xray через API. Логирует ошибки."""
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
         with tmp:
             json.dump({"outbound": ob}, tmp)
             tmp_path = tmp.name
+        ok = False
         try:
-            subprocess.run(
+            r = subprocess.run(
                 [
                     Settings.xray_bin(),
                     "api",
@@ -383,10 +384,15 @@ class XrayConfigurator:
                 capture_output=True,
                 timeout=10,
             )
+            if r.returncode == 0:
+                ok = True
+            else:
+                add_log("DEBUG", f"Add outbound failed (code {r.returncode}): {r.stderr.decode(errors='replace')[:200]}")
         except Exception as e:
             add_log("DEBUG", f"Failed to add outbound: {e}")
         finally:
             os.unlink(tmp_path)
+        return ok
 
     @staticmethod
     def restart_via_systemd():
@@ -406,6 +412,38 @@ class XrayConfigurator:
         except Exception as e:
             add_log("WARN", f"Could not restart systemd xray: {e}")
         return False
+
+    # ─── Config hash (skip if unchanged) ───
+
+    def _compute_config_hash(self):
+        """Хэш входных данных для конфига — если не изменился, apply_all можно пропустить."""
+        max_active = Settings.max_active_proxies()
+        allowed = Settings.allowed_countries()
+        codes = [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
+        sort_col = "COALESCE(NULLIF(speed_kbps, 0), 999999999) DESC, latency_vless ASC"
+        if codes:
+            placeholders = ",".join("?" * len(codes))
+            rows = db_q(
+                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 AND country IN ({placeholders}) ORDER BY {sort_col} LIMIT ?",
+                codes + [max_active],
+            )
+        else:
+            rows = db_q(
+                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 ORDER BY {sort_col} LIMIT ?",
+                (max_active,),
+            )
+        links = "|".join(r["link"] for r in rows)
+        sig = "|".join([
+            links,
+            str(max_active),
+            allowed,
+            Settings.proxy_listen(),
+            Settings.get("geo_enabled", "true"),
+            Settings.get("geosite_rules", "[]"),
+            Settings.probe_url(),
+            Settings.get("observatory_probe_interval", "10s"),
+        ])
+        return hashlib.sha256(sig.encode()).hexdigest()
 
     # ─── Apply config ───
 
@@ -434,38 +472,50 @@ class XrayConfigurator:
         cfg_path = xray_config_path()
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
 
-        config = self.generate_full_config()
-        proxy_obs = [o for o in config["outbounds"] if o["tag"].startswith("node")]
-        proxy_count = len(proxy_obs)
-        max_active = Settings.max_active_proxies()
+        # Пропускаем, если ничего не изменилось
+        new_hash = self._compute_config_hash()
+        if new_hash == self._last_config_hash:
+            return
+        self._last_config_hash = new_hash
 
-        geosite_rules = self._geosite_rules()
-        if geosite_rules:
-            domains = [r["domain"][0] for r in geosite_rules if "domain" in r]
+        max_active = Settings.max_active_proxies()
+        proxy_count = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0")[0]["c"]
+        has_work = proxy_count > 0
+
+        geosite_rules_list = self._geosite_rules(has_balancer=has_work)
+        if geosite_rules_list:
+            domains = [r["domain"][0] for r in geosite_rules_list if "domain" in r]
             add_log(
                 "INFO",
-                f"GeoSite rules active ({len(geosite_rules)}): {', '.join(domains)}",
+                f"GeoSite rules active ({len(geosite_rules_list)}): {', '.join(domains)}",
             )
         else:
             add_log("DEBUG", "No GeoSite rules configured — all domains via balancer")
+
+        limited = self.generate_full_config(max_outbounds=max_active)
+        limited_obs = [o for o in limited["outbounds"] if o["tag"].startswith("node")]
 
         if self.api_ok():
             base = self.generate_base_config()
             cfg_path.write_text(json.dumps(base, indent=2))
             add_log("INFO", "Base config written to disk")
 
-            limited = self.generate_full_config(max_outbounds=max_active)
-            limited_obs = [
-                o for o in limited["outbounds"] if o["tag"].startswith("node")
-            ]
-
             self.remove_all_outbounds()
+            added = 0
             for ob in limited_obs:
-                self.add_outbound(ob)
-            add_log(
-                "INFO",
-                f"Applied {len(limited_obs)} proxies via API (total working: {proxy_count})",
-            )
+                if self.add_outbound(ob):
+                    added += 1
+            if added > 0:
+                add_log(
+                    "INFO",
+                    f"Applied {added}/{len(limited_obs)} proxies via API (total working: {proxy_count})",
+                )
+            else:
+                add_log(
+                    "WARN",
+                    f"All {len(limited_obs)} outbound adds failed via API — falling back to disk write + restart",
+                )
+                self._write_and_restart(cfg_path, max_active)
         else:
             self._write_and_restart(cfg_path, max_active)
         self._update_subscribe_cache()
@@ -521,28 +571,42 @@ class XrayConfigurator:
                 placeholders = ""
                 country_sql = ""
                 codes = []
+            sort_col = "COALESCE(NULLIF(speed_kbps, 0), 999999999) DESC, latency_vless ASC"
             rows = db_q(
-                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} ORDER BY latency_vless LIMIT ?",
+                f"SELECT link, country, speed_kbps FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} ORDER BY {sort_col} LIMIT ?",
                 codes + [max_active],
             )
             total_all = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
             total_working = db_q(
                 "SELECT COUNT(*) c FROM proxies WHERE status='working'"
             )[0]["c"]
+            avg_speed = db_q(
+                "SELECT CAST(AVG(speed_kbps) AS INTEGER) a FROM proxies WHERE status='working' AND speed_kbps > 0"
+            )[0]["a"]
             probe_url = Settings.probe_url()
             now = moscow_str()
             lines = [
-                "#profile-title: VLESS Manager",
-                "#profile-update-interval: 1",
+                "# profile-title: VLESS Manager",
+                "# profile-update-interval: 1",
                 f"# Updated: {now}",
                 f"# Configs: {len(rows)} / {total_working} working / {total_all} total",
             ]
+            if avg_speed:
+                speed_str = f"{avg_speed // 1000}.{avg_speed % 1000 // 100} Mbps" if avg_speed >= 1000 else f"{avg_speed} Kbps"
+                lines.append(f"# Avg speed: {speed_str}")
             if allowed:
                 lines.append(f"# Filter: {allowed}")
             lines.append(f"# Probe: {probe_url}")
             lines.append("")
             for r in rows:
-                lines.append(r["link"])
+                link = r["link"]
+                if "#" not in link:
+                    host_part = link.split("@")[1].split("?")[0].split(":")[0] if "@" in link else ""
+                    name = host_part[:20]
+                    if r["country"]:
+                        name = f"{r['country']}_{name}"
+                    link = f"{link}#{name}"
+                lines.append(link)
             SUBSCRIBE_FILE.write_text("\n".join(lines), encoding="utf-8")
             add_log("DEBUG", f"Subscribe cache updated: {len(rows)} proxies")
         except Exception as e:

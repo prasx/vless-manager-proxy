@@ -2,10 +2,42 @@
 
 import sqlite3
 import urllib.request
+from pathlib import Path
 
 from .db import db_q, Settings, _get_conn
 from .utils import add_log, now_utc
 from .vless import parse_vless
+
+# Кеш ETag/Last-Modified для источников — файл <cache_dir>/etag_<hash>.txt
+_IMPORT_CACHE = {}
+
+
+def _etag_path():
+    from config import DATABASE
+    d = DATABASE.parent / ".import_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _read_etag(url):
+    h = str(hash(url))
+    p = _etag_path() / f"etag_{h}"
+    if p.exists():
+        try:
+            return p.read_text().strip()
+        except Exception:
+            pass
+    return ""
+
+
+def _write_etag(url, val):
+    if not val:
+        return
+    try:
+        h = str(hash(url))
+        (_etag_path() / f"etag_{h}").write_text(val)
+    except Exception:
+        pass
 
 
 def import_from_url(url, source_id=None):
@@ -14,11 +46,26 @@ def import_from_url(url, source_id=None):
     Учитывает флаг safe_only_import (пропускает security=none).
     Принимает source_id для привязки импортированных прокси к источнику.
     Удаляет старые прокси источника, которых больше нет в подписке.
+    Использует ETag/If-Modified-Since для пропуска неизменённых источников.
     Возвращает количество добавленных прокси.
     """
+    req = urllib.request.Request(url)
+    etag = _read_etag(url)
+    if etag:
+        req.add_header("If-None-Match", etag)
     try:
-        with urllib.request.urlopen(url, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30) as r:
             content = r.read().decode("utf-8", errors="replace")
+            # Сохраняем ETag
+            new_etag = r.headers.get("ETag") or ""
+            if new_etag:
+                _write_etag(url, new_etag)
+    except urllib.error.HTTPError as e:
+        if e.code == 304:
+            add_log("DEBUG", f"Source unchanged (304): {url[:60]}")
+            return 0
+        add_log("ERROR", f"Import failed HTTP {e.code} for {url[:80]}")
+        return 0
     except Exception as e:
         add_log("ERROR", f"Import failed for {url[:80]}: {e}")
         return 0

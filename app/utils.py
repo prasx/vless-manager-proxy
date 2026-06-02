@@ -108,16 +108,24 @@ def enrich_country(pid, host):
     return False
 
 
-def enrich_all_unknown_countries():
-    """Заполняет страну для всех прокси, у которых она отсутствует или невалидна."""
-    from .db import db_q
+_enrich_lock = threading.Lock()
 
-    rows = db_q(
-        "SELECT id, host FROM proxies WHERE country IS NULL OR country = '' OR length(country) > 2"
-    )
-    enriched = 0
-    for r in rows:
-        if enrich_country(r["id"], r["host"]):
-            enriched += 1
-    if enriched:
-        add_log("INFO", f"Enriched country for {enriched} proxies")
+def enrich_all_unknown_countries():
+    """Заполняет страну для всех прокси, у которых она отсутствует или невалидна.
+    Предотвращает конкурентный запуск через threading.Lock()."""
+    if not _enrich_lock.acquire(blocking=False):
+        return
+    try:
+        from .db import db_q
+
+        rows = db_q(
+            "SELECT id, host FROM proxies WHERE country IS NULL OR country = '' OR length(country) > 2"
+        )
+        enriched = 0
+        for r in rows:
+            if enrich_country(r["id"], r["host"]):
+                enriched += 1
+        if enriched:
+            add_log("INFO", f"Enriched country for {enriched} proxies")
+    finally:
+        _enrich_lock.release()

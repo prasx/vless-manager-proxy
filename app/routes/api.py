@@ -4,6 +4,7 @@ import re
 import sqlite3
 import subprocess
 import threading
+import time
 
 from flask import Blueprint, request, jsonify
 
@@ -90,7 +91,7 @@ def api_proxies():
     if limit is not None:
         limit_sql = f" LIMIT {limit} OFFSET {offset}"
     rows = db_q(
-        f"SELECT id, host, port, country, status, latency, latency_vless, failed_since, security, link FROM proxies {clause} ORDER BY status, latency{limit_sql}"
+        f"SELECT id, host, port, country, status, latency, latency_vless, speed_kbps, failed_since, security, link FROM proxies {clause} ORDER BY status, latency{limit_sql}"
     )
     if limit is not None:
         return jsonify(proxies=[dict(r) for r in rows], total=total)
@@ -468,10 +469,17 @@ def api_xray_restart():
 # ─── Подписка / Файлы ───
 
 
+_last_sub_refresh = 0.0
+
 @api_bp.route("/subscribe.txt")
 def api_subscribe():
-    """GET /api/subscribe.txt — кешированный subscription file для клиентов."""
-    if not SUBSCRIBE_FILE.exists():
+    """GET /api/subscribe.txt — кешированный subscription file для клиентов.
+    Пересобирает не чаще раза в 60 секунд.
+    """
+    global _last_sub_refresh
+    now = time.time()
+    if now - _last_sub_refresh > 60:
+        _last_sub_refresh = now
         xray_configurator._update_subscribe_cache()
     if SUBSCRIBE_FILE.exists():
         return (

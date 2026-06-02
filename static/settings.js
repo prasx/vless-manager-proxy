@@ -28,6 +28,9 @@ async function loadSettings() {
     $('vlessPerProxyTimeout').value = s.vless_per_proxy_timeout || '5';
     $('logTrimEvery').value = s.log_trim_every || '500';
     $('logKeep').value = s.log_keep || '2000';
+    $('speedTestEnabled').checked = s.speed_test_enabled !== 'false';
+    $('speedTestMax').value = s.speed_test_max || '20';
+    $('speedTestUrl').value = s.speed_test_url || 'http://proof.ovh.net/files/100Kb.dat';
   }
   renderXrayStatus(status);
   loadCountries();
@@ -50,6 +53,9 @@ async function saveSettings() {
     vless_per_proxy_timeout: $('vlessPerProxyTimeout').value.trim() || '5',
     log_trim_every: $('logTrimEvery').value.trim() || '500',
     log_keep: $('logKeep').value.trim() || '2000',
+    speed_test_enabled: $('speedTestEnabled').checked ? 'true' : 'false',
+    speed_test_max: $('speedTestMax').value.trim() || '20',
+    speed_test_url: $('speedTestUrl').value.trim() || 'http://proof.ovh.net/files/100Kb.dat',
   };
   const r = await api('POST', '/api/settings', data);
   $('xrayBin').disabled = false;

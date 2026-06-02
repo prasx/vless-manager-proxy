@@ -16,6 +16,12 @@ function api(method, url, body) {
   return fetch(url, opts).then(r => r.json());
 }
 
+function formatSpeed(kbps) {
+  if (!kbps) return '<span class="dim">—</span>';
+  if (kbps >= 1000) return `${(kbps / 1000).toFixed(1)} Mbps`;
+  return `${kbps} Kbps`;
+}
+
 function makeProxiesUrl(limit, offset) {
   let url = '/api/proxies?filter=' + currentFilter;
   if (currentSource) {
@@ -228,12 +234,13 @@ function renderDesktop(proxies) {
   const tb = $('#tbodyDesktop');
   tb.innerHTML = '';
   if (!proxies.length) {
-    tb.innerHTML = '<tr><td colspan="8" class="empty">// no proxies</td></tr>';
+    tb.innerHTML = '<tr><td colspan="9" class="empty">// no proxies</td></tr>';
     return;
   }
   for (const p of proxies) {
     const tr = document.createElement('tr');
     const badgeCls = statusBadge(p.status, p.failed_since);
+    const speedHtml = p.speed_kbps ? formatSpeed(p.speed_kbps) : '<span class="dim">—</span>';
     const vlessClass = p.latency_vless && p.latency_vless < 300 ? 'lat-good' : p.latency_vless >= 300 ? 'lat-bad' : 'dim';
     const vlessHtml = p.latency_vless ? `<span class="${vlessClass}">${p.latency_vless}ms</span>` : '<span class="dim">—</span>';
     tr.innerHTML = `
@@ -243,6 +250,7 @@ function renderDesktop(proxies) {
       <td>${p.port}</td>
       <td>${p.country || '—'}${securityBadge(p.security)}</td>
       <td><span class="badge ${badgeCls}">${p.status}</span></td>
+      <td class="speed-cell">${speedHtml}</td>
       <td class="lat-cell">${vlessHtml}</td>
       <td class="actions-cell">
         <button class="btn btn-sm" onclick="copyLink(${p.id})">copy</button>
@@ -263,6 +271,7 @@ function renderMobile(proxies) {
   }
   for (const p of proxies) {
     const badgeCls = statusBadge(p.status, p.failed_since);
+    const speedHtml = p.speed_kbps ? formatSpeed(p.speed_kbps) : '—';
     const vlessClass = p.latency_vless && p.latency_vless < 300 ? 'lat-good' : p.latency_vless >= 300 ? 'lat-bad' : 'dim';
     const card = document.createElement('div');
     card.className = 'mobile-card';
@@ -280,6 +289,7 @@ function renderMobile(proxies) {
       <div class="mc-status">
         <span class="badge ${badgeCls}">${p.status}</span>
         <span class="${vlessClass}">VLESS: ${p.latency_vless ? p.latency_vless + 'ms' : '—'}</span>
+        <span>Speed: ${speedHtml}</span>
       </div>
     `;
     list.appendChild(card);
@@ -365,7 +375,7 @@ async function pollTestProgress() {
     fill.style.width = (p.done / p.total * 100) + '%';
     fill.style.background = 'var(--green)';
     fill.style.height = '100%';
-    label.textContent = `VLESS (${p.label}): ${p.done}/${p.total} (${p.ok} ok)`;
+    label.textContent = `${p.label}: ${p.done}/${p.total} (${p.ok} ok)`;
     btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = true; });
     if (Date.now() - _lastLoadDuringTest > 5000) {
       _lastLoadDuringTest = Date.now();
@@ -379,7 +389,7 @@ async function pollTestProgress() {
     fill.style.background = 'var(--text-muted)';
     fill.style.height = '2px';
     if (p.last_completed) {
-      label.textContent = `Last VLESS test: ${p.last_ok}/${p.last_total} ok — ${p.last_completed}`;
+      label.textContent = `Last ${p.last_label}: ${p.last_ok}/${p.last_total} ok — ${p.last_completed}`;
     }
     btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = false; });
     if (_wasRunning) {

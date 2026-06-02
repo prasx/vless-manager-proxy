@@ -86,6 +86,7 @@
 }
 .desktop-table td.actions-cell { white-space:nowrap; text-align:right; }
 .desktop-table td.lat-cell { white-space:nowrap; }
+.desktop-table td.speed-cell { white-space:nowrap; font-size:0.78rem; }
 .dim { color:var(--text-muted); }
 .mobile-list { display:none; }
 
