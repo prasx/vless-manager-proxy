@@ -301,40 +301,37 @@ class XrayConfigurator:
 
     @staticmethod
     def api_ok():
-        """Проверяет, отвечает ли Xray API (xray api adi)."""
+        """Проверяет, отвечает ли Xray API (xray api statsquery)."""
         try:
             r = subprocess.run(
-                [Settings.xray_bin(), "api", "adi", "-s", f"{API_LISTEN}:{API_PORT}"],
+                [Settings.xray_bin(), "api", "statsquery", "-s", f"{API_LISTEN}:{API_PORT}"],
                 capture_output=True,
                 timeout=5,
             )
             if r.returncode == 0:
                 return True
-            add_log("DEBUG", f"Xray API adi returned code {r.returncode}")
-        except subprocess.TimeoutExpired:
-            add_log("DEBUG", "Xray API check timed out (adi)")
-        except Exception as e:
-            add_log("DEBUG", f"Xray API check failed: {e}")
+        except Exception:
+            pass
         return False
 
     @staticmethod
     def list_active_outbounds():
-        """Возвращает список тегов активных outbound через xray api adi."""
+        """Возвращает список тегов активных outbound через xray api statsquery."""
         try:
             r = subprocess.run(
-                [Settings.xray_bin(), "api", "adi", "-s", f"{API_LISTEN}:{API_PORT}"],
+                [Settings.xray_bin(), "api", "statsquery", "-s", f"{API_LISTEN}:{API_PORT}"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
             if r.returncode != 0:
                 return []
-            data = json.loads(r.stdout)
-            return sorted(
-                ob.get("tag", "")
-                for ob in data.get("outbounds", [])
-                if ob.get("tag")
-            )
+            tags = set()
+            for line in r.stdout.splitlines():
+                m = re.search(r"outbound>>>([^>]+)>>>traffic>>>([a-z]+)", line)
+                if m:
+                    tags.add(m.group(1))
+            return sorted(tags)
         except Exception as e:
             add_log("DEBUG", f"Failed to list active outbounds: {e}")
             return []
