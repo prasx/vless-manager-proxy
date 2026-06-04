@@ -70,7 +70,7 @@ class ProxyManager:
         req_start = time.time()
         try:
             resp = opener.open(probe_url, timeout=timeout)
-            ok = resp.status == 204
+            ok = resp.status < 400
             lat = int((time.time() - req_start) * 1000)
             return ok, lat
         except Exception as e:
@@ -201,8 +201,24 @@ class ProxyManager:
 
     @staticmethod
     def _measure_kbps(http_port, timeout=15):
-        """Скачивает speed-test файл через HTTP-прокси, возвращает kbps."""
-        url = Settings.get("speed_test_url", "http://proof.ovh.net/files/100Kb.dat")
+        """Скачивает speed-test файл через HTTP-прокси, возвращает kbps.
+        Пробует несколько URL по порядку, пока один не сработает."""
+        urls = [
+            Settings.get("speed_test_url", ""),
+            "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png",
+            "https://httpbin.org/bytes/102400",
+            "http://speedtest.selectel.ru/1MB",
+        ]
+        urls = [u for u in urls if u]
+        for url in urls:
+            kbps = ProxyManager._measure_url_kbps(http_port, url, timeout)
+            if kbps:
+                return kbps
+        return 0
+
+    @staticmethod
+    def _measure_url_kbps(http_port, url, timeout=15):
+        """Скачивает один URL через HTTP-прокси, возвращает kbps."""
         proxy_url = f"http://127.0.0.1:{http_port}"
         proxy_handler = urllib.request.ProxyHandler(
             {"http": proxy_url, "https": proxy_url}
@@ -226,43 +242,51 @@ class ProxyManager:
             if elapsed > 0 and total > 0:
                 return int((total * 8) / (elapsed * 1000))
         except Exception as e:
-            add_log("DEBUG", f"Speed measure failed: {e}")
+            add_log("DEBUG", f"Speed measure {url}: {e}")
         return 0
 
     def _run_speed_test_for_top(self):
-        """После VLESS-теста замеряет скорость для top-N быстрых прокси."""
+        """После VLESS-теста замеряет скорость для всех рабочих прокси (параллельно).
+        Количество определяется настройкой speed_test_max."""
         if Settings.get("speed_test_enabled", "true") != "true":
             return
         max_count = int(Settings.get("speed_test_max", "20"))
         rows = db_q(
-            "SELECT id, link FROM proxies WHERE status='working' AND latency_vless > 0 ORDER BY latency_vless LIMIT ?",
+            "SELECT id, link FROM proxies WHERE status='working' AND latency_vless > 0 LIMIT ?",
             (max_count,),
         )
         if not rows:
             return
         add_log("INFO", f"Speed test: {len(rows)} proxies")
-        self.progress.update(
-            running=True, total=len(rows), done=0, ok=0, label="Speed test"
-        )
+        self.progress.update(running=True, total=len(rows), done=0, ok=0, label="Speed test")
         changed = False
-        for r in rows:
-            kbps = self._test_speed_single(r["link"])
-            db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (kbps, r["id"]))
-            if kbps:
-                changed = True
-            with self._progress_lock:
-                self.progress["done"] += 1
+        timeout = int(Settings.get("vless_per_proxy_timeout", "5")) * 3
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {}
+            for r in rows:
+                future = pool.submit(self._test_speed_single, r["link"], timeout)
+                futures[future] = r["id"]
+            for future in as_completed(futures):
+                pid = futures[future]
+                try:
+                    kbps = future.result()
+                except Exception as e:
+                    add_log("DEBUG", f"Speed test #{pid} exception: {e}")
+                    kbps = 0
+                db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (kbps, pid))
                 if kbps:
-                    self.progress["ok"] += 1
-            add_log("INFO", f"Speed #{r['id']}: {kbps} kbps")
+                    changed = True
+                with self._progress_lock:
+                    self.progress["done"] += 1
+                    if kbps:
+                        self.progress["ok"] += 1
+                add_log("INFO", f"Speed #{pid}: {kbps} kbps")
         if changed:
             from .xray_configurator import xray_configurator
-
             xray_configurator.apply_all(blocking=True)
             add_log("INFO", "Config reapplied after speed test")
 
     def _test_speed_single(self, link, timeout=15):
-        """Запускает Xray для одного прокси, меряет скорость, возвращает kbps."""
         parsed = parse_vless(link)
         if not parsed:
             return 0
@@ -348,17 +372,19 @@ class ProxyManager:
             from .utils import enrich_all_unknown_countries
 
             enrich_all_unknown_countries()
-            from .xray_configurator import xray_configurator
 
-            xray_configurator.apply_all(blocking=True)
             add_log(
                 "INFO",
                 f"VLESS {label}: {vless_ok}/{vless_total} ok — {moscow_str()}",
             )
 
-            # Speed test top-N после полного цикла
+            # Speed test всех рабочих прокси после VLESS
             if label in ("all", "batch-test"):
                 self._run_speed_test_for_top()
+
+            # Конфиг собирается один раз — после speed test, сортировка по скорости+пингу
+            from .xray_configurator import xray_configurator
+            xray_configurator.apply_all(blocking=True)
         finally:
             if self.progress["label"] == "Speed test":
                 # Показываем в last итог: VLESS + Speed

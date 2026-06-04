@@ -301,18 +301,20 @@ class XrayConfigurator:
 
     @staticmethod
     def api_ok():
-        """Проверяет, отвечает ли Xray API (xray api statsquery)."""
+        """Проверяет, отвечает ли Xray API (сначала TCP, потом gRPC)."""
+        try:
+            s = socket.create_connection((API_LISTEN, API_PORT), timeout=2)
+            s.close()
+        except Exception:
+            return False
         try:
             r = subprocess.run(
                 [Settings.xray_bin(), "api", "statsquery", "-s", f"{API_LISTEN}:{API_PORT}"],
-                capture_output=True,
-                timeout=5,
+                capture_output=True, timeout=5,
             )
-            if r.returncode == 0:
-                return True
+            return r.returncode == 0
         except Exception:
-            pass
-        return False
+            return False
 
     @staticmethod
     def list_active_outbounds():
@@ -536,20 +538,37 @@ class XrayConfigurator:
             return
         add_log("INFO", "Restarting Xray to enable API services...")
         self.restart_via_systemd()
-        # Ждём и проверяем, взлетел ли Xray
+        # Ждём и проверяем, взлетел ли Xray (с повторными попытками)
         import time
-        time.sleep(5)
-        if not self.api_ok() and rule_count > 0 and attempt < 2:
+        for wait in (5, 10, 15):
+            time.sleep(wait)
+            if self.api_ok():
+                return
+        if rule_count > 0 and attempt < 2:
             add_log(
                 "WARN",
                 "Xray failed to start with GeoSite rules — retrying without them",
             )
             self._write_and_restart(cfg_path, max_active, attempt=2, skip_geosite=True)
-        elif not self.api_ok():
-            add_log(
-                "ERROR",
-                "Xray still not running after restart — check journalctl -u xray",
+        else:
+            self._log_systemd_xray_error()
+
+    @staticmethod
+    def _log_systemd_xray_error():
+        """Логирует последние строки из journalctl для xray (только ошибки/предупреждения/старт)."""
+        add_log("ERROR", "Xray still not running after restart — check journalctl -u xray")
+        try:
+            r = subprocess.run(
+                ["journalctl", "-u", "xray", "--no-pager", "-n", "20", "-p", "err"],
+                capture_output=True, text=True, timeout=5,
             )
+            if r.stdout:
+                for line in r.stdout.strip().splitlines()[-10:]:
+                    line = line.strip()
+                    if line:
+                        add_log("ERROR", f"systemd: {line}")
+        except Exception as e:
+            add_log("DEBUG", f"Failed to capture journalctl: {e}")
 
     # ─── Subscribe cache ───
 

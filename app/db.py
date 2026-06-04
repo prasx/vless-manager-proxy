@@ -125,10 +125,10 @@ def init_db():
         "log_keep": "2000",
         "geosite_rules": '[]',
         "geo_enabled": "true",
-        "observatory_probe_interval": "10s",
+        "observatory_probe_interval": "120s",
         "speed_test_enabled": "true",
         "speed_test_max": "20",
-        "speed_test_url": "http://proof.ovh.net/files/100Kb.dat",
+        "speed_test_url": "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))

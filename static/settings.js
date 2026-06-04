@@ -28,6 +28,7 @@ async function loadSettings() {
     $('vlessPerProxyTimeout').value = s.vless_per_proxy_timeout || '5';
     $('logTrimEvery').value = s.log_trim_every || '500';
     $('logKeep').value = s.log_keep || '2000';
+    $('observatoryProbeInterval').value = s.observatory_probe_interval || '120s';
     $('speedTestEnabled').checked = s.speed_test_enabled !== 'false';
     $('speedTestMax').value = s.speed_test_max || '20';
     $('speedTestUrl').value = s.speed_test_url || 'http://proof.ovh.net/files/100Kb.dat';
@@ -56,6 +57,7 @@ async function saveSettings() {
     speed_test_enabled: $('speedTestEnabled').checked ? 'true' : 'false',
     speed_test_max: $('speedTestMax').value.trim() || '20',
     speed_test_url: $('speedTestUrl').value.trim() || 'http://proof.ovh.net/files/100Kb.dat',
+    observatory_probe_interval: $('observatoryProbeInterval').value.trim() || '120s',
   };
   const r = await api('POST', '/api/settings', data);
   $('xrayBin').disabled = false;
@@ -78,6 +80,7 @@ function resetTuning() {
   $('checkInterval').value = '600';
   $('vlessInterval').value = '10800';
   $('vlessPerProxyTimeout').value = '5';
+  $('observatoryProbeInterval').value = '120s';
   $('logTrimEvery').value = '500';
   $('logKeep').value = '2000';
   toast('Tuning values reset to defaults — click Save to apply');
