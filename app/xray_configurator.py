@@ -94,7 +94,7 @@ class XrayConfigurator:
             },
             "streamSettings": stream_settings(parsed),
         }
-        flow =         sanitize_flow(parsed.get("flow"))
+        flow = sanitize_flow(parsed.get("flow"))
         if flow:
             ob["settings"]["vnext"][0]["users"][0]["flow"] = flow
         return ob
@@ -134,7 +134,10 @@ class XrayConfigurator:
                 cls._geosite_available = True
                 return True
         cls._geosite_available = False
-        add_log("WARN", "geosite.dat not found — GeoSite rules disabled. Set XRAY_LOCATION_ASSET or verify Xray installation")
+        add_log(
+            "WARN",
+            "geosite.dat not found — GeoSite rules disabled. Set XRAY_LOCATION_ASSET or verify Xray installation",
+        )
         return False
 
     @classmethod
@@ -151,11 +154,17 @@ class XrayConfigurator:
                 continue
             if tag == "proxy":
                 if has_balancer:
-                    rules.append({"type": "field", "domain": [domain], "balancerTag": "auto"})
+                    rules.append(
+                        {"type": "field", "domain": [domain], "balancerTag": "auto"}
+                    )
                 else:
-                    rules.append({"type": "field", "domain": [domain], "outboundTag": "direct"})
+                    rules.append(
+                        {"type": "field", "domain": [domain], "outboundTag": "direct"}
+                    )
             elif tag == "direct":
-                rules.append({"type": "field", "domain": [domain], "outboundTag": "direct"})
+                rules.append(
+                    {"type": "field", "domain": [domain], "outboundTag": "direct"}
+                )
         return rules
 
     # ─── Config generation ───
@@ -184,7 +193,9 @@ class XrayConfigurator:
             for r in rows:
                 parsed = parse_vless(r["link"])
                 if parsed:
-                    proxy_obs.append(self._build_outbound(parsed, f"node{len(proxy_obs)}"))
+                    proxy_obs.append(
+                        self._build_outbound(parsed, f"node{len(proxy_obs)}")
+                    )
         else:
             rows = db_q(
                 f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql}",
@@ -193,7 +204,9 @@ class XrayConfigurator:
             for r in rows:
                 parsed = parse_vless(r["link"])
                 if parsed:
-                    proxy_obs.append(self._build_outbound(parsed, f"node{len(proxy_obs)}"))
+                    proxy_obs.append(
+                        self._build_outbound(parsed, f"node{len(proxy_obs)}")
+                    )
         outbounds = proxy_obs + [
             {"protocol": "freedom", "tag": "direct"},
             {"protocol": "freedom", "tag": "api"},
@@ -203,10 +216,12 @@ class XrayConfigurator:
             {"inboundTag": ["api"], "outboundTag": "api"},
         ]
         if Settings.get("geo_enabled", "true") == "true":
-            routing_rules.extend([
-                {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
-                {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
-            ])
+            routing_rules.extend(
+                [
+                    {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
+                    {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
+                ]
+            )
             if not skip_geosite:
                 routing_rules.extend(self._geosite_rules(has_balancer=bool(proxy_obs)))
         if proxy_obs:
@@ -246,6 +261,13 @@ class XrayConfigurator:
 
     def generate_base_config(self):
         """Минимальный конфиг для диска — прокси управляются только через API."""
+        has_geo = Settings.get("geo_enabled", "true") == "true"
+        geo_rules = []
+        if has_geo:
+            geo_rules = [
+                {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
+                {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
+            ] + self._geosite_rules()
         base = {
             "api": {
                 "tag": "api",
@@ -275,24 +297,11 @@ class XrayConfigurator:
                         "outboundTag": "direct",
                     },
                     {"inboundTag": ["api"], "outboundTag": "api"},
-                    {"type": "field", "network": "tcp,udp", "balancerTag": "auto"},
-                ] + ([] if Settings.get("geo_enabled", "true") != "true" else [
-                    {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
-                    {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
-                ] + self._geosite_rules()),
-                "balancers": [
-                    {
-                        "tag": "auto",
-                        "selector": ["node"],
-                        "strategy": {"type": "leastPing"},
-                    }
+                ]
+                + geo_rules
+                + [
+                    {"type": "field", "network": "tcp,udp", "outboundTag": "direct"},
                 ],
-            },
-            "observatory": {
-                "subjectSelector": ["node"],
-                "probeUrl": Settings.probe_url(),
-                "probeInterval": Settings.get("observatory_probe_interval", "10s"),
-                "enableConcurrency": True,
             },
         }
         return self._inject_api(base)
@@ -309,8 +318,15 @@ class XrayConfigurator:
             return False
         try:
             r = subprocess.run(
-                [Settings.xray_bin(), "api", "statsquery", "-s", f"{API_LISTEN}:{API_PORT}"],
-                capture_output=True, timeout=5,
+                [
+                    Settings.xray_bin(),
+                    "api",
+                    "statsquery",
+                    "-s",
+                    f"{API_LISTEN}:{API_PORT}",
+                ],
+                capture_output=True,
+                timeout=5,
             )
             return r.returncode == 0
         except Exception:
@@ -321,7 +337,13 @@ class XrayConfigurator:
         """Возвращает список тегов активных outbound через xray api statsquery."""
         try:
             r = subprocess.run(
-                [Settings.xray_bin(), "api", "statsquery", "-s", f"{API_LISTEN}:{API_PORT}"],
+                [
+                    Settings.xray_bin(),
+                    "api",
+                    "statsquery",
+                    "-s",
+                    f"{API_LISTEN}:{API_PORT}",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -358,7 +380,10 @@ class XrayConfigurator:
                         timeout=10,
                     )
                     if r.returncode != 0:
-                        add_log("DEBUG", f"Remove outbound {tag} failed (code {r.returncode}): {r.stderr.decode(errors='replace')[:200]}")
+                        add_log(
+                            "DEBUG",
+                            f"Remove outbound {tag} failed (code {r.returncode}): {r.stderr.decode(errors='replace')[:200]}",
+                        )
                 except Exception as e:
                     add_log("DEBUG", f"Failed to remove outbound {tag}: {e}")
 
@@ -386,7 +411,10 @@ class XrayConfigurator:
             if r.returncode == 0:
                 ok = True
             else:
-                add_log("DEBUG", f"Add outbound failed (code {r.returncode}): {r.stderr.decode(errors='replace')[:200]}")
+                add_log(
+                    "DEBUG",
+                    f"Add outbound failed (code {r.returncode}): {r.stderr.decode(errors='replace')[:200]}",
+                )
         except Exception as e:
             add_log("DEBUG", f"Failed to add outbound: {e}")
         finally:
@@ -432,22 +460,24 @@ class XrayConfigurator:
                 (max_active,),
             )
         links = "|".join(r["link"] for r in rows)
-        sig = "|".join([
-            links,
-            str(max_active),
-            allowed,
-            Settings.proxy_listen(),
-            Settings.get("geo_enabled", "true"),
-            Settings.get("geosite_rules", "[]"),
-            Settings.probe_url(),
-            Settings.get("observatory_probe_interval", "10s"),
-        ])
+        sig = "|".join(
+            [
+                links,
+                str(max_active),
+                allowed,
+                Settings.proxy_listen(),
+                Settings.get("geo_enabled", "true"),
+                Settings.get("geosite_rules", "[]"),
+                Settings.probe_url(),
+                Settings.get("observatory_probe_interval", "10s"),
+            ]
+        )
         return hashlib.sha256(sig.encode()).hexdigest()
 
     # ─── Apply config ───
 
     def apply_all(self, blocking=False):
-        """Пишет минимальный конфиг на диск, прокси добавляет через Xray API.
+        """Пишет полный конфиг на диск, прокси добавляет через Xray API.
 
         blocking=True — ждать освобождения _apply_lock (для финального apply после тестов).
         blocking=False — пропустить, если другой apply уже выполняется.
@@ -467,18 +497,33 @@ class XrayConfigurator:
         except Exception as e:
             add_log("ERROR", f"Config rebuild failed: {e}")
 
+    def _active_node_count(self):
+        """Сколько node* outbound сейчас в running Xray (0, если API недоступен)."""
+        if not self.api_ok():
+            return 0
+        return sum(1 for t in self.list_active_outbounds() if t.startswith("node"))
+
     def _apply_all_impl_safe(self):
         cfg_path = xray_config_path()
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Пропускаем, если ничего не изменилось
+        max_active = Settings.max_active_proxies()
+        proxy_count = db_q(
+            "SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0"
+        )[0]["c"]
+        expected_nodes = min(proxy_count, max_active) if max_active > 0 else proxy_count
+
         new_hash = self._compute_config_hash()
         if new_hash == self._last_config_hash:
-            return
+            active_nodes = self._active_node_count()
+            if active_nodes >= expected_nodes:
+                return
+            add_log(
+                "WARN",
+                f"Hash unchanged but only {active_nodes}/{expected_nodes} outbounds running — reapplying",
+            )
         self._last_config_hash = new_hash
 
-        max_active = Settings.max_active_proxies()
-        proxy_count = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0")[0]["c"]
         has_work = proxy_count > 0
 
         geosite_rules_list = self._geosite_rules(has_balancer=has_work)
@@ -491,20 +536,19 @@ class XrayConfigurator:
         else:
             add_log("DEBUG", "No GeoSite rules configured — all domains via balancer")
 
-        limited = self.generate_full_config(max_outbounds=max_active)
-        limited_obs = [o for o in limited["outbounds"] if o["tag"].startswith("node")]
+        full = self.generate_full_config(max_outbounds=max_active)
+        limited_obs = [o for o in full["outbounds"] if o["tag"].startswith("node")]
 
         if self.api_ok():
-            base = self.generate_base_config()
-            cfg_path.write_text(json.dumps(base, indent=2))
-            add_log("INFO", "Base config written to disk")
+            cfg_path.write_text(json.dumps(full, indent=2))
+            add_log("INFO", "Full config written to disk")
 
             self.remove_all_outbounds()
             added = 0
             for ob in limited_obs:
                 if self.add_outbound(ob):
                     added += 1
-            if added > 0:
+            if added == len(limited_obs):
                 add_log(
                     "INFO",
                     f"Applied {added}/{len(limited_obs)} proxies via API (total working: {proxy_count})",
@@ -512,7 +556,7 @@ class XrayConfigurator:
             else:
                 add_log(
                     "WARN",
-                    f"All {len(limited_obs)} outbound adds failed via API — falling back to disk write + restart",
+                    f"Only {added}/{len(limited_obs)} outbound adds succeeded via API — restarting Xray",
                 )
                 self._write_and_restart(cfg_path, max_active)
         else:
@@ -521,12 +565,12 @@ class XrayConfigurator:
 
     def _write_and_restart(self, cfg_path, max_active, attempt=1, skip_geosite=False):
         """Пишет конфиг на диск и перезапускает Xray. При неудаче пробует без geosite."""
-        limited = self.generate_full_config(max_outbounds=max_active, skip_geosite=skip_geosite)
+        limited = self.generate_full_config(
+            max_outbounds=max_active, skip_geosite=skip_geosite
+        )
         rule_count = len(self._geosite_rules())
         cfg_path.write_text(json.dumps(limited, indent=2))
-        applied = sum(
-            1 for o in limited["outbounds"] if o["tag"].startswith("node")
-        )
+        applied = sum(1 for o in limited["outbounds"] if o["tag"].startswith("node"))
         all_working = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working'")[0][
             "c"
         ]
@@ -540,6 +584,7 @@ class XrayConfigurator:
         self.restart_via_systemd()
         # Ждём и проверяем, взлетел ли Xray (с повторными попытками)
         import time
+
         for wait in (5, 10, 15):
             time.sleep(wait)
             if self.api_ok():
@@ -556,11 +601,15 @@ class XrayConfigurator:
     @staticmethod
     def _log_systemd_xray_error():
         """Логирует последние строки из journalctl для xray (только ошибки/предупреждения/старт)."""
-        add_log("ERROR", "Xray still not running after restart — check journalctl -u xray")
+        add_log(
+            "ERROR", "Xray still not running after restart — check journalctl -u xray"
+        )
         try:
             r = subprocess.run(
                 ["journalctl", "-u", "xray", "--no-pager", "-n", "20", "-p", "err"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if r.stdout:
                 for line in r.stdout.strip().splitlines()[-10:]:
@@ -608,7 +657,11 @@ class XrayConfigurator:
                 f"# Configs: {len(rows)} / {total_working} working / {total_all} total",
             ]
             if avg_speed:
-                speed_str = f"{avg_speed // 1000}.{avg_speed % 1000 // 100} Mbps" if avg_speed >= 1000 else f"{avg_speed} Kbps"
+                speed_str = (
+                    f"{avg_speed // 1000}.{avg_speed % 1000 // 100} Mbps"
+                    if avg_speed >= 1000
+                    else f"{avg_speed} Kbps"
+                )
                 lines.append(f"# Avg speed: {speed_str}")
             if allowed:
                 lines.append(f"# Filter: {allowed}")
@@ -617,7 +670,11 @@ class XrayConfigurator:
             for r in rows:
                 link = r["link"]
                 if "#" not in link:
-                    host_part = link.split("@")[1].split("?")[0].split(":")[0] if "@" in link else ""
+                    host_part = (
+                        link.split("@")[1].split("?")[0].split(":")[0]
+                        if "@" in link
+                        else ""
+                    )
                     name = host_part[:20]
                     if r["country"]:
                         name = f"{r['country']}_{name}"
