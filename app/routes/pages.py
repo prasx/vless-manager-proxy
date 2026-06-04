@@ -15,11 +15,13 @@ def index():
     fr = db_q(
         "SELECT COUNT(*) c FROM proxies WHERE status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
     )[0]["c"]
+    ts = db_q("SELECT COUNT(*) c FROM proxies WHERE speed_kbps >= 5000")[0]["c"]
     return render_template(
         "index.html",
         total=sum(s.values()),
         working=s.get("working", 0),
         failed_recent=fr,
+        top_speed=ts,
     )
 
 

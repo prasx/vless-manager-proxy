@@ -70,6 +70,8 @@ def proxy_filter_clause(f):
         return "WHERE status='working' AND latency_vless > 0"
     elif f == "failed_recent":
         return "WHERE status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
+    elif f == "top_speed":
+        return "WHERE speed_kbps >= 5000"
     return ""
 
 
@@ -90,8 +92,9 @@ def api_proxies():
     limit_sql = ""
     if limit is not None:
         limit_sql = f" LIMIT {limit} OFFSET {offset}"
+    order = "speed_kbps DESC" if f == "top_speed" else "status, latency"
     rows = db_q(
-        f"SELECT id, host, port, country, status, latency, latency_vless, speed_kbps, failed_since, security, link FROM proxies {clause} ORDER BY status, latency{limit_sql}"
+        f"SELECT id, host, port, country, status, latency, latency_vless, speed_kbps, failed_since, security, link FROM proxies {clause} ORDER BY {order}{limit_sql}"
     )
     if limit is not None:
         return jsonify(proxies=[dict(r) for r in rows], total=total)
@@ -106,6 +109,7 @@ def api_status():
     failed_recent = db_q(
         "SELECT COUNT(*) c FROM proxies WHERE status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
     )[0]["c"]
+    top_speed = db_q("SELECT COUNT(*) c FROM proxies WHERE speed_kbps >= 5000")[0]["c"]
     ru = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working' AND country='RU'")[
         0
     ]["c"]
@@ -120,6 +124,7 @@ def api_status():
         total=total,
         working=working,
         failed_recent=failed_recent,
+        top_speed=top_speed,
         ru=ru,
         world=world,
         sources=[dict(r) for r in sources],

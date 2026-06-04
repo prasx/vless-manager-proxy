@@ -93,6 +93,7 @@ async function fetchPage(reset) {
   $('#statWorking').textContent = status.working;
 
   $('#statFailedRecent').textContent = status.failed_recent;
+  $('#statTopSpeed').textContent = status.top_speed;
 
   renderSourceButtons(status.sources, status.unknown_count, status.total);
 
