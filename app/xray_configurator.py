@@ -178,7 +178,7 @@ class XrayConfigurator:
         proxy_obs = []
         if max_outbounds > 0:
             rows = db_q(
-                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} ORDER BY COALESCE(NULLIF(speed_kbps, 0), 999999999) DESC, latency_vless ASC LIMIT ?",
+                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} ORDER BY speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC LIMIT ?",
                 codes + [max_outbounds],
             )
             for r in rows:
@@ -419,7 +419,7 @@ class XrayConfigurator:
         max_active = Settings.max_active_proxies()
         allowed = Settings.allowed_countries()
         codes = [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
-        sort_col = "COALESCE(NULLIF(speed_kbps, 0), 999999999) DESC, latency_vless ASC"
+        sort_col = "speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC"
         if codes:
             placeholders = ",".join("?" * len(codes))
             rows = db_q(
@@ -587,7 +587,7 @@ class XrayConfigurator:
                 placeholders = ""
                 country_sql = ""
                 codes = []
-            sort_col = "COALESCE(NULLIF(speed_kbps, 0), 999999999) DESC, latency_vless ASC"
+            sort_col = "speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC"
             rows = db_q(
                 f"SELECT link, country, speed_kbps FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} ORDER BY {sort_col} LIMIT ?",
                 codes + [max_active],
