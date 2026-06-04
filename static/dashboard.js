@@ -47,6 +47,8 @@ function updateSourceButtons() {
   $$('.source-bar .btn').forEach(el => {
     if (el) el.classList.toggle('btn-primary', el.dataset.source === currentSource);
   });
+  const sel = $('.source-select');
+  if (sel) sel.value = currentSource;
 }
 
 async function loadData() {
@@ -124,34 +126,59 @@ function renderSourceButtons(sources, unknownCount, totalCount) {
   if (!bar) return;
   const allBtn = $('#sourceAll');
   if (allBtn) allBtn.textContent = 'All ' + (totalCount || 0);
-  let unknownBtn = $('#sourceUnknown');
-  if (unknownCount > 0) {
-    if (!unknownBtn) {
-      unknownBtn = document.createElement('button');
-      unknownBtn.className = 'btn btn-sm';
-      unknownBtn.id = 'sourceUnknown';
-      unknownBtn.dataset.source = 'unknown';
-      unknownBtn.onclick = () => setSource('unknown');
-      bar.appendChild(unknownBtn);
+
+  const totalSrc = (sources || []).length + (unknownCount > 0 ? 1 : 0);
+  $$('.source-btn-src, .source-select').forEach(el => el.remove());
+
+  if (totalSrc <= 4) {
+    // inline buttons
+    let unknownBtn = $('#sourceUnknown');
+    if (unknownCount > 0) {
+      if (!unknownBtn) {
+        unknownBtn = document.createElement('button');
+        unknownBtn.className = 'btn btn-sm';
+        unknownBtn.id = 'sourceUnknown';
+        unknownBtn.dataset.source = 'unknown';
+        unknownBtn.onclick = () => setSource('unknown');
+        bar.appendChild(unknownBtn);
+      }
+      unknownBtn.textContent = 'Custom ' + unknownCount;
+      unknownBtn.style.display = '';
+    } else if (unknownBtn) {
+      unknownBtn.style.display = 'none';
     }
-    unknownBtn.textContent = 'Custom ' + unknownCount;
-    unknownBtn.style.display = '';
-  } else if (unknownBtn) {
-    unknownBtn.style.display = 'none';
-  }
-  $$('.source-btn-src').forEach(el => el.remove());
-  for (const s of (sources || [])) {
-    const id = 'srcBtn-' + s.id;
-    let btn = document.getElementById(id);
-    if (!btn) {
-      btn = document.createElement('button');
-      btn.className = 'btn btn-sm source-btn-src';
-      btn.id = id;
-      btn.dataset.source = String(s.id);
-      btn.onclick = () => setSource(String(s.id));
-      bar.appendChild(btn);
+    for (const s of (sources || [])) {
+      const id = 'srcBtn-' + s.id;
+      let btn = document.getElementById(id);
+      if (!btn) {
+        btn = document.createElement('button');
+        btn.className = 'btn btn-sm source-btn-src';
+        btn.id = id;
+        btn.dataset.source = String(s.id);
+        btn.onclick = () => setSource(String(s.id));
+        bar.appendChild(btn);
+      }
+      btn.textContent = s.name + ' ' + s.cnt;
     }
-    btn.textContent = s.name + ' ' + s.cnt;
+  } else {
+    // select dropdown
+    const sel = document.createElement('select');
+    sel.className = 'input source-select';
+    sel.style.width = 'auto';
+    sel.style.maxWidth = '280px';
+    sel.innerHTML = `<option value="">All ${totalCount || 0}</option>`;
+    if (unknownCount > 0) {
+      sel.innerHTML += `<option value="unknown">Custom ${unknownCount}</option>`;
+    }
+    for (const s of (sources || [])) {
+      sel.innerHTML += `<option value="${s.id}">${s.name} (${s.cnt})</option>`;
+    }
+    sel.value = currentSource;
+    sel.onchange = () => setSource(sel.value);
+    bar.appendChild(sel);
+    // hide inline unknown btn
+    const unknownBtn = $('#sourceUnknown');
+    if (unknownBtn) unknownBtn.style.display = 'none';
   }
   updateSourceButtons();
 }

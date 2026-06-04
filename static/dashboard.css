@@ -50,6 +50,8 @@
   display:flex;
   align-items:center;
   justify-content:space-between;
+  flex-wrap:wrap;
+  gap:4px;
   font-size:0.72rem;
   color:var(--green);
   margin-bottom:10px;
