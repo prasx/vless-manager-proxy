@@ -109,26 +109,26 @@ def init_db():
         else:
             c.execute("UPDATE proxies SET security='none' WHERE id=?", (row["id"],))
 
-        defaults = {
-            "xray_bin": "/usr/local/bin/xray",
-            "xray_config_path": str(default_xray_config_path()),
-            "proxy_listen": "0.0.0.0",
-            "max_active_proxies": "30",
-            "safe_only_import": "false",
-            "allowed_countries": "",
-            "probe_url": "https://www.gstatic.com/generate_204",
-            # Интервалы и тюнинг
-            "check_interval": "3600",
-            "vless_per_proxy_timeout": "5",
-            "log_trim_every": "500",
-            "log_keep": "2000",
-            "geosite_rules": '[]',
-            "geo_enabled": "true",
-            "observatory_probe_interval": "120s",
-            "speed_test_enabled": "true",
-            "speed_test_max": "20",
-            "speed_test_url": "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png",
-        }
+    defaults = {
+        "xray_bin": "/usr/local/bin/xray",
+        "xray_config_path": str(default_xray_config_path()),
+        "proxy_listen": "0.0.0.0",
+        "max_active_proxies": "30",
+        "safe_only_import": "false",
+        "allowed_countries": "",
+        "probe_url": "https://www.gstatic.com/generate_204",
+        # Интервалы и тюнинг
+        "check_interval": "3600",
+        "vless_per_proxy_timeout": "5",
+        "log_trim_every": "500",
+        "log_keep": "2000",
+        "geosite_rules": '[]',
+        "geo_enabled": "true",
+        "observatory_probe_interval": "120s",
+        "speed_test_enabled": "true",
+        "speed_test_max": "20",
+        "speed_test_url": "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png",
+    }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
     conn.commit()
