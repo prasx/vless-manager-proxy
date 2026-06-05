@@ -3,11 +3,12 @@
 import sqlite3
 import time
 from pathlib import Path
+from typing import Any
 
 from config import DATABASE, ETC_XRAY_CONFIG, DEFAULT_XRAY_CONFIG
 
 
-def _get_conn():
+def _get_conn() -> sqlite3.Connection:
     """Создаёт и возвращает новое подключение к БД."""
     conn = sqlite3.connect(str(DATABASE), timeout=15)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -16,7 +17,7 @@ def _get_conn():
     return conn
 
 
-def db_q(sql, params=()):
+def db_q(sql: str, params: tuple | list = ()) -> list[sqlite3.Row]:
     """Выполняет SQL-запрос с параметрами, коммитит и возвращает результаты.
     При SQLITE_BUSY повторяет до 5 раз с экспоненциальной задержкой."""
     for attempt in range(5):
@@ -28,7 +29,7 @@ def db_q(sql, params=()):
             return c.fetchall()
         except sqlite3.OperationalError as e:
             if "busy" in str(e).lower() and attempt < 4:
-                time.sleep(0.1 * (2 ** attempt))
+                time.sleep(0.1 * (2**attempt))
                 continue
             raise
         finally:
@@ -72,14 +73,12 @@ _SCHEMA = {
 }
 
 
-def _ensure_schema(conn):
+def _ensure_schema(conn: sqlite3.Connection) -> None:
     """Проверяет эталонную схему и добавляет недостающие таблицы/колонки."""
     c = conn.cursor()
     for table, columns in _SCHEMA.items():
-        # Собираем полный CREATE TABLE со всеми колонками
         cols_sql = ", ".join(f"{name} {typ}" for name, typ in columns)
         c.execute(f"CREATE TABLE IF NOT EXISTS {table} ({cols_sql})")
-        # Какие колонки уже есть в существующей таблице
         existing = {
             row[1] for row in c.execute(f"PRAGMA table_info({table})").fetchall()
         }
@@ -91,7 +90,7 @@ def _ensure_schema(conn):
                     pass
 
 
-def init_db():
+def init_db() -> None:
     """Создаёт/дополняет таблицы и устанавливает настройки по умолчанию."""
     conn = _get_conn()
     c = conn.cursor()
@@ -118,25 +117,25 @@ def init_db():
         "allowed_countries": "",
         "probe_url": "https://www.gstatic.com/generate_204",
         # Интервалы и тюнинг
-        "check_interval": "3600",
+        "check_interval_db": "1800",
+        "check_interval_import": "10800",
         "vless_per_proxy_timeout": "5",
         "log_trim_every": "500",
         "log_keep": "2000",
-        "geosite_rules": '[]',
+        "geosite_rules": "[]",
         "geo_enabled": "true",
         "observatory_probe_interval": "15s",
         "speed_test_enabled": "true",
-        "speed_test_max": "20",
-        "speed_test_url": "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png",
-        "test_scope": "all",
-        "reimport_enabled": "true",
+        "speed_test_max": "30",
+        "speed_test_url": "http://speedtest.selectel.ru/10MB",
         "apply_after_test": "true",
-        "balancer_strategy": "leastLoad",
+        "balancer_strategy": "random",
         "handshake_timeout": "8",
         "conn_idle": "300",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
+
     conn.commit()
     conn.close()
 
@@ -150,70 +149,76 @@ class Settings:
     """Работа с настройками из таблицы settings в БД."""
 
     @staticmethod
-    def get(key, default=""):
+    def get(key: str, default: str = "") -> str:
         """Возвращает значение настройки из БД."""
         rows = db_q("SELECT value FROM settings WHERE key=?", (key,))
         return rows[0]["value"] if rows else default
 
     @staticmethod
-    def set(key, value):
+    def set(key: str, value: str) -> None:
         """Сохраняет значение настройки в БД."""
         db_q("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
 
     @classmethod
-    def xray_bin(cls):
+    def xray_bin(cls) -> str:
         """Путь к бинарнику Xray из настроек."""
         return cls.get("xray_bin", "xray")
 
     @classmethod
-    def proxy_listen(cls):
+    def proxy_listen(cls) -> str:
         """Адрес для SOCKS/HTTP inbounds (0.0.0.0 для LAN)."""
         return cls.get("proxy_listen", "0.0.0.0")
 
     @classmethod
-    def max_active_proxies(cls):
+    def max_active_proxies(cls) -> int:
         """Максимальное количество активных прокси в конфиге."""
         return int(cls.get("max_active_proxies", "30"))
 
     @classmethod
-    def safe_only_import(cls):
+    def safe_only_import(cls) -> bool:
         """True если импортировать только прокси с шифрованием (reality/tls)."""
         return cls.get("safe_only_import", "false") == "true"
 
     @classmethod
-    def allowed_countries(cls):
+    def allowed_countries(cls) -> str:
         """Список разрешённых стран (строка с кодами через запятую)."""
         return cls.get("allowed_countries", "").strip()
 
     @classmethod
-    def probe_url(cls):
+    def probe_url(cls) -> str:
         """URL для проверки работоспособности прокси (observatory)."""
         return cls.get("probe_url", "https://www.gstatic.com/generate_204")
 
     @classmethod
-    def check_interval(cls):
-        """Интервал полного цикла проверки, секунд (по умолчанию 3600 = 1 час)."""
-        return int(cls.get("check_interval", "3600"))
+    def check_interval_db(cls) -> int:
+        """Интервал проверки прокси из БД, секунд."""
+        return int(cls.get("check_interval_db", "1800"))
 
     @classmethod
-    def vless_per_proxy_timeout(cls):
-        """Таймаут VLESS-теста одного прокси, секунд (по умолчанию 5)."""
+    def check_interval_import(cls) -> int:
+        """Интервал импорт + проверка, секунд."""
+        return int(cls.get("check_interval_import", "10800"))
+
+    @classmethod
+    def vless_per_proxy_timeout(cls) -> int:
+        """Таймаут VLESS-теста одного прокси, секунд."""
         return int(cls.get("vless_per_proxy_timeout", "5"))
 
     @classmethod
-    def log_trim_every(cls):
+    def log_trim_every(cls) -> int:
         """Чистить логи каждые N записей."""
         return int(cls.get("log_trim_every", "500"))
 
     @classmethod
-    def log_keep(cls):
+    def log_keep(cls) -> int:
         """Оставлять последние N записей после чистки."""
         return int(cls.get("log_keep", "2000"))
 
     @classmethod
-    def geosite_rules(cls):
+    def geosite_rules(cls) -> list[dict]:
         """Список geosite-правил для routing Xray (JSON-строка)."""
         import json
+
         raw = cls.get("geosite_rules", "[]")
         try:
             return json.loads(raw)
@@ -221,14 +226,14 @@ class Settings:
             return []
 
 
-def default_xray_config_path():
+def default_xray_config_path() -> Path:
     """Определяет путь к конфигу Xray по умолчанию."""
     if ETC_XRAY_CONFIG.exists():
         return ETC_XRAY_CONFIG
     return DEFAULT_XRAY_CONFIG
 
 
-def xray_config_path():
+def xray_config_path() -> Path:
     """Определяет актуальный путь к конфигу Xray с учётом настроек и автоисправления."""
     default_path = default_xray_config_path()
     configured = Settings.get("xray_config_path", "")

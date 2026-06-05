@@ -284,6 +284,7 @@ td.id { color:var(--text-muted); }
   transition:border-color var(--transition);
 }
 .input:focus { outline:none; border-color:var(--border-hover); }
+select.input { color-scheme:dark; }
 .form-row .input {
   flex:1;
   max-width:480px;
@@ -322,6 +323,93 @@ td.id { color:var(--text-muted); }
 }
 .tuning-item:last-child {
   border-bottom:none;
+}
+.tuning-cards {
+  display:flex;
+  gap:16px;
+  margin-bottom:16px;
+}
+.tuning-card {
+  flex:1;
+  background:var(--bg-secondary);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:16px;
+}
+.tuning-card-header {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-bottom:8px;
+}
+.tuning-card-icon {
+  font-size:1.2rem;
+}
+.tuning-card-title {
+  font-weight:600;
+  font-size:0.9rem;
+}
+.tuning-card-badge {
+  margin-left:auto;
+  font-size:0.7rem;
+}
+.tuning-card-desc {
+  font-size:0.75rem;
+  color:var(--text-muted);
+  margin-bottom:12px;
+  line-height:1.4;
+}
+.tuning-card-control label {
+  display:block;
+  font-size:0.7rem;
+  color:var(--text-muted);
+  text-transform:uppercase;
+  letter-spacing:0.05em;
+  margin-bottom:4px;
+}
+.tuning-range {
+  width:100%;
+  height:6px;
+  -webkit-appearance:none;
+  appearance:none;
+  background:var(--border);
+  border-radius:3px;
+  outline:none;
+  cursor:pointer;
+}
+.tuning-range::-webkit-slider-thumb {
+  -webkit-appearance:none;
+  appearance:none;
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background:var(--text-primary);
+  cursor:pointer;
+  border:2px solid var(--bg);
+}
+.tuning-range::-moz-range-thumb {
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background:var(--text-primary);
+  cursor:pointer;
+  border:2px solid var(--bg);
+}
+.tuning-range-labels {
+  display:flex;
+  justify-content:space-between;
+  font-size:0.65rem;
+  color:var(--text-muted);
+  margin-top:2px;
+}
+.tuning-grid {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:16px;
+}
+@media(max-width:768px) {
+  .tuning-cards { flex-direction:column; }
+  .tuning-grid { grid-template-columns:1fr; }
 }
 .tuning-label {
   min-width:150px;

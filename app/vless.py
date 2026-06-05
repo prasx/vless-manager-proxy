@@ -1,15 +1,16 @@
 """Парсинг VLESS ссылок и построение streamSettings."""
 
 import re
+from typing import Optional
 from urllib.parse import urlparse, parse_qs, unquote
 
-_VALID_FLOWS = frozenset({"xtls-rprx-vision", "xtls-rprx-direct"})
-_UUID_RE = re.compile(
+_VALID_FLOWS: frozenset = frozenset({"xtls-rprx-vision", "xtls-rprx-direct"})
+_UUID_RE: re.Pattern = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
 )
 
 
-def sanitize_flow(flow):
+def sanitize_flow(flow: Optional[str]) -> str:
     """Очищает flow от мусора (фрагменты #remark, &param)."""
     if not flow:
         return ""
@@ -23,7 +24,7 @@ def sanitize_flow(flow):
     return ""
 
 
-def sanitize_short_id(sid):
+def sanitize_short_id(sid: Optional[str]) -> str:
     """Оставляет только hex-часть shortId, обрезая мусор."""
     if not sid:
         return ""
@@ -32,7 +33,7 @@ def sanitize_short_id(sid):
     return m.group(1) if m else ""
 
 
-def _vless_param(parsed, *keys):
+def _vless_param(parsed: dict, *keys: str) -> str:
     """Достаёт первое непустое значение из parsed по списку ключей."""
     for k in keys:
         v = parsed.get(k)
@@ -41,7 +42,7 @@ def _vless_param(parsed, *keys):
     return ""
 
 
-def parse_vless(link):
+def parse_vless(link: str) -> Optional[dict]:
     """Разбирает vless:// строку в словарь с параметрами.
 
     Возвращает None, если ссылка невалидна или UUID не проходит проверку.
@@ -56,7 +57,7 @@ def parse_vless(link):
     uid = unquote(str(uid)).split("#")[0].split("&")[0].strip()
     if not _UUID_RE.match(uid):
         return None
-    result = {
+    result: dict = {
         "uid": uid,
         "server": server,
         "host": server,
@@ -82,9 +83,9 @@ def parse_vless(link):
     return result
 
 
-def _sanitize_outbounds(cfg):
+def _sanitize_outbounds(cfg: dict) -> dict:
     """Исправляет пропущенные теги outbound и чистит flow/shortId (Xray 26+)."""
-    used_tags = set()
+    used_tags: set = set()
     for i, ob in enumerate(cfg.get("outbounds", [])):
         tag = (ob.get("tag") or "").strip()
         proto = ob.get("protocol", "")
@@ -126,7 +127,7 @@ def _sanitize_outbounds(cfg):
     return cfg
 
 
-def _reality_server_name(parsed):
+def _reality_server_name(parsed: dict) -> str:
     """Возвращает sni/serverName для reality/tls."""
     return (
         _vless_param(parsed, "sni", "serverName")
@@ -135,7 +136,7 @@ def _reality_server_name(parsed):
     )
 
 
-def stream_settings(parsed):
+def stream_settings(parsed: dict) -> dict:
     """Строит streamSettings из распарсенной VLESS ссылки.
 
     Поддерживает: tcp, ws, grpc, kcp, h2/http, xhttp.
@@ -143,7 +144,7 @@ def stream_settings(parsed):
     """
     net = parsed.get("type", "tcp")
     sec = parsed.get("security", "none")
-    s = {"network": net}
+    s: dict = {"network": net}
     hdr_host = parsed.get("headerHost") or _vless_param(parsed, "host")
     if net == "ws":
         ws = {}

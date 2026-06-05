@@ -22,6 +22,8 @@ class ProxyManager:
 
     def __init__(self):
         self._vless_busy = False
+        self._last_run_db = 0.0
+        self._last_run_import = 0.0
         self.progress = {
             "running": False,
             "total": 0,
@@ -257,7 +259,9 @@ class ProxyManager:
         if not rows:
             return
         add_log("INFO", f"Speed test: {len(rows)} proxies")
-        self.progress.update(running=True, total=len(rows), done=0, ok=0, label="Speed test")
+        self.progress.update(
+            running=True, total=len(rows), done=0, ok=0, label="Speed test"
+        )
         timeout = int(Settings.get("vless_per_proxy_timeout", "5")) * 3
         with ThreadPoolExecutor(max_workers=5) as pool:
             futures = {}
@@ -367,9 +371,8 @@ class ProxyManager:
                 f"VLESS {label}: {vless_ok}/{vless_total} ok — {moscow_str()}",
             )
 
-            # Speed test всех рабочих прокси после VLESS
-            if label in ("all", "batch-test"):
-                self._run_speed_test_for_top()
+            # Speed test всех рабочих прокси после VLESS (если включено в настройках)
+            self._run_speed_test_for_top()
         finally:
             if self.progress["label"] == "Speed test":
                 # Показываем в last итог: VLESS + Speed
@@ -384,17 +387,20 @@ class ProxyManager:
                 self._record_completion(label)
 
     def test_all_vless(self):
+        """Тест всех прокси из БД (без импорта)."""
         rows = db_q("SELECT id, link FROM proxies")
         if not rows:
             add_log("WARN", "Test all VLESS: no proxies to test")
             return
         self._bg_vless_batch(rows, "all")
         from .xray_configurator import xray_configurator
+
         xray_configurator.apply_all(blocking=True)
 
     def batch_test_vless(self, rows):
         self._bg_vless_batch(rows, "batch-test")
         from .xray_configurator import xray_configurator
+
         xray_configurator.apply_all(blocking=True)
 
     # ─── Background tasks ───
@@ -411,48 +417,74 @@ class ProxyManager:
             self._vless_busy = False
 
     def background_checker(self):
+        """Фоновый цикл: два независимых таймера с приоритетом.
+        import+check имеет приоритет над db-only. Не запускаются одновременно."""
         while True:
             try:
-                time.sleep(Settings.check_interval())
+                time.sleep(30)
             except Exception:
-                time.sleep(60)
+                time.sleep(30)
             try:
-                if not self._vless_busy:
-                    threading.Thread(target=self._run_vless_chain, daemon=True).start()
+                if self._vless_busy:
+                    continue
+                now = time.time()
+                due_import = (
+                    now - self._last_run_import >= Settings.check_interval_import()
+                )
+                due_db = now - self._last_run_db >= Settings.check_interval_db()
+
+                if due_import:
+                    self._last_run_import = now
+                    threading.Thread(target=self._run_import_chain, daemon=True).start()
+                elif due_db:
+                    self._last_run_db = now
+                    threading.Thread(target=self._run_db_chain, daemon=True).start()
             except Exception as e:
                 add_log("ERROR", f"Background checker crashed: {e}")
 
-    def _run_vless_chain(self):
+    def _run_import_chain(self):
+        """Импорт из источников → проверка прокси → сборка конфига."""
         self._vless_busy = True
         try:
-            # Реимпорт из источников (опционально)
-            if Settings.get("reimport_enabled", "true") == "true":
-                src_list = db_q("SELECT id, url FROM sources")
-                for src in src_list:
-                    import_from_url(src["url"], source_id=src["id"])
-                from .utils import enrich_all_unknown_countries
-                enrich_all_unknown_countries()
+            src_list = db_q("SELECT id, url FROM sources")
+            for src in src_list:
+                import_from_url(src["url"], source_id=src["id"])
+            from .utils import enrich_all_unknown_countries
 
-            # Какие прокси тестировать
-            scope = Settings.get("test_scope", "all")
-            if scope == "working":
-                rows = db_q("SELECT id, link FROM proxies WHERE status='working'")
-            elif scope == "failed":
-                rows = db_q("SELECT id, link FROM proxies WHERE status='failed'")
-            else:
-                rows = db_q("SELECT id, link FROM proxies")
+            enrich_all_unknown_countries()
 
+            rows = db_q("SELECT id, link FROM proxies")
             if rows:
-                add_log("INFO", f"Full check ({scope}): {len(rows)} proxies")
-                self._bg_vless_batch(rows, "all")
+                add_log("INFO", f"Import+check: {len(rows)} proxies")
+                self._bg_vless_batch(rows, "import+check")
 
-            # Пересборка конфига (опционально)
             if Settings.get("apply_after_test", "true") == "true":
                 from .xray_configurator import xray_configurator
+
                 xray_configurator.apply_all()
-                add_log("INFO", "Full check cycle completed")
+                add_log("INFO", "Import+check cycle completed")
         except Exception as e:
-            add_log("ERROR", f"Full check cycle crashed: {e}")
+            add_log("ERROR", f"Import+check cycle crashed: {e}")
+        finally:
+            self._vless_busy = False
+
+    def _run_db_chain(self):
+        """Проверка прокси из БД (без импорта) → сборка конфига."""
+        self._vless_busy = True
+        try:
+            rows = db_q("SELECT id, link FROM proxies")
+
+            if rows:
+                add_log("INFO", f"DB check: {len(rows)} proxies")
+                self._bg_vless_batch(rows, "db-check")
+
+            if Settings.get("apply_after_test", "true") == "true":
+                from .xray_configurator import xray_configurator
+
+                xray_configurator.apply_all()
+                add_log("INFO", "DB check cycle completed")
+        except Exception as e:
+            add_log("ERROR", f"DB check cycle crashed: {e}")
         finally:
             self._vless_busy = False
 

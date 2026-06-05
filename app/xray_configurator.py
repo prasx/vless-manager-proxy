@@ -13,8 +13,7 @@ from pathlib import Path
 
 from .db import db_q, Settings, xray_config_path
 from .utils import add_log, moscow_str
-from config import SUBSCRIBE_FILE
-from .vless import parse_vless, stream_settings, sanitize_flow
+from .subscribe import update_subscribe_cache
 from config import SOCKS_PORT, HTTP_PORT, API_PORT, API_LISTEN
 
 
@@ -26,6 +25,8 @@ class XrayConfigurator:
         self._last_config_hash = ""
         self._last_restart_time = 0.0
         self._restart_cooldown = 120  # seconds
+        self._stats_cache = {"data": None, "ts": 0.0}
+        self._stats_cache_lock = threading.Lock()
 
     # ─── Inbounds / Base config helpers ───
 
@@ -144,7 +145,8 @@ class XrayConfigurator:
     @classmethod
     def _geosite_rules(cls, has_balancer=True):
         """Возвращает список routing-правил из настроек geosite_rules.
-        has_balancer=False — правило proxy → direct (нет рабочих прокси)."""
+        has_balancer=False — правило proxy → direct (нет рабочих прокси).
+        Правила с префиксом geoip: попадают в поле ip, остальные — в domain."""
         if not cls._geosite_available_check():
             return []
         rules = []
@@ -153,24 +155,72 @@ class XrayConfigurator:
             tag = (item.get("outboundTag") or "").strip()
             if not domain:
                 continue
+            is_geoip = domain.startswith("geoip:")
+            rule = {"type": "field"}
+            if is_geoip:
+                rule["ip"] = [domain]
+            else:
+                rule["domain"] = [domain]
             if tag == "proxy":
                 if has_balancer:
-                    rules.append(
-                        {"type": "field", "domain": [domain], "balancerTag": "auto"}
-                    )
+                    rule["balancerTag"] = "auto"
                 else:
-                    rules.append(
-                        {"type": "field", "domain": [domain], "outboundTag": "direct"}
-                    )
+                    rule["outboundTag"] = "direct"
             elif tag == "direct":
-                rules.append(
-                    {"type": "field", "domain": [domain], "outboundTag": "direct"}
-                )
+                rule["outboundTag"] = "direct"
+            else:
+                continue
+            rules.append(rule)
         return rules
 
     # ─── Config generation ───
 
-    def generate_full_config(self, max_outbounds=0, skip_geosite=False):
+    @staticmethod
+    def _policy_config() -> dict:
+        """Политика таймаутов для Xray."""
+        return {
+            "levels": {
+                "0": {
+                    "handshake": int(Settings.get("handshake_timeout", "8")),
+                    "connIdle": int(Settings.get("conn_idle", "300")),
+                }
+            }
+        }
+
+    @staticmethod
+    def _inbounds_config() -> list:
+        """SOCKS, HTTP и API inbounds."""
+        return (
+            XrayConfigurator._proxy_inbounds(Settings.proxy_listen())
+            + [
+                {
+                    "listen": API_LISTEN,
+                    "port": API_PORT,
+                    "protocol": "dokodemo-door",
+                    "settings": {"address": API_LISTEN},
+                    "tag": "api",
+                }
+            ]
+        )
+
+    @staticmethod
+    def _api_config() -> dict:
+        return {"tag": "api", "services": ["HandlerService", "RoutingService", "StatsService"]}
+
+    @staticmethod
+    def _geo_routing_rules(skip_geosite: bool = False, has_balancer: bool = True) -> list:
+        """Возвращает geoip + geosite routing rules."""
+        if Settings.get("geo_enabled", "true") != "true":
+            return []
+        rules: list = [
+            {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
+            {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
+        ]
+        if not skip_geosite:
+            rules.extend(XrayConfigurator._geosite_rules(has_balancer=has_balancer))
+        return rules
+
+    def generate_full_config(self, max_outbounds: int = 0, skip_geosite: bool = False) -> dict:
         """Генерирует полный конфиг с observatory + balancer.
 
         Если max_outbounds > 0 — только N самых быстрых outbound.
@@ -191,72 +241,39 @@ class XrayConfigurator:
                 f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} ORDER BY speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC LIMIT ?",
                 codes + [max_outbounds],
             )
-            for r in rows:
-                parsed = parse_vless(r["link"])
-                if parsed:
-                    proxy_obs.append(
-                        self._build_outbound(parsed, f"node{len(proxy_obs)}")
-                    )
         else:
             rows = db_q(
                 f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql}",
                 codes,
             )
-            for r in rows:
-                parsed = parse_vless(r["link"])
-                if parsed:
-                    proxy_obs.append(
-                        self._build_outbound(parsed, f"node{len(proxy_obs)}")
-                    )
-        outbounds = proxy_obs + [
-            {"protocol": "freedom", "tag": "direct"},
-            {"protocol": "freedom", "tag": "api"},
-        ]
-        routing_rules = [
+        for r in rows:
+            parsed = parse_vless(r["link"])
+            if parsed:
+                proxy_obs.append(self._build_outbound(parsed, f"node{len(proxy_obs)}"))
+
+        has_proxies = bool(proxy_obs)
+        routing_rules: list = [
             {"type": "field", "protocol": ["bittorrent"], "outboundTag": "direct"},
             {"inboundTag": ["api"], "outboundTag": "api"},
         ]
-        if Settings.get("geo_enabled", "true") == "true":
-            routing_rules.extend(
-                [
-                    {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
-                    {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
-                ]
-            )
-            if not skip_geosite:
-                routing_rules.extend(self._geosite_rules(has_balancer=bool(proxy_obs)))
-        if proxy_obs:
-            routing_rules.append(
-                {"type": "field", "network": "tcp,udp", "balancerTag": "auto"}
-            )
+        routing_rules.extend(self._geo_routing_rules(skip_geosite=skip_geosite, has_balancer=has_proxies))
+        if has_proxies:
+            routing_rules.append({"type": "field", "network": "tcp,udp", "balancerTag": "auto"})
+        else:
+            routing_rules.append({"type": "field", "network": "tcp,udp", "outboundTag": "direct"})
+
         config = {
-            "api": {
-                "tag": "api",
-                "services": ["HandlerService", "RoutingService", "StatsService"],
-            },
+            "api": self._api_config(),
             "log": {"loglevel": "warning"},
-            "inbounds": self._proxy_inbounds(Settings.proxy_listen())
-            + [
-                {
-                    "listen": API_LISTEN,
-                    "port": API_PORT,
-                    "protocol": "dokodemo-door",
-                    "settings": {"address": API_LISTEN},
-                    "tag": "api",
-                }
+            "inbounds": self._inbounds_config(),
+            "outbounds": proxy_obs + [
+                {"protocol": "freedom", "tag": "direct"},
+                {"protocol": "freedom", "tag": "api"},
             ],
-            "outbounds": outbounds,
             "routing": {"domainStrategy": "IPIfNonMatch", "rules": routing_rules},
+            "policy": self._policy_config(),
         }
-        config["policy"] = {
-            "levels": {
-                "0": {
-                    "handshake": int(Settings.get("handshake_timeout", "8")),
-                    "connIdle": int(Settings.get("conn_idle", "300")),
-                }
-            }
-        }
-        if proxy_obs:
+        if has_proxies:
             config["observatory"] = {
                 "subjectSelector": ["node"],
                 "probeUrl": Settings.probe_url(),
@@ -264,35 +281,22 @@ class XrayConfigurator:
                 "enableConcurrency": True,
             }
             config["routing"]["balancers"] = [
-                {"tag": "auto", "selector": ["node"], "strategy": {"type": Settings.get("balancer_strategy", "leastLoad")}}
+                {
+                    "tag": "auto",
+                    "selector": ["node"],
+                    "strategy": {"type": Settings.get("balancer_strategy", "random")},
+                }
             ]
         return self._inject_api(config)
 
-    def generate_base_config(self):
+    def generate_base_config(self) -> dict:
         """Минимальный конфиг для диска — прокси управляются только через API."""
-        has_geo = Settings.get("geo_enabled", "true") == "true"
-        geo_rules = []
-        if has_geo:
-            geo_rules = [
-                {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
-                {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
-            ] + self._geosite_rules()
+        geo_rules = self._geo_routing_rules(has_balancer=False)
+        catch_all = {"type": "field", "network": "tcp,udp", "outboundTag": "direct"}
         base = {
-            "api": {
-                "tag": "api",
-                "services": ["HandlerService", "RoutingService", "StatsService"],
-            },
+            "api": self._api_config(),
             "log": {"loglevel": "warning"},
-            "inbounds": self._proxy_inbounds(Settings.proxy_listen())
-            + [
-                {
-                    "listen": API_LISTEN,
-                    "port": API_PORT,
-                    "protocol": "dokodemo-door",
-                    "settings": {"address": API_LISTEN},
-                    "tag": "api",
-                }
-            ],
+            "inbounds": self._inbounds_config(),
             "outbounds": [
                 {"protocol": "freedom", "tag": "direct"},
                 {"protocol": "freedom", "tag": "api"},
@@ -300,58 +304,25 @@ class XrayConfigurator:
             "routing": {
                 "domainStrategy": "IPIfNonMatch",
                 "rules": [
-                    {
-                        "type": "field",
-                        "protocol": ["bittorrent"],
-                        "outboundTag": "direct",
-                    },
+                    {"type": "field", "protocol": ["bittorrent"], "outboundTag": "direct"},
                     {"inboundTag": ["api"], "outboundTag": "api"},
                 ]
                 + geo_rules
-                + [
-                    {"type": "field", "network": "tcp,udp", "outboundTag": "direct"},
-                ],
+                + [catch_all],
             },
-            "policy": {
-                "levels": {
-                    "0": {
-                        "handshake": int(Settings.get("handshake_timeout", "8")),
-                        "connIdle": int(Settings.get("conn_idle", "300")),
-                    }
-                }
-            },
+            "policy": self._policy_config(),
         }
         return self._inject_api(base)
 
     # ─── Xray API helpers ───
 
-    @staticmethod
-    def api_ok():
-        """Проверяет, отвечает ли Xray API (сначала TCP, потом gRPC)."""
-        try:
-            s = socket.create_connection((API_LISTEN, API_PORT), timeout=2)
-            s.close()
-        except Exception:
-            return False
-        try:
-            r = subprocess.run(
-                [
-                    Settings.xray_bin(),
-                    "api",
-                    "statsquery",
-                    "-s",
-                    f"{API_LISTEN}:{API_PORT}",
-                ],
-                capture_output=True,
-                timeout=5,
-            )
-            return r.returncode == 0
-        except Exception:
-            return False
-
-    @staticmethod
-    def list_active_outbounds():
-        """Возвращает список тегов активных outbound через xray api statsquery."""
+    def _cached_statsquery(self, ttl=10):
+        """Возвращает кэшированный результат `xray api statsquery`.
+        Кэш живёт ttl секунд. Возвращает (returncode, stdout) или (-1, '')."""
+        now = time.time()
+        with self._stats_cache_lock:
+            if self._stats_cache["data"] and (now - self._stats_cache["ts"]) < ttl:
+                return self._stats_cache["data"]
         try:
             r = subprocess.run(
                 [
@@ -365,17 +336,36 @@ class XrayConfigurator:
                 text=True,
                 timeout=5,
             )
-            if r.returncode != 0:
-                return []
-            tags = set()
-            for line in r.stdout.splitlines():
-                m = re.search(r"outbound>>>([^>]+)>>>traffic>>>([a-z]+)", line)
-                if m:
-                    tags.add(m.group(1))
-            return sorted(tags)
+            data = (r.returncode, r.stdout)
         except Exception as e:
-            add_log("DEBUG", f"Failed to list active outbounds: {e}")
+            add_log("DEBUG", f"statsquery failed: {e}")
+            data = (-1, "")
+        with self._stats_cache_lock:
+            self._stats_cache["data"] = data
+            self._stats_cache["ts"] = now
+        return data
+
+    def api_ok(self):
+        """Проверяет, отвечает ли Xray API (использует кэш statsquery)."""
+        try:
+            s = socket.create_connection((API_LISTEN, API_PORT), timeout=2)
+            s.close()
+        except Exception:
+            return False
+        rc, _ = self._cached_statsquery()
+        return rc == 0
+
+    def list_active_outbounds(self):
+        """Возвращает список тегов активных outbound (использует кэш statsquery)."""
+        rc, out = self._cached_statsquery()
+        if rc != 0:
             return []
+        tags = set()
+        for line in out.splitlines():
+            m = re.search(r"outbound>>>([^>]+)>>>traffic>>>([a-z]+)", line)
+            if m:
+                tags.add(m.group(1))
+        return sorted(tags)
 
     @staticmethod
     def _remove_outbound(tag):
@@ -402,10 +392,9 @@ class XrayConfigurator:
         except Exception as e:
             add_log("DEBUG", f"Failed to remove outbound {tag}: {e}")
 
-    @staticmethod
-    def remove_all_outbounds():
+    def remove_all_outbounds(self):
         """Удаляет все node* outbound из Xray через API."""
-        for tag in XrayConfigurator.list_active_outbounds():
+        for tag in self.list_active_outbounds():
             if tag.startswith("node"):
                 XrayConfigurator._remove_outbound(tag)
 
@@ -492,7 +481,7 @@ class XrayConfigurator:
                 Settings.get("geosite_rules", "[]"),
                 Settings.probe_url(),
                 Settings.get("observatory_probe_interval", "15s"),
-                Settings.get("balancer_strategy", "leastLoad"),
+                Settings.get("balancer_strategy", "random"),
                 Settings.get("handshake_timeout", "8"),
                 Settings.get("conn_idle", "300"),
             ]
@@ -553,7 +542,11 @@ class XrayConfigurator:
 
         geosite_rules_list = self._geosite_rules(has_balancer=has_work)
         if geosite_rules_list:
-            domains = [r["domain"][0] for r in geosite_rules_list if "domain" in r]
+            domains = [
+                r.get("domain", r.get("ip", [""]))[0]
+                for r in geosite_rules_list
+                if "domain" in r or "ip" in r
+            ]
             add_log(
                 "INFO",
                 f"GeoSite rules active ({len(geosite_rules_list)}): {', '.join(domains)}",
@@ -569,8 +562,6 @@ class XrayConfigurator:
             add_log("INFO", "Full config written to disk")
 
             # Cooldown после рестарта: не дёргаем API, даём Xray устаканиться
-            import time
-
             since_restart = time.time() - self._last_restart_time
             if since_restart < self._restart_cooldown:
                 add_log(
@@ -608,7 +599,7 @@ class XrayConfigurator:
                 )
         else:
             self._write_and_restart(cfg_path, max_active)
-        self._update_subscribe_cache()
+        update_subscribe_cache()
 
     def _write_and_restart(self, cfg_path, max_active, attempt=1, skip_geosite=False):
         """Пишет конфиг на диск и перезапускает Xray. При неудаче пробует без geosite."""
@@ -631,8 +622,6 @@ class XrayConfigurator:
         self.restart_via_systemd()
         self._last_restart_time = time.time()
         # Ждём и проверяем, взлетел ли Xray (с повторными попытками)
-        import time
-
         for wait in (5, 10, 15):
             time.sleep(wait)
             if self.api_ok():
@@ -666,72 +655,6 @@ class XrayConfigurator:
                         add_log("ERROR", f"systemd: {line}")
         except Exception as e:
             add_log("DEBUG", f"Failed to capture journalctl: {e}")
-
-    # ─── Subscribe cache ───
-
-    def _update_subscribe_cache(self):
-        """Собирает subscribe.txt с vless-ссылками + метаданными для внешних клиентов."""
-        try:
-            max_active = Settings.max_active_proxies()
-            allowed = Settings.allowed_countries()
-            codes = (
-                [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
-            )
-            if codes:
-                placeholders = ",".join("?" * len(codes))
-                country_sql = f"AND country IN ({placeholders})"
-            else:
-                placeholders = ""
-                country_sql = ""
-                codes = []
-            sort_col = "speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC"
-            rows = db_q(
-                f"SELECT link, country, speed_kbps FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} ORDER BY {sort_col} LIMIT ?",
-                codes + [max_active],
-            )
-            total_all = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
-            total_working = db_q(
-                "SELECT COUNT(*) c FROM proxies WHERE status='working'"
-            )[0]["c"]
-            avg_speed = db_q(
-                "SELECT CAST(AVG(speed_kbps) AS INTEGER) a FROM proxies WHERE status='working' AND speed_kbps > 0"
-            )[0]["a"]
-            probe_url = Settings.probe_url()
-            now = moscow_str()
-            lines = [
-                "# profile-title: VLESS Manager",
-                "# profile-update-interval: 1",
-                f"# Updated: {now}",
-                f"# Configs: {len(rows)} / {total_working} working / {total_all} total",
-            ]
-            if avg_speed:
-                speed_str = (
-                    f"{avg_speed // 1000}.{avg_speed % 1000 // 100} Mbps"
-                    if avg_speed >= 1000
-                    else f"{avg_speed} Kbps"
-                )
-                lines.append(f"# Avg speed: {speed_str}")
-            if allowed:
-                lines.append(f"# Filter: {allowed}")
-            lines.append(f"# Probe: {probe_url}")
-            lines.append("")
-            for r in rows:
-                link = r["link"]
-                if "#" not in link:
-                    host_part = (
-                        link.split("@")[1].split("?")[0].split(":")[0]
-                        if "@" in link
-                        else ""
-                    )
-                    name = host_part[:20]
-                    if r["country"]:
-                        name = f"{r['country']}_{name}"
-                    link = f"{link}#{name}"
-                lines.append(link)
-            SUBSCRIBE_FILE.write_text("\n".join(lines), encoding="utf-8")
-            add_log("DEBUG", f"Subscribe cache updated: {len(rows)} proxies")
-        except Exception as e:
-            add_log("ERROR", f"Failed to update subscribe cache: {e}")
 
     # ─── Diagnosis ───
 

@@ -12,6 +12,27 @@ async function api(method, url, body) {
 
 const $ = id => document.getElementById(id);
 
+function fmtHours(v) {
+  const h = Math.floor(v);
+  const m = Math.round((v - h) * 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+function setupRange(id, labelId) {
+  const el = $(id);
+  const label = $(labelId);
+  if (!el || !label) return null;
+  const update = () => { label.textContent = fmtHours(parseFloat(el.value)); };
+  el.addEventListener('input', update);
+  return { el, update };
+}
+
+function setRangeValue(range, val) {
+  if (!range) return;
+  range.el.value = val;
+  range.update();
+}
+
 async function loadSettings() {
   const [s, status] = await Promise.all([
     api('GET', '/api/settings'),
@@ -23,24 +44,24 @@ async function loadSettings() {
     $('proxyListen').value = s.proxy_listen || '0.0.0.0';
     $('maxActiveProxies').value = s.max_active_proxies || '30';
     $('probeUrl').value = s.probe_url || 'https://www.gstatic.com/generate_204';
-    $('checkInterval').value = s.check_interval || '3600';
+    // fallback для старой БД: если новых ключей нет, читаем старый check_interval
+    const oldVal = s.check_interval || '3600';
+    const dbRaw = s.check_interval_db || oldVal;
+    const impRaw = s.check_interval_import || '10800';
+    setRangeValue(setupRange('checkIntervalDb', 'checkIntervalDbLabel'), Math.round(parseInt(dbRaw) / 1800) / 2);
+    setRangeValue(setupRange('checkIntervalImport', 'checkIntervalImportLabel'), Math.round(parseInt(impRaw) / 1800) / 2);
     $('vlessPerProxyTimeout').value = s.vless_per_proxy_timeout || '5';
     $('logTrimEvery').value = s.log_trim_every || '500';
     $('logKeep').value = s.log_keep || '2000';
     $('observatoryProbeInterval').value = s.observatory_probe_interval || '15s';
-    $('balancerStrategy').value = s.balancer_strategy || 'leastLoad';
+    $('balancerStrategy').value = s.balancer_strategy || 'random';
     $('handshakeTimeout').value = s.handshake_timeout || '8';
     $('connIdle').value = s.conn_idle || '300';
     $('speedTestEnabled').checked = s.speed_test_enabled !== 'false';
-    $('speedTestMax').value = s.speed_test_max || '20';
-    $('speedTestUrl').value = s.speed_test_url || 'http://proof.ovh.net/files/100Kb.dat';
-    $('testScope').value = s.test_scope || 'all';
-    $('reimportEnabled').checked = s.reimport_enabled !== 'false';
+    $('speedTestMax').value = s.speed_test_max || '30';
+    $('speedTestUrl').value = s.speed_test_url || 'http://speedtest.selectel.ru/10MB';
     $('applyAfterTest').checked = s.apply_after_test !== 'false';
   }
-  renderXrayStatus(status);
-  loadCountries();
-  loadGeositeRules();
   $('geoEnabled').checked = s.geo_enabled !== 'false';
 }
 
@@ -54,15 +75,14 @@ async function saveSettings() {
     proxy_listen: $('proxyListen').value.trim() || '0.0.0.0',
     max_active_proxies: $('maxActiveProxies').value.trim() || '30',
     probe_url: $('probeUrl').value.trim() || 'https://www.gstatic.com/generate_204',
-    check_interval: $('checkInterval').value.trim() || '3600',
+    check_interval_db: String(Math.round(parseFloat($('checkIntervalDb').value || '0.5') * 3600)),
+    check_interval_import: String(Math.round(parseFloat($('checkIntervalImport').value || '3') * 3600)),
     vless_per_proxy_timeout: $('vlessPerProxyTimeout').value.trim() || '5',
     log_trim_every: $('logTrimEvery').value.trim() || '500',
     log_keep: $('logKeep').value.trim() || '2000',
     speed_test_enabled: $('speedTestEnabled').checked ? 'true' : 'false',
-    speed_test_max: $('speedTestMax').value.trim() || '20',
-    speed_test_url: $('speedTestUrl').value.trim() || 'http://proof.ovh.net/files/100Kb.dat',
-    test_scope: $('testScope').value,
-    reimport_enabled: $('reimportEnabled').checked ? 'true' : 'false',
+    speed_test_max: $('speedTestMax').value.trim() || '30',
+    speed_test_url: $('speedTestUrl').value.trim() || 'http://speedtest.selectel.ru/10MB',
     apply_after_test: $('applyAfterTest').checked ? 'true' : 'false',
     observatory_probe_interval: $('observatoryProbeInterval').value.trim() || '15s',
     balancer_strategy: $('balancerStrategy').value,
@@ -87,13 +107,17 @@ async function saveSettings() {
 }
 
 function resetTuning() {
-  $('checkInterval').value = '3600';
+  setRangeValue(setupRange('checkIntervalDb', 'checkIntervalDbLabel'), 0.5);
+  setRangeValue(setupRange('checkIntervalImport', 'checkIntervalImportLabel'), 3);
   $('vlessPerProxyTimeout').value = '5';
   $('observatoryProbeInterval').value = '15s';
   $('logTrimEvery').value = '500';
   $('logKeep').value = '2000';
   $('handshakeTimeout').value = '8';
   $('connIdle').value = '300';
+  $('speedTestMax').value = '30';
+  $('speedTestUrl').value = 'http://speedtest.selectel.ru/10MB';
+  $('balancerStrategy').value = 'random';
   toast('Tuning values reset to defaults — click Save to apply');
 }
 

@@ -4,20 +4,21 @@ import json
 import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from typing import Optional
 
 from .db import _get_conn, Settings
 from config import MOSCOW_TZ, UTC_TZ
 
-_geo_cache = {}
+_geo_cache: dict[str, str] = {}
 _geo_cache_lock = threading.Lock()
 
 
-def now_utc():
+def now_utc() -> datetime:
     """Наивный UTC datetime для хранения в БД (совместимость с SQLite datetime('now'))."""
     return datetime.now(UTC_TZ).replace(tzinfo=None)
 
 
-def moscow_str(dt=None):
+def moscow_str(dt: Optional[datetime] = None) -> str:
     """Форматирование даты/времени в московском часовом поясе для отображения."""
     if dt is None:
         dt = datetime.now(MOSCOW_TZ)
@@ -32,7 +33,7 @@ _log_insert_count = 0
 _log_count_lock = threading.Lock()
 
 
-def add_log(level, message):
+def add_log(level: str, message: str) -> None:
     """Добавляет запись в лог-таблицу БД. Автоматически подчищает старые записи."""
     global _log_insert_count
     conn = _get_conn()
@@ -51,7 +52,7 @@ def add_log(level, message):
         _trim_logs()
 
 
-def _trim_logs():
+def _trim_logs() -> None:
     """Оставляет только последние N записей в логах."""
     keep = Settings.log_keep()
     conn = _get_conn()
@@ -65,7 +66,7 @@ def _trim_logs():
         conn.close()
 
 
-def trim_logs_startup():
+def trim_logs_startup() -> None:
     """Принудительная чистка логов при старте (учитывает настройки)."""
     _trim_logs()
 

@@ -70,34 +70,35 @@ async function loadMore() {
 
 async function fetchPage(reset) {
   const offset = reset ? 0 : allProxies.length;
-  const [data, status, ob, xr] = await Promise.all([
-    api('GET', makeProxiesUrl(PAGE_SIZE, offset)),
-    api('GET', '/api/status'),
-    api('GET', '/api/xray/outbounds').catch(() => ({nodes:[], traffic:{}})),
-    api('GET', '/api/xray/status').catch(() => ({running:false}))
-  ]);
+
+  const data = await api('GET', makeProxiesUrl(PAGE_SIZE, offset));
 
   const proxies = data.proxies || data;
   totalCount = data.total != null ? data.total : proxies.length;
 
-  proxies.forEach(p => linkMap[p.id] = p.link);
-
   if (reset) {
     allProxies = proxies;
   } else {
-    proxies.forEach(p => { if (!linkMap[p.id]) linkMap[p.id] = p.link; });
     allProxies = [...allProxies, ...proxies];
   }
 
-  $('#statTotal').textContent = status.total;
-  $('#statWorking').textContent = status.working;
+  if (reset) {
+    const [status, ob, xr] = await Promise.all([
+      api('GET', '/api/status'),
+      api('GET', '/api/xray/outbounds').catch(() => ({nodes:[], traffic:{}})),
+      api('GET', '/api/xray/status').catch(() => ({running:false}))
+    ]);
 
-  $('#statFailedRecent').textContent = status.failed_recent;
-  $('#statTopSpeed').textContent = status.top_speed;
-
-  renderSourceButtons(status.sources, status.unknown_count, status.total);
-
-  renderTraffic(ob, xr);
+    proxies.forEach(p => linkMap[p.id] = p.link);
+    $('#statTotal').textContent = status.total;
+    $('#statWorking').textContent = status.working;
+    $('#statFailedRecent').textContent = status.failed_recent;
+    $('#statTopSpeed').textContent = status.top_speed;
+    renderSourceButtons(status.sources, status.unknown_count, status.total);
+    renderTraffic(ob, xr);
+  } else {
+    proxies.forEach(p => { if (!linkMap[p.id]) linkMap[p.id] = p.link; });
+  }
 
   if (window.innerWidth <= 768) renderMobile(allProxies);
   else renderDesktop(allProxies);

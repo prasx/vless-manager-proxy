@@ -88,22 +88,23 @@
           <tr style="border-bottom:1px solid var(--border)">
             <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🇷🇺 Россия</td>
             <td style="padding:3px 6px">
-              <code>ru-blocked</code> → <strong style="color:#ed8936">proxy</strong>
-              <code>ru-blocked-all</code> → <strong style="color:#ed8936">proxy</strong><br>
-              <code>ru-available-only-inside</code> → <strong style="color:var(--green)">direct</strong>
-              <code>antifilter-download</code> <code>refilter</code>
+              <code>geosite:ru-blocked</code> → <strong style="color:#ed8936">proxy</strong>
+              <code>geosite:ru-blocked-all</code> → <strong style="color:#ed8936">proxy</strong><br>
+              <code>geosite:ru-available-only-inside</code> → <strong style="color:var(--green)">direct</strong>
+              <code>geosite:antifilter-download</code> <code>geosite:refilter</code>
             </td>
           </tr>
           <tr style="border-bottom:1px solid var(--border)">
             <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🪟 Windows</td>
             <td style="padding:3px 6px">
-              <code>win-spy</code> <code>win-update</code> <code>win-extra</code>
+              <code>geosite:win-spy</code> <code>geosite:win-update</code> <code>geosite:win-extra</code>
             </td>
           </tr>
           <tr>
-            <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🌍 IP (в коде)</td>
+            <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🌍 IP (geoip)</td>
             <td style="padding:3px 6px">
-              <code>geoip:ru</code> <code>geoip:private</code> — всегда <strong style="color:var(--green)">direct</strong>
+              <code>geoip:ru</code> <code>geoip:private</code> — всегда <strong style="color:var(--green)">direct</strong><br>
+              <span style="color:var(--text-muted);font-size:0.72rem">⚡ geoip: правила работают только с полем <code>ip</code>, не <code>domain</code></span>
             </td>
           </tr>
         </table>
@@ -134,127 +135,139 @@
 <div class="settings-section tuning-section">
   <h2>Check Intervals &amp; Tuning</h2>
 
+  <div class="tuning-cards">
+    <div class="tuning-card">
+      <div class="tuning-card-header">
+        <span class="tuning-card-icon">🔄</span>
+        <span class="tuning-card-title">DB-only Check</span>
+        <span class="tuning-card-badge badge badge-green">every <span id="checkIntervalDbLabel">1h</span></span>
+      </div>
+      <p class="tuning-card-desc">VLESS-тест прокси из БД + сборка конфига. Без импорта.</p>
+      <div class="tuning-card-control">
+        <label>Interval</label>
+        <input type="range" id="checkIntervalDb" class="tuning-range" min="0.5" max="5" step="0.5" value="0.5">
+        <div class="tuning-range-labels">
+          <span>1h</span>
+          <span>2h</span>
+          <span>3.5h</span>
+          <span>5h</span>
+        </div>
+      </div>
+    </div>
+    <div class="tuning-card">
+      <div class="tuning-card-header">
+        <span class="tuning-card-icon">📥</span>
+        <span class="tuning-card-title">Import + Check</span>
+        <span class="tuning-card-badge badge badge-orange">every <span id="checkIntervalImportLabel">5h</span></span>
+      </div>
+      <p class="tuning-card-desc">Импорт из источников → enrich стран → VLESS-тест → сборка конфига.</p>
+      <div class="tuning-card-control">
+        <label>Interval</label>
+        <input type="range" id="checkIntervalImport" class="tuning-range" min="1" max="24" step="0.5" value="3">
+        <div class="tuning-range-labels">
+          <span>1h</span>
+          <span>8h</span>
+          <span>16h</span>
+          <span>24h</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="tuning-notice">
-    <strong>⚠️</strong> Чем больше прокси — тем дольше полный цикл.
-    Уменьшите <em>Per-proxy timeout</em> для ускорения.
-    Рекомендую <strong>3600</strong> (1 час) — достаточно для актуальных данных.
-    Изменения применяются без перезапуска.
+    <strong>⚠️</strong> Import+Check имеет приоритет. Два режима не запускаются одновременно.
+    DB-only: до 5 ч, Import+Check: до 24 ч. На 2500 профилей полный тест занимает ~10-15 мин (per-proxy timeout: 3-5 сек).
   </div>
 
-  <div class="tuning-group">
-    <h3>Full Check Cycle</h3>
-    <div class="tuning-item">
-      <span class="tuning-label">Interval</span>
-      <input type="number" id="checkInterval" class="input" min="300" max="86400" style="width:100px">
-      <span class="tuning-suffix">sec</span>
-      <span class="tuning-comment">Полный цикл: импорт → VLESS-тест всех → Speed test → сборка конфига</span>
+  <div class="tuning-grid">
+    <div class="tuning-group">
+      <h3>Cycle Behavior</h3>
+      <div class="tuning-item">
+        <span class="tuning-label">Per-proxy timeout</span>
+        <input type="number" id="vlessPerProxyTimeout" class="input" min="2" max="30" style="width:80px">
+        <span class="tuning-suffix">sec</span>
+        <span class="tuning-comment">3-5 сек для 2500 = ~15 мин</span>
+      </div>
+      <div class="tuning-item">
+        <span class="tuning-label">Speed test</span>
+        <input type="checkbox" id="speedTestEnabled" class="input" style="width:auto;height:auto;margin:0" checked>
+        <span class="tuning-comment">Замер скорости после VLESS-теста (влияет на ранжирование в конфиге)</span>
+      </div>
+      <div class="tuning-item">
+        <span class="tuning-label">Apply config</span>
+        <input type="checkbox" id="applyAfterTest" class="input" style="width:auto;height:auto;margin:0" checked>
+        <span class="tuning-comment">Пересобрать конфиг Xray после теста</span>
+      </div>
     </div>
-    <div class="tuning-item">
-      <span class="tuning-label">Per-proxy timeout</span>
-      <input type="number" id="vlessPerProxyTimeout" class="input" min="2" max="30" style="width:90px">
-      <span class="tuning-suffix">sec</span>
-      <span class="tuning-comment">Таймаут VLESS-теста одного прокси. Меньше — быстрее тест пачки</span>
-    </div>
-  </div>
 
-  <div class="tuning-group">
-    <h3>Cycle Behavior</h3>
-    <div class="tuning-item">
-      <span class="tuning-label">Test scope</span>
-      <select id="testScope" class="input" style="width:auto;min-width:130px">
-        <option value="all">All (working + failed)</option>
-        <option value="working">Working only</option>
-        <option value="failed">Failed only</option>
-      </select>
-      <span class="tuning-comment">Какие прокси тестировать в полном цикле</span>
+    <div class="tuning-group">
+      <h3>Speed Test</h3>
+      <div class="tuning-item">
+        <span class="tuning-label">Enabled</span>
+        <input type="checkbox" id="speedTestEnabled" class="input" style="width:auto;height:auto;margin:0" checked>
+      </div>
+      <div class="tuning-item">
+        <span class="tuning-label">Top-N</span>
+        <input type="number" id="speedTestMax" class="input" min="5" max="100" style="width:80px">
+        <span class="tuning-suffix">proxies</span>
+      </div>
+      <div class="tuning-item" style="flex-wrap:wrap">
+        <span class="tuning-label">Test file URL</span>
+        <input type="text" id="speedTestUrl" class="input" placeholder="http://..." style="flex:1;min-width:200px">
+      </div>
     </div>
-    <div class="tuning-item">
-      <span class="tuning-label">Reimport sources</span>
-      <input type="checkbox" id="reimportEnabled" class="input" style="width:auto;height:auto;margin:0">
-      <span class="tuning-comment">Переимпортировать из источников каждый цикл</span>
-    </div>
-    <div class="tuning-item">
-      <span class="tuning-label">Apply after test</span>
-      <input type="checkbox" id="applyAfterTest" class="input" style="width:auto;height:auto;margin:0">
-      <span class="tuning-comment">Пересобрать конфиг Xray после теста</span>
-    </div>
-  </div>
 
-  <div class="tuning-group">
-    <h3>Speed Test</h3>
-    <div class="tuning-item">
-      <span class="tuning-label">Enabled</span>
-      <input type="checkbox" id="speedTestEnabled" class="input" style="width:auto;height:auto;margin:0">
-      <span class="tuning-comment">Замер скорости после VLESS-теста</span>
+    <div class="tuning-group">
+      <h3>Xray Observatory</h3>
+      <div class="tuning-item">
+        <span class="tuning-label">Probe interval</span>
+        <input type="text" id="observatoryProbeInterval" class="input" style="width:80px" placeholder="15s">
+        <span class="tuning-comment">Как часто пинговать узлы (15-30s)</span>
+      </div>
+      <div class="tuning-item">
+        <span class="tuning-label">Balancer</span>
+        <select id="balancerStrategy" class="input" style="width:auto;min-width:130px">
+          <option value="leastLoad">leastLoad</option>
+          <option value="leastPing">leastPing</option>
+          <option value="random">random</option>
+        </select>
+      </div>
+      <div class="tuning-item">
+        <span class="tuning-label">Handshake</span>
+        <input type="number" id="handshakeTimeout" class="input" min="1" max="30" style="width:70px">
+        <span class="tuning-suffix">sec</span>
+      </div>
+      <div class="tuning-item">
+        <span class="tuning-label">Idle timeout</span>
+        <input type="number" id="connIdle" class="input" min="30" max="3600" style="width:70px">
+        <span class="tuning-suffix">sec</span>
+      </div>
     </div>
-    <div class="tuning-item">
-      <span class="tuning-label">Top-N</span>
-      <input type="number" id="speedTestMax" class="input" min="5" max="100" style="width:90px">
-      <span class="tuning-suffix">proxies</span>
-      <span class="tuning-comment">Сколько самых быстрых прокси тестировать</span>
-    </div>
-    <div class="tuning-item">
-      <span class="tuning-label">Test URL</span>
-      <input type="text" id="speedTestUrl" class="input" placeholder="http://proof.ovh.net/files/100Kb.dat" style="flex:1">
-      <span class="tuning-comment">Файл для скачивания HTTP (100KB — быстро, 1MB — точнее)</span>
-    </div>
-  </div>
 
-  <div class="tuning-group">
-    <h3>Xray Observatory</h3>
-    <div class="tuning-item">
-      <span class="tuning-label">Probe interval</span>
-      <input type="text" id="observatoryProbeInterval" class="input" style="width:90px" placeholder="15s">
-      <span class="tuning-suffix"></span>
-      <span class="tuning-comment">Как часто Observatory пингует узлы (рекомендую 15-30s). Меньше = быстрее переключение при падении</span>
-    </div>
-    <div class="tuning-item">
-      <span class="tuning-label">Balancer strategy</span>
-      <select id="balancerStrategy" class="input" style="width:auto;min-width:130px">
-        <option value="leastLoad">leastLoad</option>
-        <option value="leastPing">leastPing</option>
-        <option value="random">random</option>
-      </select>
-      <span class="tuning-comment">Как балансер выбирает узел: leastLoad (учёт ошибок) / leastPing (только пинг) / random</span>
-    </div>
-    <div class="tuning-item">
-      <span class="tuning-label">Handshake timeout</span>
-      <input type="number" id="handshakeTimeout" class="input" min="1" max="30" style="width:80px">
-      <span class="tuning-suffix">sec</span>
-      <span class="tuning-comment">Таймаут TLS-рукопожатия. Если узел не отвечает — сброс через N секунд (8-10 оптимально)</span>
-    </div>
-    <div class="tuning-item">
-      <span class="tuning-label">Idle timeout</span>
-      <input type="number" id="connIdle" class="input" min="30" max="3600" style="width:80px">
-      <span class="tuning-suffix">sec</span>
-      <span class="tuning-comment">Закрывать простаивающие соединения через N секунд (300 = 5 мин)</span>
+    <div class="tuning-group">
+      <h3>Logging</h3>
+      <div class="tuning-item">
+        <span class="tuning-label">Trim every</span>
+        <input type="number" id="logTrimEvery" class="input" min="10" max="99999" style="width:90px">
+        <span class="tuning-suffix">entries</span>
+      </div>
+      <div class="tuning-item">
+        <span class="tuning-label">Keep last</span>
+        <input type="number" id="logKeep" class="input" min="100" max="99999" style="width:90px">
+        <span class="tuning-suffix">entries</span>
+      </div>
     </div>
   </div>
 
-  <div class="tuning-group">
-    <h3>Logging</h3>
-    <div class="tuning-item">
-      <span class="tuning-label">Trim every</span>
-      <input type="number" id="logTrimEvery" class="input" min="10" max="99999" style="width:90px">
-      <span class="tuning-suffix">entries</span>
-      <span class="tuning-comment">Чистить после каждых N записей</span>
-    </div>
-    <div class="tuning-item">
-      <span class="tuning-label">Keep last</span>
-      <input type="number" id="logKeep" class="input" min="100" max="99999" style="width:90px">
-      <span class="tuning-suffix">entries</span>
-      <span class="tuning-comment">Оставлять последние N записей</span>
-    </div>
-  </div>
-  <div class="form-actions" style="margin-top:8px">
+  <div class="form-actions" style="margin-top:16px">
     <button class="btn btn-primary" onclick="saveSettings()">Save</button>
     <button class="btn" onclick="resetTuning()">Reset to defaults</button>
   </div>
 </div>
 
-<div class="settings-section" style="overflow-x:auto">
-  <h2>API Reference</h2>
-  <table style="width:100%;border-collapse:collapse;font-size:0.78rem">
+<details class="settings-section" style="overflow-x:auto;cursor:pointer">
+  <summary style="font-size:0.9rem;font-weight:600;padding:8px 0;cursor:pointer;color:var(--text-secondary)">API Reference <span style="font-size:0.7rem;color:var(--text-muted)">▸</span></summary>
+  <table style="width:100%;border-collapse:collapse;font-size:0.78rem;margin-top:8px">
     <thead>
       <tr style="border-bottom:1px solid var(--border)">
         <th style="text-align:left;padding:6px 8px">Method</th>
@@ -296,7 +309,7 @@
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray-restart</code></td><td style="padding:4px 8px">systemctl restart xray</td></tr>
     </tbody>
   </table>
-</div>
+</details>
 
 {% endblock %}
 {% block extra_js %}

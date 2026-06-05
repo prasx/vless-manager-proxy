@@ -15,6 +15,7 @@ from ..vless import parse_vless
 from ..proxy_manager import proxy_manager
 from ..importer import import_from_url
 from ..xray_configurator import xray_configurator
+from ..subscribe import update_subscribe_cache
 import json as json_module
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
@@ -294,6 +295,11 @@ def api_sources_import_all():
 
 # ─── Настройки ───
 
+_REBUILD_KEYS = {
+    "allowed_countries", "geo_enabled", "max_active_proxies", "probe_url",
+    "observatory_probe_interval", "balancer_strategy", "handshake_timeout", "conn_idle",
+}
+
 
 @api_bp.route("/settings", methods=["GET"])
 def api_settings_get():
@@ -304,15 +310,21 @@ def api_settings_get():
 
 @api_bp.route("/settings", methods=["POST"])
 def api_settings_set():
-    """POST /api/settings — сохраняет настройки; при изменении allowed_countries пересобирает конфиг."""
+    """POST /api/settings — сохраняет настройки."""
     data = request.get_json(silent=True) or {}
-    rebuild_keys = {"allowed_countries", "geo_enabled", "max_active_proxies", "probe_url", "observatory_probe_interval", "balancer_strategy", "handshake_timeout", "conn_idle"}
-    needs_rebuild = bool(rebuild_keys & set(data.keys()))
+
+    try:
+        _validate_settings(data)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+
     for k, v in data.items():
         Settings.set(k, str(v))
     add_log("INFO", f"Settings updated: {', '.join(data.keys())}")
-    if needs_rebuild:
+
+    if _REBUILD_KEYS & set(data.keys()):
         threading.Thread(target=xray_configurator.apply_all, daemon=True).start()
+
     d = xray_configurator.diagnose()
     hint = None
     if d["systemd_active"]:
@@ -320,7 +332,25 @@ def api_settings_set():
             hint = f"Panel config ≠ systemd. Set path to: {d['systemd_config_path']}"
         else:
             hint = "sudo systemctl restart xray"
-    return jsonify(success=True, diagnose=d, restart_hint=hint)
+    return jsonify(success=True, restart_hint=hint)
+
+
+_INT_KEYS = {
+    "max_active_proxies", "vless_per_proxy_timeout", "log_trim_every", "log_keep",
+    "speed_test_max", "handshake_timeout", "conn_idle", "check_interval_db", "check_interval_import",
+}
+
+
+def _validate_settings(data: dict) -> None:
+    """Базовая валидация настроек перед сохранением."""
+    for k in _INT_KEYS:
+        if k in data:
+            try:
+                val = int(data[k])
+                if val < 0:
+                    raise ValueError
+            except (ValueError, TypeError):
+                raise ValueError(f"{k} must be a positive integer, got {data[k]!r}")
 
 
 # ─── Бекап настроек и источников ───
@@ -361,7 +391,10 @@ def api_backup_import():
         val = str(v)
         # Не затираем настроенные geosite-правила пустым массивом из старого бекапа
         if k == "geosite_rules" and val == "[]" and cur and cur != "[]":
-            add_log("DEBUG", f"Backup: skipped empty geosite_rules (preserving {len(json_module.loads(cur))} existing rules)")
+            add_log(
+                "DEBUG",
+                f"Backup: skipped empty geosite_rules (preserving {len(json_module.loads(cur))} existing rules)",
+            )
             continue
         Settings.set(k, val)
         imported["settings"] += 1
@@ -412,23 +445,16 @@ def api_xray_status():
 @api_bp.route("/xray/outbounds", methods=["GET"])
 def api_xray_outbounds():
     """GET /api/xray/outbounds — список outbound с информацией о трафике."""
+    rc, stdout = xray_configurator._cached_statsquery()
     tags = xray_configurator.list_active_outbounds()
     nodes = [t for t in tags if t.startswith("node")]
     traffic = {}
-    try:
-        r = subprocess.run(
-            [Settings.xray_bin(), "api", "statsquery", "-s", "127.0.0.1:10085"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        for line in r.stdout.splitlines():
+    if rc == 0:
+        for line in stdout.splitlines():
             m = re.search(r"outbound>>>([^>]+)>>>traffic>>>([a-z]+)", line)
             if m:
                 tag, direction = m.group(1), m.group(2)
                 traffic.setdefault(tag, {})[direction] = True
-    except Exception as e:
-        add_log("WARN", f"Xray statsquery failed: {e}")
     return jsonify(tags=tags, nodes=nodes, traffic=traffic)
 
 
@@ -475,6 +501,7 @@ def api_xray_restart():
 
 _last_sub_refresh = 0.0
 
+
 @api_bp.route("/subscribe.txt")
 def api_subscribe():
     """GET /api/subscribe.txt — кешированный subscription file для клиентов.
@@ -484,7 +511,7 @@ def api_subscribe():
     now = time.time()
     if now - _last_sub_refresh > 60:
         _last_sub_refresh = now
-        xray_configurator._update_subscribe_cache()
+        update_subscribe_cache()
     if SUBSCRIBE_FILE.exists():
         return (
             SUBSCRIBE_FILE.read_text(encoding="utf-8"),
