@@ -176,8 +176,6 @@ def api_test(pid):
     proxy_manager._update_vless_status(pid, ok, lat if ok else 0)
     status = "working" if ok else "failed"
     add_log("INFO", f"Tested proxy #{pid} → {status} ({lat}ms)")
-    if ok:
-        xray_configurator.apply_all()
     return jsonify(status=status, latency=lat)
 
 

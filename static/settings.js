@@ -23,8 +23,7 @@ async function loadSettings() {
     $('proxyListen').value = s.proxy_listen || '0.0.0.0';
     $('maxActiveProxies').value = s.max_active_proxies || '30';
     $('probeUrl').value = s.probe_url || 'https://www.gstatic.com/generate_204';
-    $('checkInterval').value = s.check_interval || '600';
-    $('vlessInterval').value = s.vless_interval || '10800';
+    $('checkInterval').value = s.check_interval || '3600';
     $('vlessPerProxyTimeout').value = s.vless_per_proxy_timeout || '5';
     $('logTrimEvery').value = s.log_trim_every || '500';
     $('logKeep').value = s.log_keep || '2000';
@@ -49,8 +48,7 @@ async function saveSettings() {
     proxy_listen: $('proxyListen').value.trim() || '0.0.0.0',
     max_active_proxies: $('maxActiveProxies').value.trim() || '30',
     probe_url: $('probeUrl').value.trim() || 'https://www.gstatic.com/generate_204',
-    check_interval: $('checkInterval').value.trim() || '600',
-    vless_interval: $('vlessInterval').value.trim() || '10800',
+    check_interval: $('checkInterval').value.trim() || '3600',
     vless_per_proxy_timeout: $('vlessPerProxyTimeout').value.trim() || '5',
     log_trim_every: $('logTrimEvery').value.trim() || '500',
     log_keep: $('logKeep').value.trim() || '2000',
@@ -77,8 +75,7 @@ async function saveSettings() {
 }
 
 function resetTuning() {
-  $('checkInterval').value = '600';
-  $('vlessInterval').value = '10800';
+  $('checkInterval').value = '3600';
   $('vlessPerProxyTimeout').value = '5';
   $('observatoryProbeInterval').value = '120s';
   $('logTrimEvery').value = '500';

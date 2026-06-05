@@ -136,33 +136,24 @@
 
   <div class="tuning-notice">
     <strong>⚠️</strong> Чем больше прокси — тем дольше полный цикл.
-    Уменьшите <em>VLESS timeout</em> для ускорения.
+    Уменьшите <em>Per-proxy timeout</em> для ускорения.
+    Рекомендую <strong>3600</strong> (1 час) — достаточно для актуальных данных.
     Изменения применяются без перезапуска.
   </div>
 
   <div class="tuning-group">
-    <h3>Background tick</h3>
+    <h3>Full Check Cycle</h3>
     <div class="tuning-item">
-      <span class="tuning-label">Base interval</span>
-      <input type="number" id="checkInterval" class="input" min="60" max="3600" style="width:90px">
+      <span class="tuning-label">Interval</span>
+      <input type="number" id="checkInterval" class="input" min="300" max="86400" style="width:100px">
       <span class="tuning-suffix">sec</span>
-      <span class="tuning-comment">Как часто просыпается фоновый процесс. На этом интервале пересобирается конфиг и подписка</span>
-    </div>
-  </div>
-
-  <div class="tuning-group">
-    <h3>VLESS + Reimport</h3>
-    <div class="tuning-item">
-      <span class="tuning-label">VLESS interval</span>
-      <input type="number" id="vlessInterval" class="input" min="300" max="259200" style="width:90px">
-      <span class="tuning-suffix">sec</span>
-      <span class="tuning-comment">VLESS-тест source-only → всех рабочих + переимпорт (10800 = 3 часа)</span>
+      <span class="tuning-comment">Полный цикл: импорт → VLESS-тест всех → Speed test → сборка конфига</span>
     </div>
     <div class="tuning-item">
       <span class="tuning-label">Per-proxy timeout</span>
       <input type="number" id="vlessPerProxyTimeout" class="input" min="2" max="30" style="width:90px">
       <span class="tuning-suffix">sec</span>
-      <span class="tuning-comment">Таймаут на один профиль. Меньше — быстрее тест пачки</span>
+      <span class="tuning-comment">Таймаут VLESS-теста одного прокси. Меньше — быстрее тест пачки</span>
     </div>
   </div>
 

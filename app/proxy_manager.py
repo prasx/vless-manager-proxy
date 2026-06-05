@@ -22,7 +22,6 @@ class ProxyManager:
 
     def __init__(self):
         self._vless_busy = False
-        self._failed_cycle = 0  # счётчик фоновых циклов для ретеста failed
         self.progress = {
             "running": False,
             "total": 0,
@@ -259,7 +258,6 @@ class ProxyManager:
             return
         add_log("INFO", f"Speed test: {len(rows)} proxies")
         self.progress.update(running=True, total=len(rows), done=0, ok=0, label="Speed test")
-        changed = False
         timeout = int(Settings.get("vless_per_proxy_timeout", "5")) * 3
         with ThreadPoolExecutor(max_workers=5) as pool:
             futures = {}
@@ -274,17 +272,11 @@ class ProxyManager:
                     add_log("DEBUG", f"Speed test #{pid} exception: {e}")
                     kbps = 0
                 db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (kbps, pid))
-                if kbps:
-                    changed = True
                 with self._progress_lock:
                     self.progress["done"] += 1
                     if kbps:
                         self.progress["ok"] += 1
                 add_log("INFO", f"Speed #{pid}: {kbps} kbps")
-        if changed:
-            from .xray_configurator import xray_configurator
-            xray_configurator.apply_all(blocking=True)
-            add_log("INFO", "Config reapplied after speed test")
 
     def _test_speed_single(self, link, timeout=15):
         parsed = parse_vless(link)
@@ -337,9 +329,6 @@ class ProxyManager:
                 "INFO",
                 f"VLESS test {link[:50]} -> {'working' if ok else 'failed'} ({lat}ms)",
             )
-            from .xray_configurator import xray_configurator
-
-            xray_configurator.apply_all()
 
     # ─── Parallel batch testing ───
 
@@ -381,10 +370,6 @@ class ProxyManager:
             # Speed test всех рабочих прокси после VLESS
             if label in ("all", "batch-test"):
                 self._run_speed_test_for_top()
-
-            # Конфиг собирается один раз — после speed test, сортировка по скорости+пингу
-            from .xray_configurator import xray_configurator
-            xray_configurator.apply_all(blocking=True)
         finally:
             if self.progress["label"] == "Speed test":
                 # Показываем в last итог: VLESS + Speed
@@ -404,9 +389,13 @@ class ProxyManager:
             add_log("WARN", "Test all VLESS: no proxies to test")
             return
         self._bg_vless_batch(rows, "all")
+        from .xray_configurator import xray_configurator
+        xray_configurator.apply_all(blocking=True)
 
     def batch_test_vless(self, rows):
         self._bg_vless_batch(rows, "batch-test")
+        from .xray_configurator import xray_configurator
+        xray_configurator.apply_all(blocking=True)
 
     # ─── Background tasks ───
 
@@ -422,28 +411,19 @@ class ProxyManager:
             self._vless_busy = False
 
     def background_checker(self):
-        last_vless = 0.0
         while True:
             try:
                 time.sleep(Settings.check_interval())
             except Exception:
                 time.sleep(60)
             try:
-                from .xray_configurator import xray_configurator
-
-                xray_configurator.apply_all()
-                now = time.time()
-                if (
-                    now - last_vless >= Settings.vless_interval()
-                    and not self._vless_busy
-                ):
-                    last_vless = now
+                if not self._vless_busy:
                     threading.Thread(target=self._run_vless_chain, daemon=True).start()
-                    add_log("INFO", "BG VLESS chain started")
             except Exception as e:
                 add_log("ERROR", f"Background checker crashed: {e}")
 
     def _run_vless_chain(self):
+        self._vless_busy = True
         try:
             # Реимпорт из всех источников
             src_list = db_q("SELECT id, url FROM sources")
@@ -454,39 +434,18 @@ class ProxyManager:
 
             enrich_all_unknown_countries()
 
-            # Тестируем source-only (из подписок)
-            src_rows = db_q(
-                "SELECT id, link FROM proxies WHERE status='working' AND source_id IS NOT NULL"
-            )
-            if src_rows:
-                add_log("INFO", f"VLESS source-only: {len(src_rows)} proxies")
-                self._bg_vless_batch(src_rows, "source-only")
-
-            # Тестируем все working (без source-only — уже протестированы выше)
-            all_rows = db_q(
-                "SELECT id, link FROM proxies WHERE status='working' AND source_id IS NULL"
-            )
+            # VLESS-тест + Speed test всех прокси (рабочих, failed, pending)
+            all_rows = db_q("SELECT id, link FROM proxies")
             if all_rows:
-                add_log("INFO", f"VLESS all: {len(all_rows)} proxies")
+                add_log("INFO", f"Full check: {len(all_rows)} proxies")
                 self._bg_vless_batch(all_rows, "all")
-
-            # Каждый 3-й цикл — ретест failed прокси
-            self._failed_cycle += 1
-            if self._failed_cycle % 3 == 0:
-                failed_rows = db_q("SELECT id, link FROM proxies WHERE status='failed'")
-                if failed_rows:
-                    add_log(
-                        "INFO",
-                        f"VLESS retest failed: {len(failed_rows)} proxies",
-                    )
-                    self._bg_vless_batch(failed_rows, "retest-failed")
 
             from .xray_configurator import xray_configurator
 
             xray_configurator.apply_all()
-            add_log("INFO", "VLESS chain completed")
+            add_log("INFO", "Full check cycle completed")
         except Exception as e:
-            add_log("ERROR", f"VLESS chain crashed: {e}")
+            add_log("ERROR", f"Full check cycle crashed: {e}")
         finally:
             self._vless_busy = False
 
