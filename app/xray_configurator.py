@@ -14,6 +14,7 @@ from pathlib import Path
 from .db import db_q, Settings, xray_config_path
 from .utils import add_log, moscow_str
 from .subscribe import update_subscribe_cache
+from .vless import parse_vless, stream_settings, sanitize_flow
 from config import SOCKS_PORT, HTTP_PORT, API_PORT, API_LISTEN
 
 
