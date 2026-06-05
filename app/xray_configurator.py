@@ -22,9 +22,10 @@ class XrayConfigurator:
     """Управление конфигурацией Xray: генерация, применение через API, диагностика."""
 
     def __init__(self):
-        """Инициализирует блокировку для предотвращения конкурентных применений конфига."""
         self._apply_lock = threading.Lock()
         self._last_config_hash = ""
+        self._last_restart_time = 0.0
+        self._restart_cooldown = 120  # seconds
 
     # ─── Inbounds / Base config helpers ───
 
@@ -247,15 +248,23 @@ class XrayConfigurator:
             "outbounds": outbounds,
             "routing": {"domainStrategy": "IPIfNonMatch", "rules": routing_rules},
         }
+        config["policy"] = {
+            "levels": {
+                "0": {
+                    "handshake": int(Settings.get("handshake_timeout", "8")),
+                    "connIdle": int(Settings.get("conn_idle", "300")),
+                }
+            }
+        }
         if proxy_obs:
             config["observatory"] = {
                 "subjectSelector": ["node"],
                 "probeUrl": Settings.probe_url(),
-                "probeInterval": Settings.get("observatory_probe_interval", "10s"),
+                "probeInterval": Settings.get("observatory_probe_interval", "15s"),
                 "enableConcurrency": True,
             }
             config["routing"]["balancers"] = [
-                {"tag": "auto", "selector": ["node"], "strategy": {"type": "leastPing"}}
+                {"tag": "auto", "selector": ["node"], "strategy": {"type": Settings.get("balancer_strategy", "leastLoad")}}
             ]
         return self._inject_api(config)
 
@@ -302,6 +311,14 @@ class XrayConfigurator:
                 + [
                     {"type": "field", "network": "tcp,udp", "outboundTag": "direct"},
                 ],
+            },
+            "policy": {
+                "levels": {
+                    "0": {
+                        "handshake": int(Settings.get("handshake_timeout", "8")),
+                        "connIdle": int(Settings.get("conn_idle", "300")),
+                    }
+                }
             },
         }
         return self._inject_api(base)
@@ -361,31 +378,36 @@ class XrayConfigurator:
             return []
 
     @staticmethod
+    def _remove_outbound(tag):
+        """Удаляет один outbound по тегу через Xray API."""
+        try:
+            r = subprocess.run(
+                [
+                    Settings.xray_bin(),
+                    "api",
+                    "removeoutbound",
+                    "-s",
+                    f"{API_LISTEN}:{API_PORT}",
+                    "--tag",
+                    tag,
+                ],
+                capture_output=True,
+                timeout=10,
+            )
+            if r.returncode != 0:
+                add_log(
+                    "DEBUG",
+                    f"Remove outbound {tag} failed (code {r.returncode}): {r.stderr.decode(errors='replace')[:200]}",
+                )
+        except Exception as e:
+            add_log("DEBUG", f"Failed to remove outbound {tag}: {e}")
+
+    @staticmethod
     def remove_all_outbounds():
-        """Удаляет все node* outbound из Xray через API. Логирует ошибки."""
+        """Удаляет все node* outbound из Xray через API."""
         for tag in XrayConfigurator.list_active_outbounds():
             if tag.startswith("node"):
-                try:
-                    r = subprocess.run(
-                        [
-                            Settings.xray_bin(),
-                            "api",
-                            "removeoutbound",
-                            "-s",
-                            f"{API_LISTEN}:{API_PORT}",
-                            "--tag",
-                            tag,
-                        ],
-                        capture_output=True,
-                        timeout=10,
-                    )
-                    if r.returncode != 0:
-                        add_log(
-                            "DEBUG",
-                            f"Remove outbound {tag} failed (code {r.returncode}): {r.stderr.decode(errors='replace')[:200]}",
-                        )
-                except Exception as e:
-                    add_log("DEBUG", f"Failed to remove outbound {tag}: {e}")
+                XrayConfigurator._remove_outbound(tag)
 
     @staticmethod
     def add_outbound(ob):
@@ -469,7 +491,10 @@ class XrayConfigurator:
                 Settings.get("geo_enabled", "true"),
                 Settings.get("geosite_rules", "[]"),
                 Settings.probe_url(),
-                Settings.get("observatory_probe_interval", "10s"),
+                Settings.get("observatory_probe_interval", "15s"),
+                Settings.get("balancer_strategy", "leastLoad"),
+                Settings.get("handshake_timeout", "8"),
+                Settings.get("conn_idle", "300"),
             ]
         )
         return hashlib.sha256(sig.encode()).hexdigest()
@@ -543,6 +568,18 @@ class XrayConfigurator:
             cfg_path.write_text(json.dumps(full, indent=2))
             add_log("INFO", "Full config written to disk")
 
+            # Cooldown после рестарта: не дёргаем API, даём Xray устаканиться
+            import time
+
+            since_restart = time.time() - self._last_restart_time
+            if since_restart < self._restart_cooldown:
+                add_log(
+                    "INFO",
+                    f"Restart cooldown ({self._restart_cooldown - since_restart:.0f}s left) — skipping API hot-reload, config on disk",
+                )
+                return
+
+            # Удаляем все старые node* outbound и добавляем новые
             self.remove_all_outbounds()
             added = 0
             for ob in limited_obs:
@@ -553,12 +590,22 @@ class XrayConfigurator:
                     "INFO",
                     f"Applied {added}/{len(limited_obs)} proxies via API (total working: {proxy_count})",
                 )
+            elif added == 0:
+                add_log(
+                    "WARN",
+                    f"All {len(limited_obs)} outbound adds failed via API — restarting Xray to reload config from disk",
+                )
+                self.restart_via_systemd()
+                self._last_restart_time = time.time()
+                for wait in (5, 10, 15):
+                    time.sleep(wait)
+                    if self.api_ok():
+                        break
             else:
                 add_log(
                     "WARN",
-                    f"Only {added}/{len(limited_obs)} outbound adds succeeded via API — restarting Xray",
+                    f"Only {added}/{len(limited_obs)} outbound adds succeeded via API — config on disk is intact for next cycle",
                 )
-                self._write_and_restart(cfg_path, max_active)
         else:
             self._write_and_restart(cfg_path, max_active)
         self._update_subscribe_cache()
@@ -582,6 +629,7 @@ class XrayConfigurator:
             return
         add_log("INFO", "Restarting Xray to enable API services...")
         self.restart_via_systemd()
+        self._last_restart_time = time.time()
         # Ждём и проверяем, взлетел ли Xray (с повторными попытками)
         import time
 

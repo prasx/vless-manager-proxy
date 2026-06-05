@@ -306,7 +306,7 @@ def api_settings_get():
 def api_settings_set():
     """POST /api/settings — сохраняет настройки; при изменении allowed_countries пересобирает конфиг."""
     data = request.get_json(silent=True) or {}
-    rebuild_keys = {"allowed_countries", "geo_enabled", "max_active_proxies", "probe_url", "observatory_probe_interval"}
+    rebuild_keys = {"allowed_countries", "geo_enabled", "max_active_proxies", "probe_url", "observatory_probe_interval", "balancer_strategy", "handshake_timeout", "conn_idle"}
     needs_rebuild = bool(rebuild_keys & set(data.keys()))
     for k, v in data.items():
         Settings.set(k, str(v))

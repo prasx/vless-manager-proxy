@@ -158,6 +158,29 @@
   </div>
 
   <div class="tuning-group">
+    <h3>Cycle Behavior</h3>
+    <div class="tuning-item">
+      <span class="tuning-label">Test scope</span>
+      <select id="testScope" class="input" style="width:auto;min-width:130px">
+        <option value="all">All (working + failed)</option>
+        <option value="working">Working only</option>
+        <option value="failed">Failed only</option>
+      </select>
+      <span class="tuning-comment">Какие прокси тестировать в полном цикле</span>
+    </div>
+    <div class="tuning-item">
+      <span class="tuning-label">Reimport sources</span>
+      <input type="checkbox" id="reimportEnabled" class="input" style="width:auto;height:auto;margin:0">
+      <span class="tuning-comment">Переимпортировать из источников каждый цикл</span>
+    </div>
+    <div class="tuning-item">
+      <span class="tuning-label">Apply after test</span>
+      <input type="checkbox" id="applyAfterTest" class="input" style="width:auto;height:auto;margin:0">
+      <span class="tuning-comment">Пересобрать конфиг Xray после теста</span>
+    </div>
+  </div>
+
+  <div class="tuning-group">
     <h3>Speed Test</h3>
     <div class="tuning-item">
       <span class="tuning-label">Enabled</span>
@@ -181,9 +204,30 @@
     <h3>Xray Observatory</h3>
     <div class="tuning-item">
       <span class="tuning-label">Probe interval</span>
-      <input type="text" id="observatoryProbeInterval" class="input" style="width:90px" placeholder="120s">
+      <input type="text" id="observatoryProbeInterval" class="input" style="width:90px" placeholder="15s">
       <span class="tuning-suffix"></span>
-      <span class="tuning-comment">Как часто Observatory пингует узлы. Больше = стабильнее, но медленнее реакция на падение. Рекомендую 120s</span>
+      <span class="tuning-comment">Как часто Observatory пингует узлы (рекомендую 15-30s). Меньше = быстрее переключение при падении</span>
+    </div>
+    <div class="tuning-item">
+      <span class="tuning-label">Balancer strategy</span>
+      <select id="balancerStrategy" class="input" style="width:auto;min-width:130px">
+        <option value="leastLoad">leastLoad</option>
+        <option value="leastPing">leastPing</option>
+        <option value="random">random</option>
+      </select>
+      <span class="tuning-comment">Как балансер выбирает узел: leastLoad (учёт ошибок) / leastPing (только пинг) / random</span>
+    </div>
+    <div class="tuning-item">
+      <span class="tuning-label">Handshake timeout</span>
+      <input type="number" id="handshakeTimeout" class="input" min="1" max="30" style="width:80px">
+      <span class="tuning-suffix">sec</span>
+      <span class="tuning-comment">Таймаут TLS-рукопожатия. Если узел не отвечает — сброс через N секунд (8-10 оптимально)</span>
+    </div>
+    <div class="tuning-item">
+      <span class="tuning-label">Idle timeout</span>
+      <input type="number" id="connIdle" class="input" min="30" max="3600" style="width:80px">
+      <span class="tuning-suffix">sec</span>
+      <span class="tuning-comment">Закрывать простаивающие соединения через N секунд (300 = 5 мин)</span>
     </div>
   </div>
 

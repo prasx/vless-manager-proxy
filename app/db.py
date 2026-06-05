@@ -124,10 +124,16 @@ def init_db():
         "log_keep": "2000",
         "geosite_rules": '[]',
         "geo_enabled": "true",
-        "observatory_probe_interval": "120s",
+        "observatory_probe_interval": "15s",
         "speed_test_enabled": "true",
         "speed_test_max": "20",
         "speed_test_url": "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png",
+        "test_scope": "all",
+        "reimport_enabled": "true",
+        "apply_after_test": "true",
+        "balancer_strategy": "leastLoad",
+        "handshake_timeout": "8",
+        "conn_idle": "300",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))

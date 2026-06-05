@@ -305,8 +305,8 @@ class ProxyManager:
             )
         else:
             db_q(
-                "UPDATE proxies SET status='failed', latency=?, latency_vless=?, failed_since=COALESCE(failed_since, ?) WHERE id=?",
-                (lat_vless, lat_vless, now, pid),
+                "UPDATE proxies SET status='failed', latency=0, latency_vless=0, speed_kbps=0, failed_since=COALESCE(failed_since, ?) WHERE id=?",
+                (now, pid),
             )
 
     def _record_completion(self, label):
@@ -425,25 +425,32 @@ class ProxyManager:
     def _run_vless_chain(self):
         self._vless_busy = True
         try:
-            # Реимпорт из всех источников
-            src_list = db_q("SELECT id, url FROM sources")
-            for src in src_list:
-                import_from_url(src["url"], source_id=src["id"])
+            # Реимпорт из источников (опционально)
+            if Settings.get("reimport_enabled", "true") == "true":
+                src_list = db_q("SELECT id, url FROM sources")
+                for src in src_list:
+                    import_from_url(src["url"], source_id=src["id"])
+                from .utils import enrich_all_unknown_countries
+                enrich_all_unknown_countries()
 
-            from .utils import enrich_all_unknown_countries
+            # Какие прокси тестировать
+            scope = Settings.get("test_scope", "all")
+            if scope == "working":
+                rows = db_q("SELECT id, link FROM proxies WHERE status='working'")
+            elif scope == "failed":
+                rows = db_q("SELECT id, link FROM proxies WHERE status='failed'")
+            else:
+                rows = db_q("SELECT id, link FROM proxies")
 
-            enrich_all_unknown_countries()
+            if rows:
+                add_log("INFO", f"Full check ({scope}): {len(rows)} proxies")
+                self._bg_vless_batch(rows, "all")
 
-            # VLESS-тест + Speed test всех прокси (рабочих, failed, pending)
-            all_rows = db_q("SELECT id, link FROM proxies")
-            if all_rows:
-                add_log("INFO", f"Full check: {len(all_rows)} proxies")
-                self._bg_vless_batch(all_rows, "all")
-
-            from .xray_configurator import xray_configurator
-
-            xray_configurator.apply_all()
-            add_log("INFO", "Full check cycle completed")
+            # Пересборка конфига (опционально)
+            if Settings.get("apply_after_test", "true") == "true":
+                from .xray_configurator import xray_configurator
+                xray_configurator.apply_all()
+                add_log("INFO", "Full check cycle completed")
         except Exception as e:
             add_log("ERROR", f"Full check cycle crashed: {e}")
         finally:
