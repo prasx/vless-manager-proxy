@@ -320,6 +320,8 @@ async function importBackup(event) {
 }
 
 loadSettings();
+loadCountries();
+loadGeositeRules();
 setInterval(() => {
   api('GET', '/api/xray/status').then(renderXrayStatus).catch(() => {});
 }, 5000);
