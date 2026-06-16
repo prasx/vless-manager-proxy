@@ -1,12 +1,13 @@
 """API-маршруты: прокси, источники, настройки, Xray, логи, импорт."""
 
+import json
 import re
 import sqlite3
 import subprocess
 import threading
 import time
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response
 
 from ..db import db_q, Settings
 from ..utils import add_log, moscow_str, now_utc
@@ -37,7 +38,7 @@ def api_logs():
         params = [level]
     total = db_q(f"SELECT COUNT(*) c FROM logs {where}", params)[0]["c"]
     rows = db_q(
-        f"SELECT id, timestamp, level, message FROM logs {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+        f"SELECT id, timestamp, level, message, correlation_id FROM logs {where} ORDER BY id DESC LIMIT ? OFFSET ?",
         params + [limit, offset],
     )
     logs = []
@@ -48,6 +49,13 @@ def api_logs():
                 d["timestamp"] = moscow_str(d["timestamp"])
             except Exception:
                 pass
+        try:
+            parsed = json.loads(d["message"])
+            if isinstance(parsed, dict) and "msg" in parsed:
+                d["message"] = parsed["msg"]
+                d["_json"] = parsed
+        except (json.JSONDecodeError, TypeError, KeyError):
+            pass
         logs.append(d)
     return jsonify(logs=logs, total=total)
 
@@ -66,36 +74,58 @@ def api_logs_clear():
 def proxy_filter_clause(f):
     """Строит SQL WHERE-условие для фильтрации прокси по статусу."""
     if f == "working":
-        return "WHERE status='working'"
+        return "status='working'"
     elif f == "vless":
-        return "WHERE status='working' AND latency_vless > 0"
+        return "status='working' AND latency_vless > 0"
     elif f == "failed_recent":
-        return "WHERE status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
+        return "status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
     elif f == "top_speed":
-        return "WHERE speed_kbps >= 5000"
+        min_kbps = Settings.min_speed_kbps()
+        if min_kbps > 0:
+            return f"speed_kbps >= {min_kbps}"
+        return "speed_kbps >= 5000"
     return ""
+
+
+def _build_where(f, src, search) -> tuple[str, list]:
+    clauses = []
+    params = []
+    fc = proxy_filter_clause(f)
+    if fc:
+        clauses.append(fc)
+    if src == "unknown":
+        clauses.append("source_id IS NULL")
+    elif src and src.isdigit():
+        clauses.append("source_id = ?")
+        params.append(int(src))
+    if search:
+        clauses.append("(host LIKE ? OR CAST(id AS TEXT) LIKE ?)")
+        like = f"%{search}%"
+        params.extend([like, like])
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    return where, params
 
 
 @api_bp.route("/proxies")
 def api_proxies():
-    """GET /api/proxies?filter=&source=&limit=&offset= — список прокси с пагинацией."""
+    """GET /api/proxies?filter=&source=&search=&limit=&offset= — список прокси с пагинацией."""
     f = request.args.get("filter", "")
     src = request.args.get("source", "")
+    search = request.args.get("search", "").strip()
     limit = request.args.get("limit", type=int)
     offset = request.args.get("offset", type=int, default=0)
-    clause = proxy_filter_clause(f)
-    if src == "unknown":
-        clause = (clause + " AND " if clause else "WHERE ") + "source_id IS NULL"
-    elif src and src.isdigit():
-        clause = (clause + " AND " if clause else "WHERE ") + f"source_id = {int(src)}"
+    where, params = _build_where(f, src, search)
 
-    total = db_q(f"SELECT COUNT(*) as c FROM proxies {clause}")[0]["c"]
+    total = db_q(f"SELECT COUNT(*) as c FROM proxies {where}", params)[0]["c"]
     limit_sql = ""
+    limit_params = []
     if limit is not None:
-        limit_sql = f" LIMIT {limit} OFFSET {offset}"
+        limit_sql = " LIMIT ? OFFSET ?"
+        limit_params = [limit, offset]
     order = "speed_kbps DESC" if f == "top_speed" else "status, latency"
     rows = db_q(
-        f"SELECT id, host, port, country, status, latency, latency_vless, speed_kbps, failed_since, security, link FROM proxies {clause} ORDER BY {order}{limit_sql}"
+        f"SELECT id, host, port, country, status, latency, latency_vless, speed_kbps, failed_since, security, link FROM proxies {where} ORDER BY {order}{limit_sql}",
+        params + limit_params,
     )
     if limit is not None:
         return jsonify(proxies=[dict(r) for r in rows], total=total)
@@ -110,7 +140,9 @@ def api_status():
     failed_recent = db_q(
         "SELECT COUNT(*) c FROM proxies WHERE status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
     )[0]["c"]
-    top_speed = db_q("SELECT COUNT(*) c FROM proxies WHERE speed_kbps >= 5000")[0]["c"]
+    min_kbps = Settings.min_speed_kbps()
+    top_threshold = min_kbps if min_kbps > 0 else 5000
+    top_speed = db_q(f"SELECT COUNT(*) c FROM proxies WHERE speed_kbps >= {top_threshold}")[0]["c"]
     ru = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working' AND country='RU'")[
         0
     ]["c"]
@@ -126,6 +158,7 @@ def api_status():
         working=working,
         failed_recent=failed_recent,
         top_speed=top_speed,
+        top_speed_threshold=top_threshold,
         ru=ru,
         world=world,
         sources=[dict(r) for r in sources],
@@ -298,6 +331,7 @@ def api_sources_import_all():
 _REBUILD_KEYS = {
     "allowed_countries", "geo_enabled", "max_active_proxies", "probe_url",
     "observatory_probe_interval", "balancer_strategy", "handshake_timeout", "conn_idle",
+    "min_speed_mbps",
 }
 
 
@@ -338,6 +372,7 @@ def api_settings_set():
 _INT_KEYS = {
     "max_active_proxies", "vless_per_proxy_timeout", "log_trim_every", "log_keep",
     "speed_test_max", "handshake_timeout", "conn_idle", "check_interval_db", "check_interval_import",
+    "speed_test_adaptive_sec",
 }
 
 
@@ -496,6 +531,32 @@ def api_xray_restart():
     return jsonify(error="systemctl restart xray failed"), 500
 
 
+@api_bp.route("/health")
+def api_health():
+    """GET /api/health — health check для systemd/monitoring."""
+    db_ok = True
+    try:
+        db_q("SELECT 1")
+    except Exception:
+        db_ok = False
+    xr = xray_configurator
+    api_ok = xr.api_ok()
+    d = xr.diagnose()
+    xray_running = bool(api_ok or (d["systemd_active"] and d["ports"].get("1080")))
+    proxy_count = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
+    return jsonify(
+        status="ok" if db_ok else "error",
+        db=db_ok,
+        xray=dict(
+            running=xray_running,
+            api_accessible=api_ok,
+            systemd_active=d["systemd_active"],
+            config_mismatch=d["config_mismatch"],
+        ),
+        proxies=dict(total=proxy_count),
+    )
+
+
 # ─── Подписка / Файлы ───
 
 
@@ -552,6 +613,13 @@ def api_countries():
 # ─── Прогресс тестов ───
 
 
+@api_bp.route("/test-cancel", methods=["POST"])
+def api_test_cancel():
+    """POST /api/test-cancel — отменяет текущий фоновый тест."""
+    proxy_manager._cancel.set()
+    return jsonify(success=True)
+
+
 @api_bp.route("/test-progress")
 def api_test_progress():
     """GET /api/test-progress — текущий статус фонового VLESS-теста."""
@@ -567,6 +635,33 @@ def api_test_progress():
         last_ok=p["last_ok"],
         last_total=p["last_total"],
     )
+
+
+@api_bp.route("/test-progress/stream")
+def api_test_progress_stream():
+    """SSE: поток обновлений test-progress. Альтернатива polling."""
+    def generate():
+        last_done = -1
+        while True:
+            p = proxy_manager.progress
+            d = dict(
+                running=p["running"],
+                total=p["total"],
+                done=p["done"],
+                ok=p["ok"],
+                label=p["label"],
+                last_completed=p["last_completed"],
+                last_label=p["last_label"],
+                last_ok=p["last_ok"],
+                last_total=p["last_total"],
+            )
+            if d["done"] != last_done or not d["running"]:
+                yield f"data: {json.dumps(d)}\n\n"
+                last_done = d["done"]
+                if not d["running"] and d["done"] == d["total"]:
+                    return
+            time.sleep(0.5)
+    return Response(generate(), mimetype="text/event-stream")
 
 
 # ─── GeoSite Rules ───

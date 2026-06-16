@@ -17,7 +17,7 @@
   </div>
   <div class="stat-card" data-filter="top_speed">
     <div class="num" id="statTopSpeed">{{ top_speed }}</div>
-    <div class="label-s">top speed ≥5Mbps</div>
+    <div class="label-s">top speed</div>
   </div>
   <div class="stat-card" data-filter="failed_recent">
     <div class="num" id="statFailedRecent">{{ failed_recent }}</div>
@@ -27,6 +27,7 @@
 
 <div id="activeNode">
   <span id="activeInfo">// active: —</span>
+  <span id="healthIndicator"></span>
   <div class="source-bar" id="sourceBar">
     <button class="btn btn-sm btn-primary" id="sourceAll" data-source="" onclick="setSource('')">All</button>
     <button class="btn btn-sm" id="sourceUnknown" data-source="unknown" onclick="setSource('unknown')">Custom</button>
@@ -40,7 +41,9 @@
     <button class="btn btn-apply" id="batchTestBtn" style="display:none" onclick="batchTest()">Test selected</button>
     <button class="btn btn-danger" id="batchDeleteBtn" style="display:none" onclick="batchDelete()">Delete selected</button>
   </div>
+  <input type="search" id="searchInput" class="input" placeholder="Search host or id..." style="width:180px;font-size:0.78rem;margin-left:8px">
   <span id="batchCount" style="font-size:0.72rem;color:var(--text-muted)"></span>
+  <button class="btn btn-danger" id="cancelTestBtn" style="display:none" onclick="cancelTest()">Cancel</button>
   <div id="testProgressBar" style="display:none;margin-top:8px;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
     <div id="testProgressFill" style="height:100%;width:0%;background:var(--green);transition:width .5s"></div>
   </div>

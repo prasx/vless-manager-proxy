@@ -61,6 +61,8 @@ async function loadSettings() {
     $('speedTestMax').value = s.speed_test_max || '30';
     $('speedTestUrl').value = s.speed_test_url || 'http://speedtest.selectel.ru/10MB';
     $('applyAfterTest').checked = s.apply_after_test !== 'false';
+    $('minSpeedMbps').value = s.min_speed_mbps || '0';
+    $('speedTestAdaptiveSec').value = s.speed_test_adaptive_sec || '2';
   }
   $('geoEnabled').checked = s.geo_enabled !== 'false';
 }
@@ -84,6 +86,8 @@ async function saveSettings() {
     speed_test_max: $('speedTestMax').value.trim() || '30',
     speed_test_url: $('speedTestUrl').value.trim() || 'http://speedtest.selectel.ru/10MB',
     apply_after_test: $('applyAfterTest').checked ? 'true' : 'false',
+    min_speed_mbps: $('minSpeedMbps').value.trim() || '0',
+    speed_test_adaptive_sec: $('speedTestAdaptiveSec').value.trim() || '2',
     observatory_probe_interval: $('observatoryProbeInterval').value.trim() || '15s',
     balancer_strategy: $('balancerStrategy').value,
     handshake_timeout: $('handshakeTimeout').value.trim() || '8',
@@ -117,6 +121,8 @@ function resetTuning() {
   $('connIdle').value = '300';
   $('speedTestMax').value = '30';
   $('speedTestUrl').value = 'http://speedtest.selectel.ru/10MB';
+  $('minSpeedMbps').value = '0';
+  $('speedTestAdaptiveSec').value = '2';
   $('balancerStrategy').value = 'random';
   toast('Tuning values reset to defaults — click Save to apply');
 }

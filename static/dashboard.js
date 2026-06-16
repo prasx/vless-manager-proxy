@@ -22,14 +22,28 @@ function formatSpeed(kbps) {
   return `${kbps} Kbps`;
 }
 
+let currentSearch = '';
+
 function makeProxiesUrl(limit, offset) {
   let url = '/api/proxies?filter=' + currentFilter;
   if (currentSource) {
     url += '&source=' + currentSource;
   }
+  if (currentSearch) {
+    url += '&search=' + encodeURIComponent(currentSearch);
+  }
   if (limit != null) url += `&limit=${limit}&offset=${offset}`;
   return url;
 }
+
+let searchTimer;
+$('#searchInput')?.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    currentSearch = $('#searchInput').value.trim();
+    loadData();
+  }, 300);
+});
 
 function setFilter(f) {
   currentFilter = f;
@@ -83,17 +97,30 @@ async function fetchPage(reset) {
   }
 
   if (reset) {
-    const [status, ob, xr] = await Promise.all([
+    const [status, ob, xr, health] = await Promise.all([
       api('GET', '/api/status'),
       api('GET', '/api/xray/outbounds').catch(() => ({nodes:[], traffic:{}})),
-      api('GET', '/api/xray/status').catch(() => ({running:false}))
+      api('GET', '/api/xray/status').catch(() => ({running:false})),
+      api('GET', '/api/health').catch(() => null),
     ]);
+    const healthEl = $('#healthIndicator');
+    if (healthEl) {
+      const ok = health?.status === 'ok';
+      healthEl.innerHTML = ok
+        ? '<span class="badge badge-green" style="margin-left:8px;font-size:0.62rem">healthy</span>'
+        : '<span class="badge badge-red" style="margin-left:8px;font-size:0.62rem">unhealthy</span>';
+    }
 
     proxies.forEach(p => linkMap[p.id] = p.link);
     $('#statTotal').textContent = status.total;
     $('#statWorking').textContent = status.working;
     $('#statFailedRecent').textContent = status.failed_recent;
     $('#statTopSpeed').textContent = status.top_speed;
+    const speedLabel = document.querySelector('.stat-card[data-filter="top_speed"] .label-s');
+    if (speedLabel && status.top_speed_threshold) {
+      const mbps = status.top_speed_threshold / 1000;
+      speedLabel.textContent = mbps >= 1 ? `top speed ≥${mbps}Mbps` : `top speed ≥${status.top_speed_threshold}Kbps`;
+    }
     renderSourceButtons(status.sources, status.unknown_count, status.total);
     renderTraffic(ob, xr);
   } else {
@@ -368,6 +395,11 @@ async function testAll() {
   setTimeout(loadData, 3000);
 }
 
+async function cancelTest() {
+  await api('POST','/api/test-cancel');
+  toast('test cancelled');
+}
+
 async function cleanupFailed() {
   if (!confirm('Delete ALL failed proxies? You can re-import from Sources to restore working ones.')) return;
   const r = await api('POST','/api/cleanup');
@@ -383,19 +415,18 @@ window.addEventListener('resize', () => {
 });
 
 loadData();
-setInterval(loadData, 30000);
 
-// ─── Progress bar polling ───
+// ─── SSE for progress bar ───
 
 let _wasRunning = false;
 let _lastLoadDuringTest = 0;
 
-async function pollTestProgress() {
-  const p = await api('GET', '/api/test-progress');
+function onProgressEvent(p) {
   const bar = $('#testProgressBar');
   const fill = $('#testProgressFill');
   const label = $('#testProgressLabel');
   const btns = ['testAllBtn', 'batchTestBtn'];
+  const cancelBtn = $('#cancelTestBtn');
   if (p.running && p.total > 0) {
     _wasRunning = true;
     bar.style.display = 'block';
@@ -406,6 +437,7 @@ async function pollTestProgress() {
     fill.style.height = '100%';
     label.textContent = `${p.label}: ${p.done}/${p.total} (${p.ok} ok)`;
     btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = true; });
+    if (cancelBtn) cancelBtn.style.display = 'inline-flex';
     if (Date.now() - _lastLoadDuringTest > 5000) {
       _lastLoadDuringTest = Date.now();
       loadData();
@@ -421,6 +453,7 @@ async function pollTestProgress() {
       label.textContent = `Last ${p.last_label}: ${p.last_ok}/${p.last_total} ok — ${p.last_completed}`;
     }
     btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = false; });
+    if (cancelBtn) cancelBtn.style.display = 'none';
     if (_wasRunning) {
       _wasRunning = false;
       _lastLoadDuringTest = 0;
@@ -428,5 +461,25 @@ async function pollTestProgress() {
     }
   }
 }
-setInterval(pollTestProgress, 2000);
-pollTestProgress();
+
+function connectSSE() {
+  const es = new EventSource('/api/test-progress/stream');
+  es.onmessage = (e) => {
+    try { onProgressEvent(JSON.parse(e.data)); } catch(_) {}
+  };
+  es.onerror = () => {
+    es.close();
+    // fallback to polling if SSE fails
+    fallbackPoll();
+  };
+  return es;
+}
+
+let _pollTimer;
+function fallbackPoll() {
+  _pollTimer = setInterval(async () => {
+    try { onProgressEvent(await api('GET', '/api/test-progress')); } catch(_) {}
+  }, 2000);
+}
+
+let sseSource = connectSSE();

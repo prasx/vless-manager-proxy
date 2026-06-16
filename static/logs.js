@@ -54,14 +54,16 @@ function render() {
   const tb = $('#logBody');
   tb.innerHTML = '';
   if (!allLogs.length) {
-    tb.innerHTML = '<tr><td colspan="3" class="empty">no logs yet</td></tr>';
+    tb.innerHTML = '<tr><td colspan="4" class="empty">no logs yet</td></tr>';
     return;
   }
   for (const row of allLogs) {
     const tr = document.createElement('tr');
+    const cid = row.correlation_id || '';
     tr.innerHTML = `
       <td style="color:var(--text-muted);white-space:nowrap">${row.timestamp}</td>
       <td class="level-${row.level}">${row.level}</td>
+      <td style="font-size:0.65rem;color:var(--text-muted);font-family:monospace">${cid ? cid.slice(0,8) : ''}</td>
       <td style="word-break:break-word">${escHtml(row.message)}</td>
     `;
     tb.appendChild(tr);

@@ -20,9 +20,11 @@ def update_subscribe_cache() -> None:
             placeholders = ""
             country_sql = ""
             codes = []
+        min_kbps = Settings.min_speed_kbps()
+        speed_sql = f"AND speed_kbps >= {min_kbps}" if min_kbps > 0 else ""
         sort_col = "speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC"
         rows = db_q(
-            f"SELECT link, country, speed_kbps FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} ORDER BY {sort_col} LIMIT ?",
+            f"SELECT link, country, speed_kbps FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} {speed_sql} ORDER BY {sort_col} LIMIT ?",
             codes + [max_active],
         )
         total_all = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]

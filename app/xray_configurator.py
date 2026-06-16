@@ -236,15 +236,17 @@ class XrayConfigurator:
         else:
             codes = []
             country_sql = ""
+        min_kbps = Settings.min_speed_kbps()
+        speed_sql = f"AND speed_kbps >= {min_kbps}" if min_kbps > 0 else ""
         proxy_obs = []
         if max_outbounds > 0:
             rows = db_q(
-                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} ORDER BY speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC LIMIT ?",
+                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} {speed_sql} ORDER BY speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC LIMIT ?",
                 codes + [max_outbounds],
             )
         else:
             rows = db_q(
-                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql}",
+                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} {speed_sql}",
                 codes,
             )
         for r in rows:
@@ -370,13 +372,13 @@ class XrayConfigurator:
 
     @staticmethod
     def _remove_outbound(tag):
-        """Удаляет один outbound по тегу через Xray API."""
+        """Удаляет один outbound по тегу через Xray API (26.x: rmo)."""
         try:
             r = subprocess.run(
                 [
                     Settings.xray_bin(),
                     "api",
-                    "removeoutbound",
+                    "rmo",
                     "-s",
                     f"{API_LISTEN}:{API_PORT}",
                     "--tag",
@@ -401,10 +403,10 @@ class XrayConfigurator:
 
     @staticmethod
     def add_outbound(ob):
-        """Добавляет один outbound в Xray через API. Логирует ошибки."""
+        """Добавляет один outbound в Xray через API (26.x: ado)."""
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
         with tmp:
-            json.dump({"outbound": ob}, tmp)
+            json.dump({"outbounds": [ob]}, tmp)
             tmp_path = tmp.name
         ok = False
         try:
@@ -412,7 +414,7 @@ class XrayConfigurator:
                 [
                     Settings.xray_bin(),
                     "api",
-                    "addoutbound",
+                    "ado",
                     "-s",
                     f"{API_LISTEN}:{API_PORT}",
                     tmp_path,
@@ -459,16 +461,18 @@ class XrayConfigurator:
         max_active = Settings.max_active_proxies()
         allowed = Settings.allowed_countries()
         codes = [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
+        min_kbps = Settings.min_speed_kbps()
+        speed_sql = f"AND speed_kbps >= {min_kbps}" if min_kbps > 0 else ""
         sort_col = "speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC"
         if codes:
             placeholders = ",".join("?" * len(codes))
             rows = db_q(
-                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 AND country IN ({placeholders}) ORDER BY {sort_col} LIMIT ?",
+                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 AND country IN ({placeholders}) {speed_sql} ORDER BY {sort_col} LIMIT ?",
                 codes + [max_active],
             )
         else:
             rows = db_q(
-                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 ORDER BY {sort_col} LIMIT ?",
+                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {speed_sql} ORDER BY {sort_col} LIMIT ?",
                 (max_active,),
             )
         links = "|".join(r["link"] for r in rows)
@@ -485,6 +489,7 @@ class XrayConfigurator:
                 Settings.get("balancer_strategy", "random"),
                 Settings.get("handshake_timeout", "8"),
                 Settings.get("conn_idle", "300"),
+                Settings.get("min_speed_mbps", "0"),
             ]
         )
         return hashlib.sha256(sig.encode()).hexdigest()
@@ -523,8 +528,10 @@ class XrayConfigurator:
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
 
         max_active = Settings.max_active_proxies()
+        min_kbps = Settings.min_speed_kbps()
+        speed_sql = f"AND speed_kbps >= {min_kbps}" if min_kbps > 0 else ""
         proxy_count = db_q(
-            "SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0"
+            f"SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0 {speed_sql}"
         )[0]["c"]
         expected_nodes = min(proxy_count, max_active) if max_active > 0 else proxy_count
 

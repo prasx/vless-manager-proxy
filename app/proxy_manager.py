@@ -2,19 +2,22 @@
 
 import json
 import os
+import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
+import uuid
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .db import db_q, Settings
-from .utils import add_log, now_utc, moscow_str
+from .utils import add_log, now_utc, moscow_str, set_correlation_id
 from .importer import import_from_url
-from .vless import parse_vless, stream_settings, sanitize_flow
+from .vless import parse_vless, stream_settings
 
 
 class ProxyManager:
@@ -24,6 +27,10 @@ class ProxyManager:
         self._vless_busy = False
         self._last_run_db = 0.0
         self._last_run_import = 0.0
+        self._speed_test_done = 0
+        self._shutdown = threading.Event()
+        self._cancel = threading.Event()
+        signal.signal(signal.SIGTERM, self._signal_handler)
         self.progress = {
             "running": False,
             "total": 0,
@@ -36,6 +43,11 @@ class ProxyManager:
             "last_total": 0,
         }
         self._progress_lock = threading.Lock()
+
+    def _signal_handler(self, signum, frame):
+        add_log("INFO", "SIGTERM received, shutting down...")
+        self._shutdown.set()
+        sys.exit(0)
 
     @staticmethod
     def _free_port():
@@ -219,7 +231,8 @@ class ProxyManager:
 
     @staticmethod
     def _measure_url_kbps(http_port, url, timeout=15):
-        """Скачивает один URL через HTTP-прокси, возвращает kbps."""
+        """Скачивает URL через HTTP-прокси, возвращает kbps.
+        Adaptive: ранний выход если скорость явно выше min_speed."""
         proxy_url = f"http://127.0.0.1:{http_port}"
         proxy_handler = urllib.request.ProxyHandler(
             {"http": proxy_url, "https": proxy_url}
@@ -235,10 +248,21 @@ class ProxyManager:
             req_start = time.time()
             resp = opener.open(req, timeout=timeout)
             total = 0
-            buf = resp.read(65536)
-            while buf:
+            min_kbps = Settings.min_speed_kbps()
+            adaptive_sec = Settings.speed_test_adaptive_sec()
+            while True:
+                buf = resp.read(131072)
+                if not buf:
+                    break
                 total += len(buf)
-                buf = resp.read(65536)
+                elapsed = time.time() - req_start
+                if elapsed >= timeout:
+                    break
+                # Adaptive: если скорость уже явно выше порога — хватит
+                if min_kbps > 0 and elapsed >= adaptive_sec and total > 0:
+                    cur = int((total * 8) / (elapsed * 1000))
+                    if cur >= min_kbps * 1.3:
+                        return cur
             elapsed = time.time() - req_start
             if elapsed > 0 and total > 0:
                 return int((total * 8) / (elapsed * 1000))
@@ -334,32 +358,58 @@ class ProxyManager:
                 f"VLESS test {link[:50]} -> {'working' if ok else 'failed'} ({lat}ms)",
             )
 
-    # ─── Parallel batch testing ───
+    # ─── Parallel batch testing (spawn/kill + inline speed) ───
 
-    def _test_one(self, r, timeout):
-        ok, lat = self.test_vless_real(r["link"], timeout=timeout)
+    def _test_one_spawn(self, r, timeout):
+        """Fallback: spawn/kill Xray на каждый прокси + inline speed."""
+        parsed = parse_vless(r["link"])
+        ok = False
+        lat = 0
+        speed_kbps = 0
+        proc, tmp_path, http_port = ProxyManager._start_xray(parsed) if parsed else (None, None, None)
+        if proc:
+            ok, lat = ProxyManager._probe(http_port, timeout)
+            if ok:
+                speed_enabled = Settings.get("speed_test_enabled", "true") == "true"
+                speed_max = int(Settings.get("speed_test_max", "30"))
+                if speed_enabled and self._speed_test_done < speed_max:
+                    speed_timeout = timeout * 3
+                    speed_kbps = ProxyManager._measure_kbps(http_port, speed_timeout)
+                    if speed_kbps:
+                        self._speed_test_done += 1
+            ProxyManager._stop_xray(proc, tmp_path)
         self._update_vless_status(r["id"], ok, lat if ok else 0)
+        if speed_kbps:
+            db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (speed_kbps, r["id"]))
         with self._progress_lock:
             self.progress["done"] += 1
             if ok:
                 self.progress["ok"] += 1
         add_log(
             "INFO",
-            f"VLESS test proxy #{r['id']} -> {'working' if ok else 'failed'} ({lat}ms)",
+            f"Test proxy #{r['id']} -> {'working' if ok else 'failed'} ({lat}ms)" +
+            (f" speed={speed_kbps}kbps" if speed_kbps else ""),
         )
         return r["id"], ok
 
-    def _run_batch(self, rows, label, timeout, workers=5):
+    def _run_batch(self, rows, label, timeout):
         if not rows:
             return
+        cid = uuid.uuid4().hex[:12]
+        set_correlation_id(cid)
         self.progress.update(running=True, total=len(rows), done=0, ok=0, label=label)
-        vless_ok = 0
-        vless_total = 0
+        self._speed_test_done = 0
+        self._cancel.clear()
         try:
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {pool.submit(self._test_one, r, timeout): r for r in rows}
+            add_log("INFO", f"Testing {label}: {len(rows)} proxies")
+            with ThreadPoolExecutor(max_workers=10) as tpool:
+                futures = {tpool.submit(self._test_one_spawn, r, timeout): r for r in rows}
                 for f in as_completed(futures):
-                    pass
+                    if self._cancel.is_set():
+                        add_log("INFO", f"Cancel requested, stopping {label}")
+                        for ff in futures:
+                            ff.cancel()
+                        break
             vless_ok = self.progress["ok"]
             vless_total = self.progress["total"]
             from .utils import enrich_all_unknown_countries
@@ -368,23 +418,10 @@ class ProxyManager:
 
             add_log(
                 "INFO",
-                f"VLESS {label}: {vless_ok}/{vless_total} ok — {moscow_str()}",
+                f"{label}: {vless_ok}/{vless_total} ok, {self._speed_test_done} speed — {moscow_str()}",
             )
-
-            # Speed test всех рабочих прокси после VLESS (если включено в настройках)
-            self._run_speed_test_for_top()
         finally:
-            if self.progress["label"] == "Speed test":
-                # Показываем в last итог: VLESS + Speed
-                self.progress.update(
-                    last_completed=moscow_str(),
-                    last_label=f"VLESS + Speed",
-                    last_ok=vless_ok,
-                    last_total=vless_total,
-                )
-                self.progress["running"] = False
-            else:
-                self._record_completion(label)
+            self._record_completion(label)
 
     def test_all_vless(self):
         """Тест всех прокси из БД (без импорта)."""
@@ -419,11 +456,9 @@ class ProxyManager:
     def background_checker(self):
         """Фоновый цикл: два независимых таймера с приоритетом.
         import+check имеет приоритет над db-only. Не запускаются одновременно."""
-        while True:
-            try:
-                time.sleep(30)
-            except Exception:
-                time.sleep(30)
+        while not self._shutdown.is_set():
+            if self._shutdown.wait(timeout=30):
+                break
             try:
                 if self._vless_busy:
                     continue
@@ -457,6 +492,8 @@ class ProxyManager:
             if rows:
                 add_log("INFO", f"Import+check: {len(rows)} proxies")
                 self._bg_vless_batch(rows, "import+check")
+            # import+check протестировал все прокси — db-check не нужен
+            self._last_run_db = time.time()
 
             if Settings.get("apply_after_test", "true") == "true":
                 from .xray_configurator import xray_configurator

@@ -65,6 +65,7 @@ _SCHEMA = {
         ("timestamp", "TIMESTAMP"),
         ("level", "TEXT"),
         ("message", "TEXT"),
+        ("correlation_id", "TEXT"),
     ],
     "settings": [
         ("key", "TEXT PRIMARY KEY"),
@@ -132,6 +133,8 @@ def init_db() -> None:
         "balancer_strategy": "random",
         "handshake_timeout": "8",
         "conn_idle": "300",
+        "min_speed_mbps": "0",
+        "speed_test_adaptive_sec": "2",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
@@ -225,6 +228,20 @@ class Settings:
         except (json.JSONDecodeError, TypeError):
             return []
 
+    @classmethod
+    def min_speed_kbps(cls) -> int:
+        """Минимальная скорость профиля в kbps. 0 = фильтр отключён."""
+        raw = cls.get("min_speed_mbps", "0")
+        try:
+            mbps = float(raw)
+            return int(mbps * 1000) if mbps > 0 else 0
+        except (ValueError, TypeError):
+            return 0
+
+    @classmethod
+    def speed_test_adaptive_sec(cls) -> int:
+        """Через сколько секунд adaptive speed test проверяет порог."""
+        return max(1, int(cls.get("speed_test_adaptive_sec", "2")))
 
 def default_xray_config_path() -> Path:
     """Определяет путь к конфигу Xray по умолчанию."""

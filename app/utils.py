@@ -2,6 +2,7 @@
 
 import json
 import threading
+import traceback
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -11,6 +12,21 @@ from config import MOSCOW_TZ, UTC_TZ
 
 _geo_cache: dict[str, str] = {}
 _geo_cache_lock = threading.Lock()
+
+_current_cid: str = ""
+_cid_lock = threading.Lock()
+
+
+def set_correlation_id(cid: str) -> None:
+    """Устанавливает correlation_id для всех последующих логов в этом потоке."""
+    global _current_cid
+    with _cid_lock:
+        _current_cid = cid
+
+
+def get_correlation_id() -> str:
+    with _cid_lock:
+        return _current_cid
 
 
 def now_utc() -> datetime:
@@ -29,18 +45,30 @@ def moscow_str(dt: Optional[datetime] = None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S %z")
 
 
+def fmt_log(level: str, message: str) -> str:
+    """Форматирует лог-сообщение: если message не JSON, оборачивает в JSON."""
+    try:
+        json.loads(message)
+        return message
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return json.dumps({"msg": message}, ensure_ascii=False)
+
+
 _log_insert_count = 0
 _log_count_lock = threading.Lock()
 
 
-def add_log(level: str, message: str) -> None:
-    """Добавляет запись в лог-таблицу БД. Автоматически подчищает старые записи."""
+def add_log(level: str, message: str, correlation_id: str = "") -> None:
+    """Добавляет запись в лог-таблицу БД. correlation_id автоматически подхватывается из потока."""
     global _log_insert_count
+    cid = correlation_id or get_correlation_id()
+    msg = fmt_log(level, message)
     conn = _get_conn()
     try:
         conn.execute(
-            "INSERT INTO logs (timestamp, level, message) VALUES (?, ?, ?)",
-            (now_utc(), level, message),
+            "INSERT INTO logs (timestamp, level, message, correlation_id) VALUES (?, ?, ?, ?)",
+            (now_utc(), level, msg, cid or None),
         )
         conn.commit()
     finally:
