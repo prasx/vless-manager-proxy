@@ -452,6 +452,21 @@ select.input { color-scheme:dark; }
   .settings-cols { flex-direction:column; }
   .settings-col-narrow { max-width:none; }
 }
+/* Settings sticky footer */
+.settings-footer {
+  position:sticky;
+  bottom:0;
+  z-index:100;
+  padding:12px 0;
+  background:var(--bg);
+  border-top:1px solid var(--border);
+}
+.settings-footer-inner {
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+
 /* Footer */
 .footer {
   margin-top:32px;

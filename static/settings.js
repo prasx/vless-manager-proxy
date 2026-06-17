@@ -63,8 +63,51 @@ async function loadSettings() {
     $('applyAfterTest').checked = s.apply_after_test !== 'false';
     $('minSpeedMbps').value = s.min_speed_mbps || '0';
     $('speedTestAdaptiveSec').value = s.speed_test_adaptive_sec || '2';
+    $('safeOnlyImport').checked = s.safe_only_import === 'true';
+    updateConfigStatus(status);
+    updateSpeedTestDependants();
+    $('speedTestEnabled').addEventListener('change', updateSpeedTestDependants);
   }
   $('geoEnabled').checked = s.geo_enabled !== 'false';
+}
+
+function updateConfigStatus(status) {
+  const el = $('configStatus');
+  if (!el) return;
+  if (status.error) { el.textContent = '—'; return; }
+  const active = status.nodes_in_config || 0;
+  const candidates = status.config_candidates || 0;
+  const api = status.api_accessible;
+  if (!api) {
+    el.textContent = `${candidates} candidates (API unavailable)`;
+    el.style.color = 'var(--text-muted)';
+    return;
+  }
+  el.textContent = `${active} nodes in config · ${candidates} eligible`;
+  el.style.color = 'var(--green)';
+}
+
+function updateSpeedTestDependants() {
+  const enabled = $('speedTestEnabled').checked;
+  const body = $('speedTestBody');
+  if (!body) return;
+  const inputs = body.querySelectorAll('input');
+  inputs.forEach(inp => {
+    if (inp.id !== 'speedTestEnabled') {
+      inp.disabled = !enabled;
+    }
+  });
+  body.style.opacity = enabled ? '1' : '0.45';
+}
+
+async function rebuildConfig() {
+  const btn = document.querySelector('button[onclick="rebuildConfig()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Rebuilding...'; }
+  const r = await api('POST', '/api/xray/rebuild');
+  if (r.error) { toast(r.error, 'error'); }
+  else { toast('Config rebuild triggered', 'success'); }
+  if (btn) { btn.disabled = false; btn.textContent = 'Rebuild'; }
+  setTimeout(() => loadSettings(), 2000);
 }
 
 async function saveSettings() {
@@ -92,6 +135,7 @@ async function saveSettings() {
     balancer_strategy: $('balancerStrategy').value,
     handshake_timeout: $('handshakeTimeout').value.trim() || '8',
     conn_idle: $('connIdle').value.trim() || '300',
+    safe_only_import: $('safeOnlyImport').checked ? 'true' : 'false',
   };
   const r = await api('POST', '/api/settings', data);
   $('xrayBin').disabled = false;
@@ -124,6 +168,7 @@ function resetTuning() {
   $('minSpeedMbps').value = '0';
   $('speedTestAdaptiveSec').value = '2';
   $('balancerStrategy').value = 'random';
+  $('safeOnlyImport').checked = false;
   toast('Tuning values reset to defaults — click Save to apply');
 }
 
@@ -229,11 +274,15 @@ function renderCountryFilter(allowedRaw) {
   tb.innerHTML = '';
   if (!countryData.length) {
     tb.innerHTML = '<tr><td colspan="3" class="empty">no countries detected yet — import some proxies</td></tr>';
+    const cnt = $('countryFilterCount');
+    if (cnt) cnt.textContent = '';
     return;
   }
   const allowedSet = new Set(allowedRaw.split(',').map(s => s.trim()).filter(Boolean));
+  let selected = 0;
   for (const c of countryData) {
     const checked = !allowedRaw ? true : allowedSet.has(c.code);
+    if (checked) selected++;
     const tr = document.createElement('tr');
     tr.style.cssText = 'border-bottom:1px solid var(--border)';
     tr.innerHTML = `
@@ -247,6 +296,8 @@ function renderCountryFilter(allowedRaw) {
     `;
     tb.appendChild(tr);
   }
+  const cnt = $('countryFilterCount');
+  if (cnt) cnt.textContent = `${selected} / ${countryData.length} selected`;
 }
 
 function selectAllCountries(checked) {

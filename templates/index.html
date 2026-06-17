@@ -26,12 +26,21 @@
 </div>
 
 <div id="activeNode">
-  <span id="activeInfo">// active: —</span>
-  <span id="healthIndicator"></span>
-  <div class="source-bar" id="sourceBar">
-    <button class="btn btn-sm btn-primary" id="sourceAll" data-source="" onclick="setSource('')">All</button>
-    <button class="btn btn-sm" id="sourceUnknown" data-source="unknown" onclick="setSource('unknown')">Custom</button>
+  <div class="an-row">
+    <div class="an-info">
+      <span id="activeInfo">// outbounds: —</span>
+      <span id="healthIndicator"></span>
+    </div>
+    <div class="source-bar" id="sourceBar">
+      <button class="btn btn-sm btn-primary" id="sourceAll" data-source="" onclick="setSource('')">All</button>
+      <button class="btn btn-sm" id="sourceUnknown" data-source="unknown" onclick="setSource('unknown')">Custom</button>
+    </div>
   </div>
+  <div class="an-row" id="lastTestRow" style="font-size:0.72rem;color:var(--text-muted);margin-top:2px"></div>
+  <div id="testProgressBar" style="display:none;margin-top:6px;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
+    <div id="testProgressFill" style="height:100%;width:0%;background:var(--green);transition:width .5s"></div>
+  </div>
+  <div id="testProgressLabel" style="font-size:0.7rem;color:var(--text-muted);margin-top:2px"></div>
 </div>
 
 <div class="toolbar">
@@ -41,13 +50,9 @@
     <button class="btn btn-apply" id="batchTestBtn" style="display:none" onclick="batchTest()">Test selected</button>
     <button class="btn btn-danger" id="batchDeleteBtn" style="display:none" onclick="batchDelete()">Delete selected</button>
   </div>
-  <input type="search" id="searchInput" class="input" placeholder="Search host or id..." style="width:180px;font-size:0.78rem;margin-left:8px">
+  <input type="search" id="searchInput" class="input" placeholder="Search host or id..." style="width:180px;font-size:0.78rem;margin-left:auto">
   <span id="batchCount" style="font-size:0.72rem;color:var(--text-muted)"></span>
   <button class="btn btn-danger" id="cancelTestBtn" style="display:none" onclick="cancelTest()">Cancel</button>
-  <div id="testProgressBar" style="display:none;margin-top:8px;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
-    <div id="testProgressFill" style="height:100%;width:0%;background:var(--green);transition:width .5s"></div>
-  </div>
-  <div id="testProgressLabel" style="font-size:0.7rem;color:var(--text-muted);margin-top:2px"></div>
 </div>
 
 <div class="table-wrap">

@@ -3,14 +3,7 @@
 {% block page_title %}Settings{% endblock %}
 {% block content %}
 
-<div class="settings-section">
-  <div class="form-actions" style="margin:0">
-    <button class="btn btn-primary btn-sm" onclick="exportBackup()">Export settings</button>
-    <button class="btn btn-sm" onclick="document.getElementById('backupFile').click()">Import settings</button>
-    <input type="file" id="backupFile" accept=".json" style="display:none" onchange="importBackup(event)">
-  </div>
-</div>
-
+<!-- ─── 1. Xray ─── -->
 <div class="settings-section">
   <div class="settings-cols">
     <div class="settings-col">
@@ -27,125 +20,29 @@
         <label>Listen address</label>
         <input type="text" id="proxyListen" class="input" placeholder="0.0.0.0 or 127.0.0.1">
       </div>
-      <div class="form-row">
-        <label>Max active</label>
-        <input type="number" id="maxActiveProxies" class="input" placeholder="30" min="1" max="500" style="max-width:120px">
-      </div>
-      <div class="form-row">
-        <label>Probe URL</label>
-        <div style="display:flex;flex:1;max-width:480px;gap:6px">
-          <input type="text" id="probeUrl" class="input" placeholder="https://www.gstatic.com/generate_204" style="flex:1">
-          <button class="btn" onclick="resetProbeUrl()" title="Reset to default" style="width:45px;height:43px;padding:0;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 2v6h-6M3 12a9 9 0 0 1 15.36-6.36L21 8M3 22v-6h6M21 12a9 9 0 0 1-15.36 6.36L3 16"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div class="form-actions" style="margin-top:4px">
-        <button class="btn btn-primary" onclick="saveSettings()">Save</button>
-        <button class="btn btn-apply" onclick="restartXray()">Restart Xray</button>
-      </div>
     </div>
     <div class="settings-col settings-col-narrow">
-      <h2>Xray Daemon</h2>
+      <h2>Daemon</h2>
       <div id="xrayStatus" class="label" style="margin-bottom:12px">// checking...</div>
       <div class="form-actions" style="flex-wrap:wrap">
         <button class="btn" id="btnXrayStart" onclick="startXrayDaemon()">Start</button>
         <button class="btn btn-danger" id="btnXrayStop" onclick="stopXrayDaemon()">Stop</button>
         <button class="btn btn-apply" onclick="restartXray()">Restart</button>
       </div>
+      <p style="font-size:0.68rem;color:var(--text-muted);margin-top:12px;line-height:1.4">
+        systemd start/stop/restart. Изменение listen address требует перезапуска.
+      </p>
     </div>
   </div>
 </div>
 
-<div class="settings-section">
-  <div class="settings-cols">
-    <div class="settings-col">
-      <h2 style="display:flex;align-items:center;gap:10px">
-        GeoSite Rules
-        <label style="font-size:0.72rem;font-weight:normal;display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text-muted)">
-          <input type="checkbox" id="geoEnabled" onchange="toggleGeo()" style="cursor:pointer">
-          GeoIP/GeoSite
-        </label>
-      </h2>
-      <details open style="font-size:0.74rem;line-height:1.8" class="tuning-notice">
-        <summary style="cursor:pointer;font-weight:bold;color:var(--text-primary)">
-          🧭 Шпаргалка по категориям
-        </summary>
-        <p style="margin:8px 0 4px;color:var(--text-muted)">
-          <a href="https://github.com/runetfreedom/russia-v2ray-rules-dat" target="_blank" style="color:var(--green)">runetfreedom</a> ·
-          <strong>direct</strong> — напрямую, <strong>proxy</strong> — через балансер</p>
-        <table style="width:100%;border-collapse:collapse;margin-top:6px">
-          <tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🎯 Стандартные</td>
-            <td style="padding:3px 6px">
-              <code>google</code> <code>youtube</code> <code>netflix</code> <code>telegram</code>
-              <code>twitter</code> <code>instagram</code> <code>discord</code> <code>meta</code>
-              <code>openai</code> <code>category-ads</code>
-            </td>
-          </tr>
-          <tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🇷🇺 Россия</td>
-            <td style="padding:3px 6px">
-              <code>geosite:ru-blocked</code> → <strong style="color:#ed8936">proxy</strong>
-              <code>geosite:ru-blocked-all</code> → <strong style="color:#ed8936">proxy</strong><br>
-              <code>geosite:ru-available-only-inside</code> → <strong style="color:var(--green)">direct</strong>
-              <code>geosite:antifilter-download</code> <code>geosite:refilter</code>
-            </td>
-          </tr>
-          <tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🪟 Windows</td>
-            <td style="padding:3px 6px">
-              <code>geosite:win-spy</code> <code>geosite:win-update</code> <code>geosite:win-extra</code>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🌍 IP (geoip)</td>
-            <td style="padding:3px 6px">
-              <code>geoip:ru</code> <code>geoip:private</code> — всегда <strong style="color:var(--green)">direct</strong><br>
-              <span style="color:var(--text-muted);font-size:0.72rem">⚡ geoip: правила работают только с полем <code>ip</code>, не <code>domain</code></span>
-            </td>
-          </tr>
-        </table>
-      </details>
-      <div id="geositeRulesWrap"></div>
-      <div class="form-actions" style="margin-top:12px">
-        <button class="btn" onclick="addGeositeRule()">+ Add Rule</button>
-        <button class="btn btn-primary" onclick="saveGeositeRules()">Save</button>
-      </div>
-    </div>
-    <div class="settings-col settings-col-narrow">
-      <h2>Country Filter</h2>
-      <p style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px">Разрешённые страны для конфига</p>
-      <div style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;padding:8px 0">
-        <table style="width:100%;font-size:0.8rem">
-          <tbody id="countryFilterBody"></tbody>
-        </table>
-      </div>
-      <div class="form-actions" style="margin-top:8px;flex-wrap:wrap">
-        <button class="btn btn-primary" onclick="saveCountryFilter()">Save</button>
-        <button class="btn" onclick="selectAllCountries(true)">All</button>
-        <button class="btn" onclick="selectAllCountries(false)">Clear</button>
-      </div>
-      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
-        <div class="tuning-item" style="gap:6px">
-          <span class="tuning-label">Min speed for config</span>
-          <input type="number" id="minSpeedMbps" class="input" min="0" max="1000" step="0.1" style="width:76px" placeholder="0">
-          <span class="tuning-suffix">Mbps</span>
-          <span class="tuning-comment">0 = any</span>
-        </div>
-        <p style="font-size:0.68rem;color:var(--text-muted);margin:4px 0 0;line-height:1.4">
-          Профили ниже этой скорости не попадают в конфиг, подписку и балансер
-        </p>
-      </div>
-    </div>
-  </div>
-</div>
-
+<!-- ─── 2. Proxy Check ─── -->
 <div class="settings-section tuning-section">
-  <h2>Check Intervals &amp; Tuning</h2>
-
+  <h2>Proxy Check</h2>
+  <div class="tuning-notice" style="margin-bottom:16px">
+    <strong>⚠️</strong> Import+Check имеет приоритет. Два режима не запускаются одновременно.
+    При 2500 профилях полный тест занимает ~10-15 мин (per-proxy timeout: 3-5 сек).
+  </div>
   <div class="tuning-cards">
     <div class="tuning-card">
       <div class="tuning-card-header">
@@ -184,72 +81,148 @@
       </div>
     </div>
   </div>
-
-  <div class="tuning-notice">
-    <strong>⚠️</strong> Import+Check имеет приоритет. Два режима не запускаются одновременно.
-    DB-only: до 5 ч, Import+Check: до 24 ч. На 2500 профилей полный тест занимает ~10-15 мин (per-proxy timeout: 3-5 сек).
-  </div>
-
   <div class="tuning-grid">
     <div class="tuning-group">
-      <h3>Cycle Behavior</h3>
+      <h3>Per-proxy timeout</h3>
       <div class="tuning-item">
-        <span class="tuning-label">Per-proxy timeout</span>
+        <span class="tuning-label">VLESS timeout</span>
         <input type="number" id="vlessPerProxyTimeout" class="input" min="2" max="30" style="width:80px">
         <span class="tuning-suffix">sec</span>
         <span class="tuning-comment">3-5 сек для 2500 = ~15 мин</span>
       </div>
-      <div class="tuning-item">
-        <span class="tuning-label">Speed test</span>
-        <input type="checkbox" id="speedTestEnabled" class="input" style="width:auto;height:auto;margin:0" checked>
-        <span class="tuning-comment">Замер скорости после VLESS-теста (влияет на ранжирование в конфиге)</span>
-      </div>
-
+    </div>
+    <div class="tuning-group">
+      <h3>After test</h3>
       <div class="tuning-item">
         <span class="tuning-label">Apply config</span>
         <input type="checkbox" id="applyAfterTest" class="input" style="width:auto;height:auto;margin:0" checked>
         <span class="tuning-comment">Пересобрать конфиг Xray после теста</span>
       </div>
     </div>
+  </div>
+</div>
 
-    <div class="tuning-group">
-      <h3>Speed Test</h3>
-      <div class="tuning-item">
-        <span class="tuning-label">Enabled</span>
-        <input type="checkbox" id="speedTestEnabled" class="input" style="width:auto;height:auto;margin:0" checked>
+<!-- ─── 3. Speed Test ─── -->
+<div class="settings-section tuning-section">
+  <h2>Speed Test</h2>
+  <p style="font-size:0.7rem;color:var(--text-muted);margin:-12px 0 14px;line-height:1.4">
+    Замер скорости после VLESS-теста. Влияет на ранжирование в конфиге — чем быстрее, тем выше приоритет.
+  </p>
+  <div id="speedTestBody">
+    <div class="tuning-grid">
+      <div class="tuning-group">
+        <div class="tuning-item">
+          <span class="tuning-label">Enabled</span>
+          <input type="checkbox" id="speedTestEnabled" class="input" style="width:auto;height:auto;margin:0" checked>
+        </div>
+        <div class="tuning-item">
+          <span class="tuning-label">Top-N</span>
+          <input type="number" id="speedTestMax" class="input" min="5" max="100" style="width:80px">
+          <span class="tuning-suffix">proxies</span>
+          <span class="tuning-comment">Сколько прокси тестировать на скорость</span>
+        </div>
       </div>
-      <div class="tuning-item">
-        <span class="tuning-label">Top-N</span>
-        <input type="number" id="speedTestMax" class="input" min="5" max="100" style="width:80px">
-        <span class="tuning-suffix">proxies</span>
-      </div>
-      <div class="tuning-item" style="flex-wrap:wrap">
-        <span class="tuning-label">Test file URL</span>
-        <input type="text" id="speedTestUrl" class="input" placeholder="http://..." style="flex:1;min-width:200px">
-      </div>
-      <div class="tuning-item">
-        <span class="tuning-label">Adaptive check</span>
-        <input type="number" id="speedTestAdaptiveSec" class="input" min="1" max="10" style="width:70px">
-        <span class="tuning-suffix">sec</span>
-        <span class="tuning-comment">Через сколько сек проверять порог скорости (adaptive early exit)</span>
+      <div class="tuning-group">
+        <div class="tuning-item" style="flex-wrap:wrap">
+          <span class="tuning-label">Test file URL</span>
+          <input type="text" id="speedTestUrl" class="input" placeholder="http://..." style="flex:1;min-width:200px">
+        </div>
+        <div class="tuning-item">
+          <span class="tuning-label">Adaptive check</span>
+          <input type="number" id="speedTestAdaptiveSec" class="input" min="1" max="10" style="width:70px">
+          <span class="tuning-suffix">sec</span>
+          <span class="tuning-comment">Через сколько сек проверять порог скорости (early exit)</span>
+        </div>
       </div>
     </div>
+  </div>
+</div>
 
-    <div class="tuning-group">
-      <h3>Xray Observatory</h3>
-      <div class="tuning-item">
-        <span class="tuning-label">Probe interval</span>
-        <input type="text" id="observatoryProbeInterval" class="input" style="width:80px" placeholder="15s">
-        <span class="tuning-comment">Как часто пинговать узлы (15-30s)</span>
+<!-- ─── 4. Config & Filter ─── -->
+<div class="settings-section">
+  <div class="settings-cols">
+    <div class="settings-col">
+      <h2>Config &amp; Filter</h2>
+      <div class="form-row">
+        <label>Max active</label>
+        <input type="number" id="maxActiveProxies" class="input" placeholder="30" min="1" max="500" style="max-width:120px">
       </div>
+      <div class="form-row">
+        <label>Probe URL</label>
+        <div style="display:flex;flex:1;max-width:480px;gap:6px">
+          <input type="text" id="probeUrl" class="input" placeholder="https://www.gstatic.com/generate_204" style="flex:1">
+          <button class="btn" onclick="resetProbeUrl()" title="Reset to default" style="width:45px;height:34px;padding:0;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 2v6h-6M3 12a9 9 0 0 1 15.36-6.36L21 8M3 22v-6h6M21 12a9 9 0 0 1-15.36 6.36L3 16"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="form-row">
+        <label>Min speed</label>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="number" id="minSpeedMbps" class="input" min="0" max="1000" step="0.1" style="width:76px" placeholder="0">
+          <span class="tuning-suffix">Mbps</span>
+          <span class="tuning-comment" style="margin-left:4px">0 = any</span>
+        </div>
+      </div>
+      <div class="form-row">
+        <label>Safe-only import</label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="checkbox" id="safeOnlyImport" class="input" style="width:auto;height:auto;margin:0">
+          <span class="tuning-comment" style="font-size:0.72rem;margin-left:0">только TLS/Reality</span>
+        </div>
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <div style="font-size:0.82rem;color:var(--text-secondary)">
+            Config: <span id="configStatus">—</span>
+          </div>
+          <button class="btn btn-sm btn-apply" onclick="rebuildConfig()">Rebuild</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-col settings-col-narrow">
+      <h2>Country Filter</h2>
+      <p style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px">Разрешённые страны для конфига</p>
+      <div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;padding:8px 0">
+        <table style="width:100%;font-size:0.8rem">
+          <tbody id="countryFilterBody"></tbody>
+        </table>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+        <span id="countryFilterCount" style="font-size:0.72rem;color:var(--text-muted);flex:1"></span>
+        <button class="btn btn-primary btn-sm" onclick="saveCountryFilter()">Save</button>
+        <button class="btn btn-sm" onclick="selectAllCountries(true)">All</button>
+        <button class="btn btn-sm" onclick="selectAllCountries(false)">Clear</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── 5. Balancer ─── -->
+<div class="settings-section tuning-section">
+  <h2>Balancer</h2>
+  <p style="font-size:0.7rem;color:var(--text-muted);margin:-12px 0 14px;line-height:1.4">
+    Xray Observatory отслеживает состояние узлов и балансирует трафик. Настройки ниже применяются к observatory-секции конфига.
+  </p>
+  <div class="tuning-grid">
+    <div class="tuning-group">
       <div class="tuning-item">
-        <span class="tuning-label">Balancer</span>
+        <span class="tuning-label">Strategy</span>
         <select id="balancerStrategy" class="input" style="width:auto;min-width:130px">
           <option value="leastLoad">leastLoad</option>
           <option value="leastPing">leastPing</option>
           <option value="random">random</option>
         </select>
       </div>
+      <div class="tuning-item">
+        <span class="tuning-label">Probe interval</span>
+        <input type="text" id="observatoryProbeInterval" class="input" style="width:80px" placeholder="15s">
+        <span class="tuning-comment">15-30s</span>
+      </div>
+    </div>
+    <div class="tuning-group">
       <div class="tuning-item">
         <span class="tuning-label">Handshake</span>
         <input type="number" id="handshakeTimeout" class="input" min="1" max="30" style="width:70px">
@@ -261,25 +234,96 @@
         <span class="tuning-suffix">sec</span>
       </div>
     </div>
+  </div>
+  <div class="form-actions" style="margin-top:8px">
+    <button class="btn" onclick="resetTuning()">Reset tuning to defaults</button>
+  </div>
+</div>
 
-    <div class="tuning-group">
-      <h3>Logging</h3>
+<!-- ─── 6. GeoSite Rules ─── -->
+<div class="settings-section">
+  <h2 style="display:flex;align-items:center;gap:10px">
+    GeoSite Rules
+    <label style="font-size:0.72rem;font-weight:normal;display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text-muted)">
+      <input type="checkbox" id="geoEnabled" onchange="toggleGeo()" style="cursor:pointer">
+      GeoIP/GeoSite
+    </label>
+  </h2>
+  <details style="font-size:0.74rem;line-height:1.8;margin-bottom:12px" class="tuning-notice">
+    <summary style="cursor:pointer;font-weight:bold;color:var(--text-primary)">
+      🧭 Шпаргалка по категориям
+    </summary>
+    <p style="margin:8px 0 4px;color:var(--text-muted)">
+      <a href="https://github.com/runetfreedom/russia-v2ray-rules-dat" target="_blank" style="color:var(--green)">runetfreedom</a> ·
+      <strong>direct</strong> — напрямую, <strong>proxy</strong> — через балансер
+    </p>
+    <table style="width:100%;border-collapse:collapse;margin-top:6px">
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🎯 Стандартные</td>
+        <td style="padding:3px 6px">
+          <code>google</code> <code>youtube</code> <code>netflix</code> <code>telegram</code>
+          <code>twitter</code> <code>instagram</code> <code>discord</code> <code>meta</code>
+          <code>openai</code> <code>category-ads</code>
+        </td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🇷🇺 Россия</td>
+        <td style="padding:3px 6px">
+          <code>geosite:ru-blocked</code> → <strong style="color:#ed8936">proxy</strong>
+          <code>geosite:ru-blocked-all</code> → <strong style="color:#ed8936">proxy</strong><br>
+          <code>geosite:ru-available-only-inside</code> → <strong style="color:var(--green)">direct</strong>
+          <code>geosite:antifilter-download</code> <code>geosite:refilter</code>
+        </td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🪟 Windows</td>
+        <td style="padding:3px 6px">
+          <code>geosite:win-spy</code> <code>geosite:win-update</code> <code>geosite:win-extra</code>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🌍 IP (geoip)</td>
+        <td style="padding:3px 6px">
+          <code>geoip:ru</code> <code>geoip:private</code> — всегда <strong style="color:var(--green)">direct</strong><br>
+          <span style="color:var(--text-muted);font-size:0.72rem">⚡ geoip: правила работают только с полем <code>ip</code>, не <code>domain</code></span>
+        </td>
+      </tr>
+    </table>
+  </details>
+  <div id="geositeRulesWrap"></div>
+  <div class="form-actions">
+    <button class="btn" onclick="addGeositeRule()">+ Add Rule</button>
+    <button class="btn btn-primary" onclick="saveGeositeRules()">Save</button>
+  </div>
+</div>
+
+<!-- ─── 7. Logging + Backup ─── -->
+<div class="settings-section">
+  <div class="settings-cols">
+    <div class="settings-col">
+      <h2>Logging</h2>
       <div class="tuning-item">
         <span class="tuning-label">Trim every</span>
         <input type="number" id="logTrimEvery" class="input" min="10" max="99999" style="width:90px">
         <span class="tuning-suffix">entries</span>
+        <span class="tuning-comment">Чистить логи каждые N записей</span>
       </div>
       <div class="tuning-item">
         <span class="tuning-label">Keep last</span>
         <input type="number" id="logKeep" class="input" min="100" max="99999" style="width:90px">
         <span class="tuning-suffix">entries</span>
+        <span class="tuning-comment">Оставлять последних N после чистки</span>
       </div>
     </div>
-  </div>
-
-  <div class="form-actions" style="margin-top:16px">
-    <button class="btn btn-primary" onclick="saveSettings()">Save</button>
-    <button class="btn" onclick="resetTuning()">Reset to defaults</button>
+    <div class="settings-col settings-col-narrow">
+      <h2>Backup</h2>
+      <p style="font-size:0.72rem;color:var(--text-muted);margin-bottom:12px">Экспорт/импорт настроек и источников</p>
+      <div class="form-actions">
+        <button class="btn btn-primary btn-sm" onclick="exportBackup()">Export</button>
+        <button class="btn btn-sm" onclick="document.getElementById('backupFile').click()">Import</button>
+        <input type="file" id="backupFile" accept=".json" style="display:none" onchange="importBackup(event)">
+      </div>
+    </div>
   </div>
 </div>
 
@@ -325,10 +369,17 @@
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray/start</code></td><td style="padding:4px 8px">systemctl start xray</td></tr>
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray/stop</code></td><td style="padding:4px 8px">systemctl stop xray</td></tr>
       <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray-restart</code></td><td style="padding:4px 8px">systemctl restart xray</td></tr>
+      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray/rebuild</code></td><td style="padding:4px 8px">Пересобрать конфиг без перезапуска</td></tr>
     </tbody>
   </table>
 </details>
 
+<div class="settings-footer">
+  <div class="settings-footer-inner">
+    <button class="btn btn-primary" onclick="saveSettings()">Save all settings</button>
+    <span style="font-size:0.72rem;color:var(--text-muted)">сохраняются все настройки на странице</span>
+  </div>
+</div>
 {% endblock %}
 {% block extra_js %}
 <script src="{{ url_for('static', filename='settings.js') }}"></script>

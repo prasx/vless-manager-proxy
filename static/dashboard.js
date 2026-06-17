@@ -138,16 +138,18 @@ function renderTraffic(ob, xr) {
   if (!el) return;
   const nodes = ob.nodes || [];
   const run = xr.running;
-  const badge = run
-    ? '<span class="badge badge-green" style="margin-left:8px;font-size:0.62rem">running</span>'
-    : '<span class="badge badge-red" style="margin-left:8px;font-size:0.62rem">stopped</span>';
   const traffic = ob.traffic || {};
   const withTraffic = nodes.filter(t => traffic[t]?.downlink);
+  let html = '// outbounds: ';
   if (nodes.length) {
-    el.innerHTML = `// outbounds: <b>${nodes.length}</b> (${withTraffic.length} with traffic)${badge}`;
+    html += `<b>${nodes.length}</b> (${withTraffic.length} with traffic)`;
   } else {
-    el.innerHTML = `// outbounds: —${badge}`;
+    html += '—';
   }
+  html += run
+    ? ' <span class="badge badge-green" style="font-size:0.62rem">running</span>'
+    : ' <span class="badge badge-red" style="font-size:0.62rem">stopped</span>';
+  el.innerHTML = html;
 }
 
 function renderSourceButtons(sources, unknownCount, totalCount) {
@@ -352,6 +354,8 @@ function renderMobile(proxies) {
   }
 }
 
+
+
 $$('.stat-card').forEach(el => {
   el.addEventListener('click', () => setFilter(el.dataset.filter));
 });
@@ -416,6 +420,13 @@ window.addEventListener('resize', () => {
 
 loadData();
 
+// ─── Last test row ───
+
+function updateLastTestRow(text) {
+  const el = $('#lastTestRow');
+  if (el) el.textContent = text || '';
+}
+
 // ─── SSE for progress bar ───
 
 let _wasRunning = false;
@@ -450,7 +461,7 @@ function onProgressEvent(p) {
     fill.style.background = 'var(--text-muted)';
     fill.style.height = '2px';
     if (p.last_completed) {
-      label.textContent = `Last ${p.last_label}: ${p.last_ok}/${p.last_total} ok — ${p.last_completed}`;
+      updateLastTestRow(`Last ${p.last_label}: ${p.last_ok}/${p.last_total} ok — ${p.last_completed}`);
     }
     btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = false; });
     if (cancelBtn) cancelBtn.style.display = 'none';

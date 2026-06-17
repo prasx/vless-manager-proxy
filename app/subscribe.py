@@ -31,9 +31,8 @@ def update_subscribe_cache() -> None:
         total_working = db_q(
             "SELECT COUNT(*) c FROM proxies WHERE status='working'"
         )[0]["c"]
-        avg_speed = db_q(
-            "SELECT CAST(AVG(speed_kbps) AS INTEGER) a FROM proxies WHERE status='working' AND speed_kbps > 0"
-        )[0]["a"]
+        speeds = [r["speed_kbps"] for r in rows if r["speed_kbps"] > 0]
+        avg_speed = int(sum(speeds) / len(speeds)) if speeds else 0
         probe_url = Settings.probe_url()
         now = moscow_str()
         lines = [

@@ -47,34 +47,37 @@
 
 /* Active node bar */
 #activeNode {
-  display:flex;
-  align-items:center;
-  justify-content: inherit;
-  flex-wrap:wrap;
-  gap:4px;
   font-size:0.72rem;
-  color:var(--green);
   margin-bottom:10px;
-  padding:6px 12px;
+  padding:8px 12px;
   background:var(--bg-card);
   border:1px solid var(--border);
   border-radius:4px;
-  min-height:34px;
+}
+.an-row {
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.an-info {
+  display:flex;
+  align-items:center;
+  gap:6px;
+  min-width:0;
 }
 #activeInfo {
   overflow:hidden;
   text-overflow:ellipsis;
   white-space:nowrap;
+  color:var(--green);
 }
-
-/* Source bar */
 .source-bar {
+  margin-left:auto;
   display:flex;
   gap:4px;
   align-items:center;
   flex-shrink:0;
   flex-wrap:wrap;
-  margin-left: 50%;
 }
 
 /* Desktop table extras */
@@ -115,7 +118,6 @@
   .stat-card { padding:14px 12px; }
   .stat-card .num { font-size:1.2rem; }
   .toolbar { gap:6px; }
-  .source-bar { gap:4px; }
   .desktop-table { display:none; }
   .table-wrap { background:transparent; border:none; border-radius:0; }
   .mobile-list { display:flex; flex-direction:column; gap:1px; }

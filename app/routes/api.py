@@ -462,11 +462,21 @@ def api_backup_import():
 
 @api_bp.route("/xray/status", methods=["GET"])
 def api_xray_status():
-    """GET /api/xray/status — статус Xray (running, API, systemd, outbounds)."""
+    """GET /api/xray/status — статус Xray (running, API, systemd, outbounds, config)."""
     api_ok = xray_configurator.api_ok()
     d = xray_configurator.diagnose()
     running = api_ok or (d["systemd_active"] and d["ports"].get("1080"))
     active = xray_configurator.list_active_outbounds() if api_ok else []
+    nodes = [t for t in active if t.startswith("node")]
+    allowed = Settings.allowed_countries()
+    codes = [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
+    country_sql = f"AND country IN ({','.join(['?']*len(codes))})" if codes else ""
+    min_kbps = Settings.min_speed_kbps()
+    speed_sql = f"AND speed_kbps >= {min_kbps}" if min_kbps > 0 else ""
+    candidate = db_q(
+        f"SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} {speed_sql}",
+        codes,
+    )[0]["c"]
     return jsonify(
         running=bool(running),
         api_accessible=api_ok,
@@ -474,6 +484,8 @@ def api_xray_status():
         systemd_active=d["systemd_active"],
         config_mismatch=d["config_mismatch"],
         active_outbounds=active,
+        nodes_in_config=len(nodes),
+        config_candidates=candidate,
     )
 
 
@@ -520,6 +532,13 @@ def api_xray_stop():
         add_log("ERROR", f"Xray stop failed: {e}")
     add_log("INFO", "Xray stopped via systemd")
     return jsonify(success=True)
+
+
+@api_bp.route("/xray/rebuild", methods=["POST"])
+def api_xray_rebuild():
+    """POST /api/xray/rebuild — пересобрать конфиг и применить (без перезапуска Xray)."""
+    threading.Thread(target=xray_configurator.apply_all, daemon=True).start()
+    return jsonify(success=True, message="Config rebuild started")
 
 
 @api_bp.route("/xray-restart", methods=["POST"])
