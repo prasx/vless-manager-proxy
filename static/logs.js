@@ -5,6 +5,7 @@ let totalLogs = 0;
 let isLoading = false;
 let currentLevel = '';
 const PAGE_SIZE = 50;
+let pollTimer = null;
 
 function api(method, url, body) {
   const opts = { method, headers:{'Content-Type':'application/json'} };
@@ -70,6 +71,40 @@ function render() {
   }
 }
 
+function renderRow(row) {
+  const tr = document.createElement('tr');
+  const cid = row.correlation_id || '';
+  tr.innerHTML = `
+    <td style="color:var(--text-muted);white-space:nowrap">${row.timestamp}</td>
+    <td class="level-${row.level}">${row.level}</td>
+    <td style="font-size:0.65rem;color:var(--text-muted);font-family:monospace">${cid ? cid.slice(0,8) : ''}</td>
+    <td style="word-break:break-word">${escHtml(row.message)}</td>
+  `;
+  return tr;
+}
+
+async function pollNew() {
+  if (isLoading || !allLogs.length) return;
+  const newest = allLogs[0];
+  let url = `/api/logs?limit=20&offset=0`;
+  if (currentLevel) url += `&level=${currentLevel}`;
+  const data = await api('GET', url);
+  const logs = data.logs || [];
+  if (!logs.length) return;
+  const existingTs = new Set(allLogs.map(r => r.timestamp));
+  const fresh = logs.filter(r => !existingTs.has(r.timestamp));
+  if (!fresh.length) return;
+  const tb = $('#logBody');
+  const empty = tb.querySelector('.empty');
+  if (empty) empty.remove();
+  for (let i = fresh.length - 1; i >= 0; i--) {
+    allLogs.unshift(fresh[i]);
+    tb.prepend(renderRow(fresh[i]));
+  }
+  totalLogs = data.total || totalLogs;
+  updatePagination();
+}
+
 function escHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;
@@ -102,3 +137,12 @@ async function clearLogs() {
 }
 
 loadData();
+pollTimer = setInterval(pollNew, 1000);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  } else if (!pollTimer) {
+    pollTimer = setInterval(pollNew, 1000);
+  }
+});

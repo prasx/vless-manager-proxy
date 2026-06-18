@@ -4,6 +4,8 @@
 Точка входа: инициализирует БД, запускает фоновые задачи и стартует сервер.
 """
 
+import signal
+import sys
 import threading
 
 from app import create_app
@@ -12,9 +14,18 @@ from app.utils import enrich_all_unknown_countries
 from app.xray_configurator import xray_configurator
 from app.proxy_manager import proxy_manager
 
+
+def _on_shutdown(signum, frame):
+    proxy_manager.kill_all_xray_children()
+    sys.exit(0)
+
+
 app = create_app()
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, _on_shutdown)
+    signal.signal(signal.SIGINT, _on_shutdown)
+
     init_db()
     rows = db_q("SELECT key, value FROM settings ORDER BY key")
     print("  Settings loaded:")

@@ -18,6 +18,16 @@ from .vless import parse_vless, stream_settings, sanitize_flow
 from config import SOCKS_PORT, HTTP_PORT, API_PORT, API_LISTEN
 
 
+def _ensure_duration(val: str, default: str = "15s") -> str:
+    """Гарантирует, что строка — валидный Go duration (имеет суффикс s/ms/m/h)."""
+    val = (val or "").strip()
+    if not val:
+        return default
+    if val[-1].isdigit():
+        val += "s"
+    return val
+
+
 class XrayConfigurator:
     """Управление конфигурацией Xray: генерация, применение через API, диагностика."""
 
@@ -280,7 +290,7 @@ class XrayConfigurator:
             config["observatory"] = {
                 "subjectSelector": ["node"],
                 "probeUrl": Settings.probe_url(),
-                "probeInterval": Settings.get("observatory_probe_interval", "15s"),
+                "probeInterval": _ensure_duration(Settings.get("observatory_probe_interval", "15s")),
                 "enableConcurrency": True,
             }
             config["routing"]["balancers"] = [

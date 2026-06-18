@@ -30,6 +30,8 @@ class ProxyManager:
         self._speed_test_done = 0
         self._shutdown = threading.Event()
         self._cancel = threading.Event()
+        self._xray_children: dict[int, subprocess.Popen] = {}
+        self._xray_children_lock = threading.Lock()
         signal.signal(signal.SIGTERM, self._signal_handler)
         self.progress = {
             "running": False,
@@ -46,8 +48,26 @@ class ProxyManager:
 
     def _signal_handler(self, signum, frame):
         add_log("INFO", "SIGTERM received, shutting down...")
+        self.kill_all_xray_children()
         self._shutdown.set()
         sys.exit(0)
+
+    def kill_all_xray_children(self):
+        with self._xray_children_lock:
+            for pid, proc in list(self._xray_children.items()):
+                try:
+                    os.killpg(pid, signal.SIGTERM)
+                except Exception:
+                    pass
+            for pid, proc in list(self._xray_children.items()):
+                try:
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except Exception:
+                        pass
+            self._xray_children.clear()
 
     @staticmethod
     def _free_port():
@@ -164,7 +184,9 @@ class ProxyManager:
                 [xbin, "run", "-c", tmp_path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
+            proxy_manager._track_xray(proc)
             for _ in range(30):
                 try:
                     s = socket.create_connection(("127.0.0.1", http_port), timeout=0.5)
@@ -181,12 +203,16 @@ class ProxyManager:
     def _stop_xray(proc, tmp_path):
         """Останавливает Xray и удаляет временный файл."""
         if proc:
+            proxy_manager._untrack_xray(proc)
             try:
-                proc.terminate()
+                os.killpg(proc.pid, signal.SIGTERM)
+            except Exception:
+                pass
+            try:
                 proc.wait(timeout=5)
             except Exception:
                 try:
-                    proc.kill()
+                    os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait(timeout=3)
                 except Exception:
                     pass
@@ -195,6 +221,14 @@ class ProxyManager:
                 os.unlink(tmp_path)
             except Exception:
                 pass
+
+    def _track_xray(self, proc):
+        with self._xray_children_lock:
+            self._xray_children[proc.pid] = proc
+
+    def _untrack_xray(self, proc):
+        with self._xray_children_lock:
+            self._xray_children.pop(proc.pid, None)
 
     @staticmethod
     def _test_vless(parsed, timeout):
