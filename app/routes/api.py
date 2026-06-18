@@ -17,7 +17,6 @@ from ..proxy_manager import proxy_manager
 from ..importer import import_from_url
 from ..xray_configurator import xray_configurator
 from ..subscribe import update_subscribe_cache
-import json as json_module
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -75,8 +74,6 @@ def proxy_filter_clause(f):
     """Строит SQL WHERE-условие для фильтрации прокси по статусу."""
     if f == "working":
         return "status='working'"
-    elif f == "vless":
-        return "status='working' AND latency_vless > 0"
     elif f == "failed_recent":
         return "status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
     elif f == "top_speed":
@@ -331,7 +328,7 @@ def api_sources_import_all():
 _REBUILD_KEYS = {
     "allowed_countries", "geo_enabled", "max_active_proxies", "probe_url",
     "observatory_probe_interval", "balancer_strategy", "handshake_timeout", "conn_idle",
-    "min_speed_mbps",
+    "min_speed_mbps", "sniffing_enabled", "sniffing_dest_override", "sniffing_route_only",
 }
 
 
@@ -428,7 +425,7 @@ def api_backup_import():
         if k == "geosite_rules" and val == "[]" and cur and cur != "[]":
             add_log(
                 "DEBUG",
-                f"Backup: skipped empty geosite_rules (preserving {len(json_module.loads(cur))} existing rules)",
+                f"Backup: skipped empty geosite_rules (preserving {len(json.loads(cur))} existing rules)",
             )
             continue
         Settings.set(k, val)
@@ -700,7 +697,7 @@ def api_geosite_rules_set():
     for r in rules:
         if not r.get("domain") or not r.get("outboundTag"):
             return jsonify(error="Each rule needs 'domain' and 'outboundTag'"), 400
-    Settings.set("geosite_rules", json_module.dumps(rules))
+    Settings.set("geosite_rules", json.dumps(rules))
     add_log("INFO", f"GeoSite rules updated: {len(rules)} rules")
     threading.Thread(target=xray_configurator.apply_all, daemon=True).start()
     return jsonify(success=True, count=len(rules))

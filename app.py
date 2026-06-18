@@ -4,12 +4,14 @@
 Точка входа: инициализирует БД, запускает фоновые задачи и стартует сервер.
 """
 
+import os
 import signal
 import sys
 import threading
+from pathlib import Path
 
 from app import create_app
-from app.db import init_db, db_q
+from app.db import init_db, db_q, Settings
 from app.utils import enrich_all_unknown_countries
 from app.xray_configurator import xray_configurator
 from app.proxy_manager import proxy_manager
@@ -32,7 +34,10 @@ if __name__ == "__main__":
     for r in rows:
         print(f"    {r['key']}: {r['value'][:60]}")
 
-    xray_configurator.apply_all()
+    if Path(Settings.xray_bin()).is_file():
+        xray_configurator.apply_all()
+    else:
+        print(f"  Xray binary not found at {Settings.xray_bin()} — skipping apply_all")
 
     threading.Thread(target=enrich_all_unknown_countries, daemon=True).start()
     threading.Thread(target=proxy_manager.background_checker, daemon=True).start()

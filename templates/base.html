@@ -20,7 +20,8 @@
       <div class="label">VLESS Manager</div>
       <h1>{% block page_title %}Dashboard{% endblock %}</h1>
     </div>
-    <nav class="nav">
+    <button class="btn btn-nav-toggle" id="navToggle" onclick="toggleNav()" aria-label="Menu">&#9776;</button>
+    <nav class="nav" id="mainNav">
       <a href="/" class="btn">Dashboard</a>
       <a href="/sources" class="btn">Sources</a>
       <a href="/settings" class="btn">Settings</a>
@@ -36,13 +37,14 @@
 
 {% block footer %}
 <div class="footer">
-  <span>v2.9</span>
+  <span>v3.0</span>
   <a href="https://github.com/prasx" target="_blank">🖤 GitHub</a>
 </div>
 {% endblock %}
 
 </div>
 
+<script src="{{ url_for('static', filename='api.js') }}"></script>
 <script src="{{ url_for('static', filename='theme.js') }}"></script>
 <script src="{{ url_for('static', filename='toast.js') }}"></script>
 {% block extra_js %}{% endblock %}

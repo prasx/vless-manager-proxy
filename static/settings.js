@@ -18,6 +18,8 @@ function fmtHours(v) {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
+let _rangeDb, _rangeImport;
+
 function setupRange(id, labelId) {
   const el = $(id);
   const label = $(labelId);
@@ -29,6 +31,7 @@ function setupRange(id, labelId) {
 
 function setRangeValue(range, val) {
   if (!range) return;
+  if (isNaN(val)) return;
   range.el.value = val;
   range.update();
 }
@@ -38,37 +41,41 @@ async function loadSettings() {
     api('GET', '/api/settings'),
     api('GET', '/api/xray/status'),
   ]);
-  if (!s.error) {
-    $('xrayBin').value = s.xray_bin || 'xray';
-    $('xrayConfigPath').value = s.xray_config_path || '';
-    $('proxyListen').value = s.proxy_listen || '0.0.0.0';
-    $('maxActiveProxies').value = s.max_active_proxies || '30';
-    $('probeUrl').value = s.probe_url || 'https://www.gstatic.com/generate_204';
-    // fallback для старой БД: если новых ключей нет, читаем старый check_interval
-    const oldVal = s.check_interval || '3600';
-    const dbRaw = s.check_interval_db || oldVal;
-    const impRaw = s.check_interval_import || '10800';
-    setRangeValue(setupRange('checkIntervalDb', 'checkIntervalDbLabel'), Math.round(parseInt(dbRaw) / 1800) / 2);
-    setRangeValue(setupRange('checkIntervalImport', 'checkIntervalImportLabel'), Math.round(parseInt(impRaw) / 1800) / 2);
-    $('vlessPerProxyTimeout').value = s.vless_per_proxy_timeout || '5';
-    $('logTrimEvery').value = s.log_trim_every || '500';
-    $('logKeep').value = s.log_keep || '2000';
-    $('observatoryProbeInterval').value = s.observatory_probe_interval || '15s';
-    $('balancerStrategy').value = s.balancer_strategy || 'random';
-    $('handshakeTimeout').value = s.handshake_timeout || '8';
-    $('connIdle').value = s.conn_idle || '300';
-    $('speedTestEnabled').checked = s.speed_test_enabled !== 'false';
-    $('speedTestMax').value = s.speed_test_max || '30';
-    $('speedTestUrl').value = s.speed_test_url || 'http://speedtest.selectel.ru/10MB';
-    $('applyAfterTest').checked = s.apply_after_test !== 'false';
-    $('minSpeedMbps').value = s.min_speed_mbps || '0';
-    $('speedTestAdaptiveSec').value = s.speed_test_adaptive_sec || '2';
-    $('safeOnlyImport').checked = s.safe_only_import === 'true';
-    updateConfigStatus(status);
-    updateSpeedTestDependants();
-    $('speedTestEnabled').addEventListener('change', updateSpeedTestDependants);
-  }
+  if (s.error) return;
+  $('xrayBin').value = s.xray_bin || 'xray';
+  $('xrayConfigPath').value = s.xray_config_path || '';
+  $('proxyListen').value = s.proxy_listen || '0.0.0.0';
+  $('maxActiveProxies').value = s.max_active_proxies || '30';
+  $('probeUrl').value = s.probe_url || 'https://www.gstatic.com/generate_204';
+  const oldVal = s.check_interval || '3600';
+  const dbRaw = s.check_interval_db || oldVal;
+  const impRaw = s.check_interval_import || '10800';
+  setRangeValue(_rangeDb, Math.round(parseInt(dbRaw) / 1800) / 2);
+  setRangeValue(_rangeImport, Math.round(parseInt(impRaw) / 1800) / 2);
+  $('vlessPerProxyTimeout').value = s.vless_per_proxy_timeout || '5';
+  $('logTrimEvery').value = s.log_trim_every || '500';
+  $('logKeep').value = s.log_keep || '2000';
+  $('observatoryProbeInterval').value = s.observatory_probe_interval || '15s';
+  $('balancerStrategy').value = s.balancer_strategy || 'random';
+  $('handshakeTimeout').value = s.handshake_timeout || '8';
+  $('connIdle').value = s.conn_idle || '300';
+  $('speedTestEnabled').checked = s.speed_test_enabled !== 'false';
+  $('speedTestMax').value = s.speed_test_max || '30';
+  $('speedTestUrl').value = s.speed_test_url || 'http://speedtest.selectel.ru/10MB';
+  $('applyAfterTest').checked = s.apply_after_test !== 'false';
+  $('minSpeedMbps').value = s.min_speed_mbps || '0';
+  $('speedTestAdaptiveSec').value = s.speed_test_adaptive_sec || '2';
+  $('safeOnlyImport').checked = s.safe_only_import === 'true';
+  $('sniffingEnabled').checked = s.sniffing_enabled !== 'false';
+  $('sniffingRouteOnly').checked = s.sniffing_route_only !== 'false';
+  const destOverride = (s.sniffing_dest_override || 'http,tls').split(',').map(x => x.trim());
+  $('sniffHttp').checked = destOverride.includes('http');
+  $('sniffTls').checked = destOverride.includes('tls');
+  $('sniffQuic').checked = destOverride.includes('quic');
+  $('sniffFtp').checked = destOverride.includes('ftp');
   $('geoEnabled').checked = s.geo_enabled !== 'false';
+  updateConfigStatus(status);
+  updateSpeedTestDependants();
 }
 
 function updateConfigStatus(status) {
@@ -133,30 +140,33 @@ async function saveSettings() {
     speed_test_adaptive_sec: $('speedTestAdaptiveSec').value.trim() || '2',
     observatory_probe_interval: $('observatoryProbeInterval').value.trim() || '15s',
     balancer_strategy: $('balancerStrategy').value,
+    safe_only_import: $('safeOnlyImport').checked ? 'true' : 'false',
     handshake_timeout: $('handshakeTimeout').value.trim() || '8',
     conn_idle: $('connIdle').value.trim() || '300',
-    safe_only_import: $('safeOnlyImport').checked ? 'true' : 'false',
+    // Sniffing
+    sniffing_enabled: $('sniffingEnabled').checked ? 'true' : 'false',
+    sniffing_route_only: $('sniffingRouteOnly').checked ? 'true' : 'false',
+    sniffing_dest_override: (() => {
+      const parts = [];
+      if ($('sniffHttp').checked) parts.push('http');
+      if ($('sniffTls').checked) parts.push('tls');
+      if ($('sniffQuic').checked) parts.push('quic');
+      if ($('sniffFtp').checked) parts.push('ftp');
+      return parts.join(',');
+    })(),
   };
   const r = await api('POST', '/api/settings', data);
   $('xrayBin').disabled = false;
   $('xrayConfigPath').disabled = false;
   $('proxyListen').disabled = false;
   if (r.error) { toast(r.error, 'error'); return; }
-  if (r.restart_hint) {
-    toast(r.restart_hint, 'success');
-  } else if (data.proxy_listen || data.xray_config_path) {
-    const rr = await api('POST', '/api/xray-restart');
-    if (rr.error) toast(rr.error, 'error');
-    else toast(rr.message || 'Xray restarted', 'success');
-  } else {
-    toast('Settings saved', 'success');
-  }
+  toast(r.restart_hint || 'Settings saved', 'success');
   loadSettings();
 }
 
 function resetTuning() {
-  setRangeValue(setupRange('checkIntervalDb', 'checkIntervalDbLabel'), 0.5);
-  setRangeValue(setupRange('checkIntervalImport', 'checkIntervalImportLabel'), 3);
+  setRangeValue(_rangeDb, 0.5);
+  setRangeValue(_rangeImport, 3);
   $('vlessPerProxyTimeout').value = '5';
   $('observatoryProbeInterval').value = '15s';
   $('logTrimEvery').value = '500';
@@ -167,8 +177,8 @@ function resetTuning() {
   $('speedTestUrl').value = 'http://speedtest.selectel.ru/10MB';
   $('minSpeedMbps').value = '0';
   $('speedTestAdaptiveSec').value = '2';
-  $('balancerStrategy').value = 'random';
   $('safeOnlyImport').checked = false;
+  $('balancerStrategy').value = 'random';
   toast('Tuning values reset to defaults — click Save to apply');
 }
 
@@ -375,6 +385,10 @@ async function importBackup(event) {
   }
   event.target.value = '';
 }
+
+_rangeDb = setupRange('checkIntervalDb', 'checkIntervalDbLabel');
+_rangeImport = setupRange('checkIntervalImport', 'checkIntervalImportLabel');
+$('speedTestEnabled').addEventListener('change', updateSpeedTestDependants);
 
 loadSettings();
 loadCountries();

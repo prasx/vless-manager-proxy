@@ -3,7 +3,6 @@
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any
 
 from config import DATABASE, ETC_XRAY_CONFIG, DEFAULT_XRAY_CONFIG
 
@@ -97,6 +96,12 @@ def init_db() -> None:
     c = conn.cursor()
     _ensure_schema(conn)
 
+    c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_status ON proxies(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_speed_kbps ON proxies(speed_kbps)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_latency ON proxies(latency)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_source_id ON proxies(source_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_failed_since ON proxies(failed_since)")
+
     # backfill security для старых строк
     from .vless import parse_vless
 
@@ -135,6 +140,9 @@ def init_db() -> None:
         "conn_idle": "300",
         "min_speed_mbps": "0",
         "speed_test_adaptive_sec": "2",
+        "sniffing_enabled": "true",
+        "sniffing_dest_override": "http,tls",
+        "sniffing_route_only": "true",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))

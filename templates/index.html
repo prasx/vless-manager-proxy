@@ -26,17 +26,11 @@
 </div>
 
 <div id="activeNode">
-  <div class="an-row">
-    <div class="an-info">
-      <span id="activeInfo">// outbounds: —</span>
-      <span id="healthIndicator"></span>
-    </div>
-    <div class="source-bar" id="sourceBar">
-      <button class="btn btn-sm btn-primary" id="sourceAll" data-source="" onclick="setSource('')">All</button>
-      <button class="btn btn-sm" id="sourceUnknown" data-source="unknown" onclick="setSource('unknown')">Custom</button>
-    </div>
+  <div id="activeNodeTop">
+    <div id="activeInfo">// outbounds: —</div>
+    <span id="healthIndicator"></span>
+    <div id="lastTestRow" style="font-size:0.72rem;color:var(--text-muted)"></div>
   </div>
-  <div class="an-row" id="lastTestRow" style="font-size:0.72rem;color:var(--text-muted);margin-top:2px"></div>
   <div id="testProgressBar" style="display:none;margin-top:6px;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
     <div id="testProgressFill" style="height:100%;width:0%;background:var(--green);transition:width .5s"></div>
   </div>
@@ -44,15 +38,25 @@
 </div>
 
 <div class="toolbar">
-  <div class="toolbar-actions">
-    <button class="btn" id="testAllBtn" onclick="testAll()">Test All</button>
-    <button class="btn btn-danger" id="cleanupBtn" onclick="cleanupFailed()">Cleanup failed</button>
-    <button class="btn btn-apply" id="batchTestBtn" style="display:none" onclick="batchTest()">Test selected</button>
-    <button class="btn btn-danger" id="batchDeleteBtn" style="display:none" onclick="batchDelete()">Delete selected</button>
+  <div class="toolbar-row toolbar-row-1">
+    <div class="toolbar-actions">
+      <button class="btn" id="testAllBtn" onclick="testAll()">Test All</button>
+      <button class="btn btn-danger" id="cancelTestBtn" style="display:none" onclick="cancelTest()">Cancel</button>
+      <button class="btn btn-danger" id="cleanupBtn" onclick="cleanupFailed()">Cleanup failed</button>
+      <button class="btn btn-apply" id="batchTestBtn" style="display:none" onclick="batchTest()">Test selected</button>
+      <button class="btn btn-danger" id="batchDeleteBtn" style="display:none" onclick="batchDelete()">Delete selected</button>
+      <span id="batchCount" style="font-size:0.72rem;color:var(--text-muted);display:none"></span>
+    </div>
   </div>
-  <input type="search" id="searchInput" class="input" placeholder="Search host or id..." style="width:180px;font-size:0.78rem;margin-left:auto">
-  <span id="batchCount" style="font-size:0.72rem;color:var(--text-muted)"></span>
-  <button class="btn btn-danger" id="cancelTestBtn" style="display:none" onclick="cancelTest()">Cancel</button>
+  <div class="toolbar-row toolbar-row-2">
+    <input type="search" id="searchInput" class="input" placeholder="Search host or id..." style="font-size:0.78rem">
+  </div>
+  <div class="toolbar-row toolbar-row-3">
+    <div class="source-bar" id="sourceBar">
+      <button class="btn btn-sm btn-primary" id="sourceAll" data-source="" onclick="setSource('')">All</button>
+      <button class="btn btn-sm" id="sourceUnknown" data-source="unknown" onclick="setSource('unknown')" style="display:none">Custom</button>
+    </div>
+  </div>
 </div>
 
 <div class="table-wrap">

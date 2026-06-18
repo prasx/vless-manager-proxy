@@ -10,12 +10,6 @@ const PAGE_SIZE = 50;
 const linkMap = {};
 const selected = new Set();
 
-function api(method, url, body) {
-  const opts = { method, headers:{'Content-Type':'application/json'} };
-  if (body) opts.body = JSON.stringify(body);
-  return fetch(url, opts).then(r => r.json());
-}
-
 function formatSpeed(kbps) {
   if (!kbps) return '<span class="dim">—</span>';
   if (kbps >= 1000) return `${(kbps / 1000).toFixed(1)} Mbps`;
@@ -23,6 +17,7 @@ function formatSpeed(kbps) {
 }
 
 let currentSearch = '';
+let _initialMetaLoaded = false;
 
 function makeProxiesUrl(limit, offset) {
   let url = '/api/proxies?filter=' + currentFilter;
@@ -97,38 +92,40 @@ async function fetchPage(reset) {
   }
 
   if (reset) {
-    const [status, ob, xr, health] = await Promise.all([
-      api('GET', '/api/status'),
-      api('GET', '/api/xray/outbounds').catch(() => ({nodes:[], traffic:{}})),
-      api('GET', '/api/xray/status').catch(() => ({running:false})),
-      api('GET', '/api/health').catch(() => null),
-    ]);
-    const healthEl = $('#healthIndicator');
-    if (healthEl) {
-      const ok = health?.status === 'ok';
-      healthEl.innerHTML = ok
-        ? '<span class="badge badge-green" style="margin-left:8px;font-size:0.62rem">healthy</span>'
-        : '<span class="badge badge-red" style="margin-left:8px;font-size:0.62rem">unhealthy</span>';
+    if (!_initialMetaLoaded) {
+      _initialMetaLoaded = true;
+      const [status, ob, xr, health] = await Promise.all([
+        api('GET', '/api/status'),
+        api('GET', '/api/xray/outbounds').catch(() => ({nodes:[], traffic:{}})),
+        api('GET', '/api/xray/status').catch(() => ({running:false})),
+        api('GET', '/api/health').catch(() => null),
+      ]);
+      const healthEl = $('#healthIndicator');
+      if (healthEl) {
+        const ok = health?.status === 'ok';
+        healthEl.innerHTML = ok
+          ? '<span class="badge badge-green" style="margin-left:8px;font-size:0.62rem">healthy</span>'
+          : '<span class="badge badge-red" style="margin-left:8px;font-size:0.62rem">unhealthy</span>';
+      }
+      $('#statTotal').textContent = status.total;
+      $('#statWorking').textContent = status.working;
+      $('#statFailedRecent').textContent = status.failed_recent;
+      $('#statTopSpeed').textContent = status.top_speed;
+      const speedLabel = document.querySelector('.stat-card[data-filter="top_speed"] .label-s');
+      if (speedLabel && status.top_speed_threshold) {
+        const mbps = status.top_speed_threshold / 1000;
+        speedLabel.textContent = mbps >= 1 ? `top speed ≥${mbps}Mbps` : `top speed ≥${status.top_speed_threshold}Kbps`;
+      }
+      renderSourceButtons(status.sources, status.unknown_count, status.total);
+      renderTraffic(ob, xr);
     }
-
     proxies.forEach(p => linkMap[p.id] = p.link);
-    $('#statTotal').textContent = status.total;
-    $('#statWorking').textContent = status.working;
-    $('#statFailedRecent').textContent = status.failed_recent;
-    $('#statTopSpeed').textContent = status.top_speed;
-    const speedLabel = document.querySelector('.stat-card[data-filter="top_speed"] .label-s');
-    if (speedLabel && status.top_speed_threshold) {
-      const mbps = status.top_speed_threshold / 1000;
-      speedLabel.textContent = mbps >= 1 ? `top speed ≥${mbps}Mbps` : `top speed ≥${status.top_speed_threshold}Kbps`;
-    }
-    renderSourceButtons(status.sources, status.unknown_count, status.total);
-    renderTraffic(ob, xr);
   } else {
     proxies.forEach(p => { if (!linkMap[p.id]) linkMap[p.id] = p.link; });
   }
 
-  if (window.innerWidth <= 768) renderMobile(allProxies);
-  else renderDesktop(allProxies);
+  renderMobile(allProxies);
+  renderDesktop(allProxies);
 
   updatePagination();
 }
@@ -155,15 +152,15 @@ function renderTraffic(ob, xr) {
 function renderSourceButtons(sources, unknownCount, totalCount) {
   const bar = $('#sourceBar');
   if (!bar) return;
-  const allBtn = $('#sourceAll');
-  if (allBtn) allBtn.textContent = 'All ' + (totalCount || 0);
-
-  const totalSrc = (sources || []).length + (unknownCount > 0 ? 1 : 0);
   $$('.source-btn-src, .source-select').forEach(el => el.remove());
 
+  const totalSrc = (sources || []).length + (unknownCount > 0 ? 1 : 0);
+  const allBtn = $('#sourceAll');
+  const unknownBtn = $('#sourceUnknown');
+
   if (totalSrc <= 4) {
-    // inline buttons
-    let unknownBtn = $('#sourceUnknown');
+    // inline buttons — show All + source buttons
+    if (allBtn) allBtn.style.display = '';
     if (unknownCount > 0) {
       if (!unknownBtn) {
         unknownBtn = document.createElement('button');
@@ -192,23 +189,23 @@ function renderSourceButtons(sources, unknownCount, totalCount) {
       btn.textContent = s.name + ' ' + s.cnt;
     }
   } else {
-    // select dropdown
+    // select dropdown — hide All button, show select with All option
+    if (allBtn) allBtn.style.display = 'none';
     const sel = document.createElement('select');
     sel.className = 'input source-select';
     sel.style.width = 'auto';
     sel.style.maxWidth = '280px';
-    sel.innerHTML = `<option value="">All ${totalCount || 0}</option>`;
+    let opts = `<option value="">All ${totalCount || 0}</option>`;
     if (unknownCount > 0) {
-      sel.innerHTML += `<option value="unknown">Custom ${unknownCount}</option>`;
+      opts += `<option value="unknown">Custom ${unknownCount}</option>`;
     }
     for (const s of (sources || [])) {
-      sel.innerHTML += `<option value="${s.id}">${s.name} (${s.cnt})</option>`;
+      opts += `<option value="${s.id}">${s.name} (${s.cnt})</option>`;
     }
+    sel.innerHTML = opts;
     sel.value = currentSource;
     sel.onchange = () => setSource(sel.value);
     bar.appendChild(sel);
-    // hide inline unknown btn
-    const unknownBtn = $('#sourceUnknown');
     if (unknownBtn) unknownBtn.style.display = 'none';
   }
   updateSourceButtons();
@@ -270,7 +267,9 @@ function updateBatchButtons() {
   $('#batchTestBtn').style.display = hasSel ? 'inline-flex' : 'none';
   $('#testAllBtn').style.display = hasSel ? 'none' : 'inline-flex';
   $('#cleanupBtn').style.display = hasSel ? 'none' : 'inline-flex';
-  $('#batchCount').textContent = hasSel ? `${cnt} selected` : '';
+  const bc = $('#batchCount');
+  if (hasSel) { bc.textContent = `${cnt} selected`; bc.style.display = ''; }
+  else { bc.textContent = ''; bc.style.display = 'none'; }
 }
 
 async function batchDelete() {
@@ -412,10 +411,9 @@ async function cleanupFailed() {
   loadData();
 }
 
-let resizeTimer;
 window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(loadData, 200);
+  renderMobile(allProxies);
+  renderDesktop(allProxies);
 });
 
 loadData();
@@ -468,6 +466,7 @@ function onProgressEvent(p) {
     if (_wasRunning) {
       _wasRunning = false;
       _lastLoadDuringTest = 0;
+      _initialMetaLoaded = false;
       loadData();
     }
   }

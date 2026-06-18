@@ -304,42 +304,6 @@ class ProxyManager:
             add_log("DEBUG", f"Speed measure {url}: {e}")
         return 0
 
-    def _run_speed_test_for_top(self):
-        """После VLESS-теста замеряет скорость для всех рабочих прокси (параллельно).
-        Количество определяется настройкой speed_test_max."""
-        if Settings.get("speed_test_enabled", "true") != "true":
-            return
-        max_count = int(Settings.get("speed_test_max", "20"))
-        rows = db_q(
-            "SELECT id, link FROM proxies WHERE status='working' AND latency_vless > 0 LIMIT ?",
-            (max_count,),
-        )
-        if not rows:
-            return
-        add_log("INFO", f"Speed test: {len(rows)} proxies")
-        self.progress.update(
-            running=True, total=len(rows), done=0, ok=0, label="Speed test"
-        )
-        timeout = int(Settings.get("vless_per_proxy_timeout", "5")) * 3
-        with ThreadPoolExecutor(max_workers=5) as pool:
-            futures = {}
-            for r in rows:
-                future = pool.submit(self._test_speed_single, r["link"], timeout)
-                futures[future] = r["id"]
-            for future in as_completed(futures):
-                pid = futures[future]
-                try:
-                    kbps = future.result()
-                except Exception as e:
-                    add_log("DEBUG", f"Speed test #{pid} exception: {e}")
-                    kbps = 0
-                db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (kbps, pid))
-                with self._progress_lock:
-                    self.progress["done"] += 1
-                    if kbps:
-                        self.progress["ok"] += 1
-                add_log("INFO", f"Speed #{pid}: {kbps} kbps")
-
     def _test_speed_single(self, link, timeout=15):
         parsed = parse_vless(link)
         if not parsed:

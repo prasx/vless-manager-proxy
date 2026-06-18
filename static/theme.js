@@ -19,3 +19,8 @@
 
   window.toggleTheme = toggleTheme;
 })();
+
+function toggleNav() {
+  const nav = document.getElementById('mainNav');
+  if (nav) nav.classList.toggle('nav-open');
+}

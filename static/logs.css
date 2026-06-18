@@ -1,4 +1,7 @@
+/* Mobile-first: logs as cards on small screens */
 .table-wrap { overflow-x:auto; }
+table { min-width:100%; }
+
 .level-INFO { color:var(--green); }
 .level-WARN { color:#ed8936; }
 .level-ERROR { color:var(--red); }
@@ -33,4 +36,34 @@
 .pagination-info {
   font-size:0.72rem;
   color:var(--text-muted);
+}
+
+/* Mobile: hide table columns, show compact row */
+@media(max-width:768px) {
+  table, thead, tbody, tr { display:block; }
+  thead { display:none; }
+  tr {
+    background:var(--bg-card);
+    border:1px solid var(--border);
+    border-radius:4px;
+    margin-bottom:6px;
+    display:flex;
+    flex-wrap:wrap;
+    padding:8px 10px;
+    gap:4px 10px;
+  }
+  td {
+    display:inline;
+    border:none;
+    padding:0;
+    font-size:0.78rem;
+  }
+  td:first-child {
+    flex:1 1 100%;
+    font-size:0.68rem;
+    color:var(--text-muted);
+    margin-bottom:2px;
+  }
+  td:nth-child(2) { order:-1; }
+  td:nth-child(3) { flex:1 1 100%; word-break:break-word; }
 }

@@ -1,11 +1,5 @@
 const $ = s => document.querySelector(s);
 
-function api(method, url, body) {
-  const opts = { method, headers:{'Content-Type':'application/json'} };
-  if (body) opts.body = JSON.stringify(body);
-  return fetch(url, opts).then(r => r.json());
-}
-
 async function load() {
   const [sources, settings] = await Promise.all([
     api('GET','/api/sources'),

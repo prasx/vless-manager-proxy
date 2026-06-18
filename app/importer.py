@@ -8,9 +8,6 @@ from .db import db_q, Settings, _get_conn
 from .utils import add_log, now_utc
 from .vless import parse_vless
 
-# Кеш ETag/Last-Modified для источников — файл <cache_dir>/etag_<hash>.txt
-_IMPORT_CACHE = {}
-
 
 def _etag_path():
     from config import DATABASE

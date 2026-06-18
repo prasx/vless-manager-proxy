@@ -7,12 +7,6 @@ let currentLevel = '';
 const PAGE_SIZE = 50;
 let pollTimer = null;
 
-function api(method, url, body) {
-  const opts = { method, headers:{'Content-Type':'application/json'} };
-  if (body) opts.body = JSON.stringify(body);
-  return fetch(url, opts).then(r => r.json());
-}
-
 function setLevel(level) {
   currentLevel = level;
   loadData();

@@ -44,15 +44,38 @@ class XrayConfigurator:
     @staticmethod
     def _proxy_inbounds(listen):
         """Возвращает SOCKS и HTTP inbound для заданного адреса прослушивания."""
-        return [
-            {
-                "port": SOCKS_PORT,
-                "listen": listen,
-                "protocol": "socks",
-                "settings": {"udp": True},
-            },
-            {"port": HTTP_PORT, "listen": listen, "protocol": "http", "settings": {}},
-        ]
+        sniffing_enabled = Settings.get("sniffing_enabled", "true") == "true"
+        sniffing_dest = Settings.get("sniffing_dest_override", "http,tls")
+        sniffing_route = Settings.get("sniffing_route_only", "true") == "true"
+        dest_override = [s.strip() for s in sniffing_dest.split(",") if s.strip()]
+
+        sniffing = {}
+        if sniffing_enabled and dest_override:
+            sniffing = {
+                "enabled": True,
+                "destOverride": dest_override,
+                "routeOnly": sniffing_route,
+            }
+
+        socks_in = {
+            "port": SOCKS_PORT,
+            "listen": listen,
+            "protocol": "socks",
+            "settings": {"udp": True},
+        }
+        if sniffing:
+            socks_in["sniffing"] = sniffing
+
+        http_in = {
+            "port": HTTP_PORT,
+            "listen": listen,
+            "protocol": "http",
+            "settings": {},
+        }
+        if sniffing:
+            http_in["sniffing"] = sniffing
+
+        return [socks_in, http_in]
 
     @staticmethod
     def _apply_proxy_listen(cfg):
@@ -114,11 +137,6 @@ class XrayConfigurator:
 
     _geosite_checked = False
     _geosite_available = False
-
-    @classmethod
-    def _reset_geosite_cache(cls):
-        """Сбрасывает кеш geosite.dat — принудительная перепроверка."""
-        cls._geosite_checked = False
 
     @classmethod
     def _geosite_available_check(cls):
@@ -301,31 +319,6 @@ class XrayConfigurator:
                 }
             ]
         return self._inject_api(config)
-
-    def generate_base_config(self) -> dict:
-        """Минимальный конфиг для диска — прокси управляются только через API."""
-        geo_rules = self._geo_routing_rules(has_balancer=False)
-        catch_all = {"type": "field", "network": "tcp,udp", "outboundTag": "direct"}
-        base = {
-            "api": self._api_config(),
-            "log": {"loglevel": "warning"},
-            "inbounds": self._inbounds_config(),
-            "outbounds": [
-                {"protocol": "freedom", "tag": "direct"},
-                {"protocol": "freedom", "tag": "api"},
-            ],
-            "routing": {
-                "domainStrategy": "IPIfNonMatch",
-                "rules": [
-                    {"type": "field", "protocol": ["bittorrent"], "outboundTag": "direct"},
-                    {"inboundTag": ["api"], "outboundTag": "api"},
-                ]
-                + geo_rules
-                + [catch_all],
-            },
-            "policy": self._policy_config(),
-        }
-        return self._inject_api(base)
 
     # ─── Xray API helpers ───
 
