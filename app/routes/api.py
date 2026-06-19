@@ -327,6 +327,7 @@ _REBUILD_KEYS = {
     "allowed_countries", "geo_enabled", "max_active_proxies", "probe_url",
     "observatory_probe_interval", "balancer_strategy", "handshake_timeout", "conn_idle",
     "min_speed_mbps", "sniffing_enabled", "sniffing_dest_override", "sniffing_route_only",
+    "geosite_rules",
 }
 
 

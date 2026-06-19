@@ -3,8 +3,20 @@
 {% block page_title %}Settings{% endblock %}
 {% block content %}
 
+<nav class="settings-nav">
+  <a href="#sec-xray">Xray</a>
+  <a href="#sec-sniffing">Sniffing</a>
+  <a href="#sec-filter">Config &amp; Filter</a>
+  <a href="#sec-balancer">Balancer</a>
+  <a href="#sec-check">Proxy Check</a>
+  <a href="#sec-speed">Speed Test</a>
+  <a href="#sec-perf">Performance</a>
+  <a href="#sec-geo">GeoSite</a>
+  <a href="#sec-system">Logging &amp; Backup</a>
+</nav>
+
 <!-- ─── 1. Xray ─── -->
-<div class="settings-section">
+<div class="settings-section" id="sec-xray">
   <div class="settings-cols">
     <div class="settings-col">
       <h2>Xray</h2>
@@ -23,55 +35,45 @@
     </div>
     <div class="settings-col settings-col-narrow">
       <h2>Daemon</h2>
-      <div id="xrayStatus" class="label" style="margin-bottom:12px">// checking...</div>
-      <div class="form-actions" style="flex-wrap:wrap">
-        <button class="btn" id="btnXrayStart" onclick="startXrayDaemon()">Start</button>
-        <button class="btn btn-danger" id="btnXrayStop" onclick="stopXrayDaemon()">Stop</button>
-        <button class="btn btn-apply" onclick="restartXray()">Restart</button>
+      <div id="xrayStatus" class="label label-daemon">// checking...</div>
+      <div class="form-actions form-actions-wrap">
+        <button class="btn" id="btnXrayStart" onclick="if(confirm('Start Xray daemon?'))startXrayDaemon()">Start</button>
+        <button class="btn btn-danger" id="btnXrayStop" onclick="if(confirm('Stop Xray daemon?'))stopXrayDaemon()">Stop</button>
+        <button class="btn btn-apply" onclick="if(confirm('Restart Xray daemon?'))restartXray()">Restart</button>
       </div>
-      <p style="font-size:0.68rem;color:var(--text-muted);margin-top:12px;line-height:1.4">
-        systemd start/stop/restart. Изменение listen address требует перезапуска.
-      </p>
+      <p class="daemon-hint">systemd start/stop/restart. Изменение listen address требует перезапуска.</p>
     </div>
   </div>
 </div>
 
 <!-- ─── 2. Sniffing ─── -->
-<div class="settings-section">
-  <h2 style="display:flex;align-items:center;gap:10px">
+<div class="settings-section" id="sec-sniffing">
+  <h2 class="settings-h2-row">
     Sniffing
-    <label style="font-size:0.72rem;font-weight:normal;display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text-muted)">
-      <input type="checkbox" id="sniffingEnabled" style="cursor:pointer">
+    <label class="settings-h2-toggle">
+      <input type="checkbox" id="sniffingEnabled">
       Enabled
     </label>
   </h2>
-  <p style="font-size:0.7rem;color:var(--text-muted);margin:-12px 0 14px;line-height:1.4">
+  <p class="settings-desc">
     Sniffing позволяет Xray определять протокол трафика (HTTP, TLS) и корректно маршрутизировать UDP-запросы (DNS, QUIC).
   </p>
   <div class="tuning-grid">
     <div class="tuning-group">
       <div class="tuning-item">
         <span class="tuning-label">Route only</span>
-        <input type="checkbox" id="sniffingRouteOnly" class="input" style="width:auto;height:auto;margin:0" checked>
+        <input type="checkbox" id="sniffingRouteOnly" class="chk-inline" checked>
         <span class="tuning-comment">не менять destination, только для маршрутизации</span>
       </div>
     </div>
     <div class="tuning-group">
-      <div class="tuning-item" style="flex-wrap:wrap">
+      <div class="tuning-item tuning-item-wrap">
         <span class="tuning-label">Dest override</span>
-        <div style="display:flex;gap:12px;align-items:center">
-          <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer">
-            <input type="checkbox" id="sniffHttp" class="input sniff-dest" style="width:auto;height:auto;margin:0" checked> HTTP
-          </label>
-          <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer">
-            <input type="checkbox" id="sniffTls" class="input sniff-dest" style="width:auto;height:auto;margin:0" checked> TLS
-          </label>
-          <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer">
-            <input type="checkbox" id="sniffQuic" class="input sniff-dest" style="width:auto;height:auto;margin:0"> QUIC
-          </label>
-          <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer">
-            <input type="checkbox" id="sniffFtp" class="input sniff-dest" style="width:auto;height:auto;margin:0"> FTP
-          </label>
+        <div class="chk-group">
+          <label class="chk-label"><input type="checkbox" id="sniffHttp" class="chk-inline sniff-dest" checked> HTTP</label>
+          <label class="chk-label"><input type="checkbox" id="sniffTls" class="chk-inline sniff-dest" checked> TLS</label>
+          <label class="chk-label"><input type="checkbox" id="sniffQuic" class="chk-inline sniff-dest"> QUIC</label>
+          <label class="chk-label"><input type="checkbox" id="sniffFtp" class="chk-inline sniff-dest"> FTP</label>
         </div>
         <span class="tuning-comment">какие протоколы sniffить</span>
       </div>
@@ -80,19 +82,19 @@
 </div>
 
 <!-- ─── 3. Config & Filter ─── -->
-<div class="settings-section">
+<div class="settings-section" id="sec-filter">
   <div class="settings-cols">
     <div class="settings-col">
       <h2>Config &amp; Filter</h2>
       <div class="form-row">
         <label>Max active</label>
-        <input type="number" id="maxActiveProxies" class="input" placeholder="30" min="1" max="500" style="max-width:120px">
+        <input type="number" id="maxActiveProxies" class="input input-narrow" placeholder="30" min="1" max="500">
       </div>
       <div class="form-row">
         <label>Probe URL</label>
-        <div style="display:flex;flex:1;max-width:480px;gap:6px">
-          <input type="text" id="probeUrl" class="input" placeholder="https://www.gstatic.com/generate_204" style="flex:1">
-          <button class="btn" onclick="resetProbeUrl()" title="Reset to default" style="width:45px;height:34px;padding:0;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center">
+        <div class="input-row">
+          <input type="text" id="probeUrl" class="input" placeholder="https://www.gstatic.com/generate_204">
+          <button class="btn btn-icon" onclick="resetProbeUrl()" title="Reset to default">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 2v6h-6M3 12a9 9 0 0 1 15.36-6.36L21 8M3 22v-6h6M21 12a9 9 0 0 1-15.36 6.36L3 16"/>
             </svg>
@@ -101,39 +103,36 @@
       </div>
       <div class="form-row">
         <label>Min speed</label>
-        <div style="display:flex;align-items:center;gap:6px">
-          <input type="number" id="minSpeedMbps" class="input" min="0" max="1000" step="0.1" style="width:76px" placeholder="0">
+        <div class="input-row">
+          <input type="number" id="minSpeedMbps" class="input input-tight" min="0" max="1000" step="0.1" placeholder="0">
           <span class="tuning-suffix">Mbps</span>
-          <span class="tuning-comment" style="margin-left:4px">0 = any</span>
+          <span class="tuning-comment">0 = any</span>
         </div>
       </div>
       <div class="form-row">
         <label>Safe-only import</label>
-        <div style="display:flex;align-items:center;gap:8px">
-          <input type="checkbox" id="safeOnlyImport" class="input" style="width:auto;height:auto;margin:0">
-          <span class="tuning-comment" style="font-size:0.72rem;margin-left:0">только TLS/Reality</span>
+        <div class="input-row">
+          <input type="checkbox" id="safeOnlyImport" class="chk-inline">
+          <span class="tuning-comment">только TLS/Reality</span>
         </div>
       </div>
-      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <div style="font-size:0.82rem;color:var(--text-secondary)">
-            Config: <span id="configStatus">—</span>
-          </div>
-          <button class="btn btn-sm btn-apply" onclick="rebuildConfig()">Rebuild</button>
+      <div class="settings-sep">
+        <div class="settings-config-row">
+          <span class="settings-config-label">Config: <span id="configStatus">—</span></span>
+          <button class="btn btn-sm btn-apply" onclick="if(confirm('Rebuild config now?'))rebuildConfig()">Rebuild</button>
         </div>
       </div>
     </div>
     <div class="settings-col settings-col-narrow">
       <h2>Country Filter</h2>
-      <p style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px">Разрешённые страны для конфига</p>
-      <div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;padding:8px 0">
-        <table style="width:100%;font-size:0.8rem">
+      <p class="settings-muted-label">Разрешённые страны для конфига</p>
+      <div class="country-filter-list">
+        <table class="country-filter-table">
           <tbody id="countryFilterBody"></tbody>
         </table>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
-        <span id="countryFilterCount" style="font-size:0.72rem;color:var(--text-muted);flex:1"></span>
-        <button class="btn btn-primary btn-sm" onclick="saveCountryFilter()">Save</button>
+      <div class="country-filter-actions">
+        <span id="countryFilterCount" class="country-filter-count"></span>
         <button class="btn btn-sm" onclick="selectAllCountries(true)">All</button>
         <button class="btn btn-sm" onclick="selectAllCountries(false)">Clear</button>
       </div>
@@ -142,9 +141,9 @@
 </div>
 
 <!-- ─── 4. Balancer ─── -->
-<div class="settings-section tuning-section">
+<div class="settings-section tuning-section" id="sec-balancer">
   <h2>Balancer</h2>
-  <p style="font-size:0.7rem;color:var(--text-muted);margin:-12px 0 14px;line-height:1.4">
+  <p class="settings-desc">
     Xray Observatory отслеживает состояние узлов и балансирует трафик. Настройки ниже применяются к observatory-секции конфига.
   </p>
   <div class="tuning-grid">
@@ -176,15 +175,15 @@
       </div>
     </div>
   </div>
-  <div class="form-actions" style="margin-top:8px">
+  <div class="form-actions">
     <button class="btn" onclick="resetTuning()">Reset tuning to defaults</button>
   </div>
 </div>
 
 <!-- ─── 5. Proxy Check ─── -->
-<div class="settings-section tuning-section">
+<div class="settings-section tuning-section" id="sec-check">
   <h2>Proxy Check</h2>
-  <div class="tuning-notice" style="margin-bottom:16px">
+  <div class="tuning-notice">
     <strong>⚠️</strong> Import+Check имеет приоритет. Два режима не запускаются одновременно.
     При 2500 профилях полный тест занимает ~10-15 мин (per-proxy timeout: 3-5 сек).
   </div>
@@ -240,7 +239,7 @@
       <h3>After test</h3>
       <div class="tuning-item">
         <span class="tuning-label">Apply config</span>
-        <input type="checkbox" id="applyAfterTest" class="input" style="width:auto;height:auto;margin:0" checked>
+        <input type="checkbox" id="applyAfterTest" class="chk-inline" checked>
         <span class="tuning-comment">Пересобрать конфиг Xray после теста</span>
       </div>
     </div>
@@ -248,9 +247,9 @@
 </div>
 
 <!-- ─── 6. Speed Test ─── -->
-<div class="settings-section tuning-section">
+<div class="settings-section tuning-section" id="sec-speed">
   <h2>Speed Test</h2>
-  <p style="font-size:0.7rem;color:var(--text-muted);margin:-12px 0 14px;line-height:1.4">
+  <p class="settings-desc">
     Замер скорости после VLESS-теста. Влияет на ранжирование в конфиге — чем быстрее, тем выше приоритет.
   </p>
   <div id="speedTestBody">
@@ -284,9 +283,9 @@
 </div>
 
 <!-- ─── 7. Performance ─── -->
-<div class="settings-section tuning-section">
+<div class="settings-section tuning-section" id="sec-perf">
   <h2>Performance</h2>
-  <p style="font-size:0.7rem;color:var(--text-muted);margin:-12px 0 14px;line-height:1.4">
+  <p class="settings-desc">
     Параллельное тестирование и таймауты. Больше воркеров = быстрее, но больше нагрузка на CPU.
   </p>
   <div class="tuning-grid">
@@ -321,15 +320,15 @@
 </div>
 
 <!-- ─── 8. GeoSite Rules ─── -->
-<div class="settings-section">
-  <h2 style="display:flex;align-items:center;gap:10px">
+<div class="settings-section" id="sec-geo">
+  <h2 class="settings-h2-row">
     GeoSite Rules
-    <label style="font-size:0.72rem;font-weight:normal;display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text-muted)">
-      <input type="checkbox" id="geoEnabled" onchange="toggleGeo()" style="cursor:pointer">
+    <label class="settings-h2-toggle">
+      <input type="checkbox" id="geoEnabled">
       GeoIP/GeoSite
     </label>
   </h2>
-  <details style="font-size:0.74rem;line-height:1.8;margin-bottom:12px" class="tuning-notice">
+  <details class="tuning-notice geosite-cheatsheet">
     <summary style="cursor:pointer;font-weight:bold;color:var(--text-primary)">
       🧭 Шпаргалка по категориям
     </summary>
@@ -373,12 +372,11 @@
   <div id="geositeRulesWrap"></div>
   <div class="form-actions">
     <button class="btn" onclick="addGeositeRule()">+ Add Rule</button>
-    <button class="btn btn-primary" onclick="saveGeositeRules()">Save</button>
   </div>
 </div>
 
 <!-- ─── 9. Logging + Backup ─── -->
-<div class="settings-section">
+<div class="settings-section" id="sec-system">
   <div class="settings-cols">
     <div class="settings-col">
       <h2>Logging</h2>
@@ -397,59 +395,59 @@
     </div>
     <div class="settings-col settings-col-narrow">
       <h2>Backup</h2>
-      <p style="font-size:0.72rem;color:var(--text-muted);margin-bottom:12px">Экспорт/импорт настроек и источников</p>
+      <p class="settings-muted-label">Экспорт/импорт настроек и источников</p>
       <div class="form-actions">
         <button class="btn btn-primary btn-sm" onclick="exportBackup()">Export</button>
-        <button class="btn btn-sm" onclick="document.getElementById('backupFile').click()">Import</button>
-        <input type="file" id="backupFile" accept=".json" style="display:none" onchange="importBackup(event)">
+        <button class="btn btn-sm" onclick="confirmImportBackup()">Import</button>
+        <input type="file" id="backupFile" accept=".json" class="hidden-input" onchange="importBackup(event)">
       </div>
     </div>
   </div>
 </div>
 
-<details class="settings-section" style="overflow-x:auto;cursor:pointer">
-  <summary style="font-size:0.9rem;font-weight:600;padding:8px 0;cursor:pointer;color:var(--text-secondary)">API Reference <span style="font-size:0.7rem;color:var(--text-muted)">▸</span></summary>
-  <table style="width:100%;border-collapse:collapse;font-size:0.78rem;margin-top:8px">
+<details class="settings-section api-ref">
+  <summary class="api-ref-summary">API Reference <span class="api-ref-arrow">▸</span></summary>
+  <table class="api-ref-table">
     <thead>
-      <tr style="border-bottom:1px solid var(--border)">
-        <th style="text-align:left;padding:6px 8px">Method</th>
-        <th style="text-align:left;padding:6px 8px">Path</th>
-        <th style="text-align:left;padding:6px 8px">Description</th>
+      <tr>
+        <th>Method</th>
+        <th>Path</th>
+        <th>Description</th>
       </tr>
     </thead>
     <tbody>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/proxies?filter=&amp;source=&amp;limit=&amp;offset=</code></td><td style="padding:4px 8px">Список прокси с пагинацией</td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/status</code></td><td style="padding:4px 8px">Статистика (total, working, failed_recent, sources)</td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/countries</code></td><td style="padding:4px 8px">Список стран с enabled-статусом</td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/test-progress</code></td><td style="padding:4px 8px">Прогресс фонового VLESS-теста</td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/settings</code></td><td style="padding:4px 8px">Все настройки</td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/sources</code></td><td style="padding:4px 8px">Список источников</td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/xray/status</code></td><td style="padding:4px 8px">Статус Xray (running, API, systemd, outbounds)</td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/xray/outbounds</code></td><td style="padding:4px 8px">Список узлов и трафик</td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/geosite-rules</code></td><td style="padding:4px 8px">Список geosite-правил</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/geosite-rules</code></td><td style="padding:4px 8px">Сохранить geosite-правила <code>{"rules":[...]}</code></td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/logs?limit=&amp;offset=&amp;level=</code></td><td style="padding:4px 8px">Логи с пагинацией и фильтром</td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/subscribe.txt</code></td><td style="padding:4px 8px">Подписка (только VLESS-верифицированные) — <a href="/api/subscribe.txt" target="_blank" style="color:var(--green)">open</a></td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/add</code></td><td style="padding:4px 8px">Добавить прокси + тест + определение страны</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/test/&lt;id&gt;</code></td><td style="padding:4px 8px">VLESS-тест одного прокси</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/test-all</code></td><td style="padding:4px 8px">VLESS-тест всех (параллельно, 5 потоков)</td></tr>
-      <tr><td style="padding:4px 8px;color:#fc8181">DELETE</td><td style="padding:4px 8px"><code>/api/delete/&lt;id&gt;</code></td><td style="padding:4px 8px">Удалить прокси</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/cleanup</code></td><td style="padding:4px 8px">Удалить все failed-прокси</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/proxies/batch-delete</code></td><td style="padding:4px 8px">Удалить выбранные <code>{"ids":[1,2,3]}</code></td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/proxies/batch-test</code></td><td style="padding:4px 8px">VLESS-тест выбранных</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources</code></td><td style="padding:4px 8px">Добавить источник <code>{"name":"...","url":"..."}</code></td></tr>
-      <tr><td style="padding:4px 8px;color:#fc8181">DELETE</td><td style="padding:4px 8px"><code>/api/sources/&lt;id&gt;</code></td><td style="padding:4px 8px">Удалить источник</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources/&lt;id&gt;/import</code></td><td style="padding:4px 8px">Импорт из источника + тест + страны</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/sources/import-all</code></td><td style="padding:4px 8px">Импорт из всех + тест + страны</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/import</code></td><td style="padding:4px 8px">Импорт по URL + тест + страны</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/settings</code></td><td style="padding:4px 8px">Сохранить настройки</td></tr>
-      <tr><td style="padding:4px 8px;color:var(--green)">GET</td><td style="padding:4px 8px"><code>/api/backup</code></td><td style="padding:4px 8px">Экспорт настроек + источников в JSON</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/backup/import</code></td><td style="padding:4px 8px">Импорт настроек + источников из JSON</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/logs/clear</code></td><td style="padding:4px 8px">Очистить логи</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray/start</code></td><td style="padding:4px 8px">systemctl start xray</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray/stop</code></td><td style="padding:4px 8px">systemctl stop xray</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray-restart</code></td><td style="padding:4px 8px">systemctl restart xray</td></tr>
-      <tr><td style="padding:4px 8px;color:#ed8936">POST</td><td style="padding:4px 8px"><code>/api/xray/rebuild</code></td><td style="padding:4px 8px">Пересобрать конфиг без перезапуска</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/proxies?filter=&amp;source=&amp;limit=&amp;offset=</code></td><td>Список прокси с пагинацией</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/status</code></td><td>Статистика (total, working, failed_recent, sources)</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/countries</code></td><td>Список стран с enabled-статусом</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/test-progress</code></td><td>Прогресс фонового VLESS-теста</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/settings</code></td><td>Все настройки</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/sources</code></td><td>Список источников</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/xray/status</code></td><td>Статус Xray (running, API, systemd, outbounds)</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/xray/outbounds</code></td><td>Список узлов и трафик</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/geosite-rules</code></td><td>Список geosite-правил</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/geosite-rules</code></td><td>Сохранить geosite-правила <code>{"rules":[...]}</code></td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/logs?limit=&amp;offset=&amp;level=</code></td><td>Логи с пагинацией и фильтром</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/subscribe.txt</code></td><td>Подписка (только VLESS-верифицированные) — <a href="/api/subscribe.txt" target="_blank" class="api-link">open</a></td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/add</code></td><td>Добавить прокси + тест + определение страны</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/test/&lt;id&gt;</code></td><td>VLESS-тест одного прокси</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/test-all</code></td><td>VLESS-тест всех (параллельно, 5 потоков)</td></tr>
+      <tr><td class="api-method-delete">DELETE</td><td><code>/api/delete/&lt;id&gt;</code></td><td>Удалить прокси</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/cleanup</code></td><td>Удалить все failed-прокси</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/proxies/batch-delete</code></td><td>Удалить выбранные <code>{"ids":[1,2,3]}</code></td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/proxies/batch-test</code></td><td>VLESS-тест выбранных</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/sources</code></td><td>Добавить источник <code>{"name":"...","url":"..."}</code></td></tr>
+      <tr><td class="api-method-delete">DELETE</td><td><code>/api/sources/&lt;id&gt;</code></td><td>Удалить источник</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/sources/&lt;id&gt;/import</code></td><td>Импорт из источника + тест + страны</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/sources/import-all</code></td><td>Импорт из всех + тест + страны</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/import</code></td><td>Импорт по URL + тест + страны</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/settings</code></td><td>Сохранить настройки</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/backup</code></td><td>Экспорт настроек + источников в JSON</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/backup/import</code></td><td>Импорт настроек + источников из JSON</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/logs/clear</code></td><td>Очистить логи</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/xray/start</code></td><td>systemctl start xray</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/xray/stop</code></td><td>systemctl stop xray</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/xray-restart</code></td><td>systemctl restart xray</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/xray/rebuild</code></td><td>Пересобрать конфиг без перезапуска</td></tr>
     </tbody>
   </table>
 </details>
@@ -457,7 +455,7 @@
 <div class="settings-footer">
   <div class="settings-footer-inner">
     <button class="btn btn-primary" onclick="saveSettings()">Save all settings</button>
-    <span style="font-size:0.72rem;color:var(--text-muted)">сохраняются все настройки на странице</span>
+    <span class="settings-dirty-indicator" id="dirtyIndicator"></span>
   </div>
 </div>
 {% endblock %}

@@ -36,6 +36,198 @@ function setRangeValue(range, val) {
   range.update();
 }
 
+// ─── Dirty flag ───
+let _dirty = false;
+let _initialSnapshot = null;
+let _watching = false;
+
+function takeSnapshot() {
+  const s = {};
+  document.querySelectorAll('.settings-section input, .settings-section select').forEach(el => {
+    if (el.type === 'checkbox' || el.type === 'radio') {
+      s[el.id || el.name] = el.checked;
+    } else {
+      s[el.id || el.name] = el.value;
+    }
+  });
+  return s;
+}
+
+function markDirty() {
+  if (!_dirty) {
+    _dirty = true;
+    updateDirtyUI();
+  }
+}
+
+function markClean() {
+  _dirty = false;
+  _initialSnapshot = takeSnapshot();
+  updateDirtyUI();
+}
+
+function updateDirtyUI() {
+  const el = $('dirtyIndicator');
+  if (!el) return;
+  if (_dirty) {
+    el.textContent = '⚠ unsaved changes';
+    el.className = 'settings-dirty-indicator dirty';
+  } else {
+    el.textContent = '';
+    el.className = 'settings-dirty-indicator';
+  }
+}
+
+function isDirty() { return _dirty; }
+
+function watchDirty() {
+  if (_watching) return;
+  _watching = true;
+  document.querySelectorAll('.settings-section input, .settings-section select').forEach(el => {
+    el.addEventListener('change', () => {
+      if (!_initialSnapshot) return;
+      const id = el.id || el.name;
+      const cur = el.type === 'checkbox' ? el.checked : el.value;
+      if (_initialSnapshot[id] !== cur) {
+        markDirty();
+      }
+    });
+    el.addEventListener('input', () => {
+      if (!_initialSnapshot) return;
+      const id = el.id || el.name;
+      const cur = el.type === 'checkbox' ? el.checked : el.value;
+      if (_initialSnapshot[id] !== cur) {
+        markDirty();
+      }
+    });
+  });
+}
+
+window.addEventListener('beforeunload', e => {
+  if (isDirty()) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
+// ─── GeoSite Rules ───
+let geositeRules = [];
+
+async function loadGeositeRules() {
+  const r = await api('GET', '/api/geosite-rules');
+  if (r.error) return;
+  geositeRules = r.rules || [];
+  renderGeositeRules();
+}
+
+function renderGeositeRules() {
+  const wrap = $('geositeRulesWrap');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!geositeRules.length) {
+    wrap.innerHTML = '<div class="tuning-item" style="justify-content:center;color:var(--text-muted);font-size:0.82rem;padding:12px 0">no rules — all domains go through balancer</div>';
+    return;
+  }
+  geositeRules.forEach((rule, i) => {
+    const item = document.createElement('div');
+    item.className = 'tuning-item';
+    item.innerHTML = `
+      <input type="text" class="input geosite-domain" value="${rule.domain}" style="flex:1;font-family:monospace;max-width:360px" placeholder="geosite:google">
+      <select class="input geosite-outbound" style="width:auto;min-width:110px">
+        <option value="direct" ${rule.outboundTag === 'direct' ? 'selected' : ''}>direct</option>
+        <option value="proxy" ${rule.outboundTag === 'proxy' ? 'selected' : ''}>proxy (balancer)</option>
+      </select>
+      <button class="btn btn-danger" onclick="removeGeositeRule(${i})" style="padding:2px 10px;font-size:12px;line-height:1.6">✕</button>
+    `;
+    item.querySelector('input, select').addEventListener('change', markDirty);
+    wrap.appendChild(item);
+  });
+}
+
+function addGeositeRule() {
+  syncGeositeDomToArray();
+  geositeRules.push({ domain: 'geosite:google', outboundTag: 'direct' });
+  renderGeositeRules();
+  markDirty();
+}
+
+function syncGeositeDomToArray() {
+  const items = document.querySelectorAll('#geositeRulesWrap .tuning-item');
+  const rules = [];
+  items.forEach(item => {
+    const domain = item.querySelector('.geosite-domain');
+    const outbound = item.querySelector('.geosite-outbound');
+    if (domain && outbound && domain.value.trim()) {
+      rules.push({ domain: domain.value.trim(), outboundTag: outbound.value });
+    }
+  });
+  if (rules.length) geositeRules = rules;
+}
+
+function removeGeositeRule(idx) {
+  geositeRules.splice(idx, 1);
+  renderGeositeRules();
+  markDirty();
+}
+
+// ─── Country Filter ───
+let countryData = [];
+
+async function loadCountries() {
+  const data = await api('GET', '/api/countries');
+  if (data.error) return;
+  countryData = data.countries || [];
+  renderCountryFilter(data.allowed);
+}
+
+function renderCountryFilter(allowedRaw) {
+  const tb = $('countryFilterBody');
+  if (!tb) return;
+  tb.innerHTML = '';
+  if (!countryData.length) {
+    tb.innerHTML = '<tr><td colspan="3" class="empty">no countries detected yet — import some proxies</td></tr>';
+    const cnt = $('countryFilterCount');
+    if (cnt) cnt.textContent = '';
+    return;
+  }
+  const allowedSet = new Set(allowedRaw.split(',').map(s => s.trim()).filter(Boolean));
+  let selected = 0;
+  for (const c of countryData) {
+    const checked = !allowedRaw ? true : allowedSet.has(c.code);
+    if (checked) selected++;
+    const tr = document.createElement('tr');
+    tr.style.cssText = 'border-bottom:1px solid var(--border)';
+    tr.innerHTML = `
+      <td style="padding:4px 12px;width:40px">
+        <input type="checkbox" class="chk-custom" data-code="${c.code}" ${checked ? 'checked' : ''}>
+      </td>
+      <td style="padding:4px 6px;font-weight:bold;color:var(--text-primary)">${c.code}</td>
+      <td style="padding:4px 6px;color:var(--text-muted);font-size:0.72rem">
+        ${c.working} working / ${c.total} total
+      </td>
+    `;
+    tr.querySelector('input[type="checkbox"]').addEventListener('change', markDirty);
+    tb.appendChild(tr);
+  }
+  const cnt = $('countryFilterCount');
+  if (cnt) cnt.textContent = `${selected} / ${countryData.length} selected`;
+}
+
+function selectAllCountries(checked) {
+  const boxes = document.querySelectorAll('#countryFilterBody input[type="checkbox"]');
+  boxes.forEach(cb => { cb.checked = checked; });
+  markDirty();
+}
+
+function collectAllowedCountries() {
+  const checked = [];
+  document.querySelectorAll('#countryFilterBody input[type="checkbox"]:checked').forEach(cb => {
+    checked.push(cb.dataset.code);
+  });
+  return checked.join(',');
+}
+
+// ─── Load ───
 async function loadSettings() {
   const [s, status] = await Promise.all([
     api('GET', '/api/settings'),
@@ -80,6 +272,8 @@ async function loadSettings() {
   updateConfigStatus(status);
   updateSpeedTestDependants();
   loadPerfEstimate();
+  markClean();
+  watchDirty();
 }
 
 function updateConfigStatus(status) {
@@ -112,7 +306,7 @@ function updateSpeedTestDependants() {
 }
 
 async function rebuildConfig() {
-  const btn = document.querySelector('button[onclick="rebuildConfig()"]');
+  const btn = document.querySelector('button[onclick*="rebuildConfig"]');
   if (btn) { btn.disabled = true; btn.textContent = 'Rebuilding...'; }
   const r = await api('POST', '/api/xray/rebuild');
   if (r.error) { toast(r.error, 'error'); }
@@ -130,20 +324,55 @@ async function loadPerfEstimate() {
   if (estVal) estVal.textContent = c.estimated_label;
   if (estDetail) estDetail.textContent = `${c.total} profiles, ${c.workers} workers`;
 }
-    return a.estimated_seconds < b.estimated_seconds ? a : b;
-  });
-  const currentOk = c.estimated_seconds <= 180;
-  let msg;
-  if (currentOk) {
-    msg = `Текущие настройки оптимальны (${c.estimated_label}).`;
-  } else {
-    msg = `Рекомендация: ${best.workers} workers, ${best.probe_timeout}s probe — ${best.estimated_label}`;
+
+// ─── Validation ───
+function validateSettings() {
+  const errors = [];
+  const numFields = [
+    { id: 'maxActiveProxies', label: 'Max active' },
+    { id: 'maxWorkers', label: 'Max workers' },
+    { id: 'probeTimeout', label: 'Probe timeout' },
+    { id: 'vlessPerProxyTimeout', label: 'VLESS timeout' },
+    { id: 'handshakeTimeout', label: 'Handshake timeout' },
+    { id: 'connIdle', label: 'Idle timeout' },
+    { id: 'speedTestMax', label: 'Speed test max' },
+    { id: 'speedTestAdaptiveSec', label: 'Adaptive check' },
+    { id: 'logTrimEvery', label: 'Trim every' },
+    { id: 'logKeep', label: 'Keep last' },
+    { id: 'xrayStartupRetries', label: 'Startup retries' },
+  ];
+  for (const f of numFields) {
+    const el = $(f.id);
+    if (!el) continue;
+    const val = parseInt(el.value);
+    if (el.value.trim() && (isNaN(val) || val < 0)) {
+      errors.push(`${f.label}: must be a positive number`);
+    }
+    const min = parseInt(el.getAttribute('min'));
+    if (min !== null && !isNaN(min) && !isNaN(val) && val < min) {
+      errors.push(`${f.label}: minimum is ${min}`);
+    }
+    const max = parseInt(el.getAttribute('max'));
+    if (max !== null && !isNaN(max) && !isNaN(val) && val > max) {
+      errors.push(`${f.label}: maximum is ${max}`);
+    }
   }
-  txt.textContent = msg;
-  wrap.style.display = 'block';
+  const probeUrl = $('probeUrl').value.trim();
+  if (probeUrl && !probeUrl.startsWith('http')) {
+    errors.push('Probe URL must start with http:// or https://');
+  }
+  return errors;
 }
 
 async function saveSettings() {
+  const errors = validateSettings();
+  if (errors.length) {
+    toast('Validation errors:\n• ' + errors.join('\n• '), 'error');
+    return;
+  }
+
+  syncGeositeDomToArray();
+
   $('xrayBin').disabled = true;
   $('xrayConfigPath').disabled = true;
   $('proxyListen').disabled = true;
@@ -180,6 +409,10 @@ async function saveSettings() {
       if ($('sniffFtp').checked) parts.push('ftp');
       return parts.join(',');
     })(),
+    // Geo
+    geo_enabled: $('geoEnabled').checked ? 'true' : 'false',
+    allowed_countries: collectAllowedCountries(),
+    geosite_rules: JSON.stringify(geositeRules),
     // Performance
     max_workers: $('maxWorkers').value.trim() || '10',
     probe_timeout: $('probeTimeout').value.trim() || '5',
@@ -212,6 +445,7 @@ function resetTuning() {
   $('maxWorkers').value = '20';
   $('probeTimeout').value = '5';
   $('xrayStartupRetries').value = '15';
+  markDirty();
   toast('Tuning values reset to defaults — click Save to apply');
 }
 
@@ -223,144 +457,11 @@ async function restartXray() {
 
 function resetProbeUrl() {
   $('probeUrl').value = 'https://www.gstatic.com/generate_204';
+  markDirty();
   toast('Probe URL reset to default');
 }
 
-async function toggleGeo() {
-  const val = $('geoEnabled').checked ? 'true' : 'false';
-  const r = await api('POST', '/api/settings', { geo_enabled: val });
-  if (r.error) { toast(r.error, 'error'); $('geoEnabled').checked = val === 'true'; return; }
-  toast(`Geo routing ${val === 'true' ? 'enabled' : 'disabled'}`, 'success');
-}
-
-// ─── GeoSite Rules ───
-
-let geositeRules = [];
-
-async function loadGeositeRules() {
-  const r = await api('GET', '/api/geosite-rules');
-  if (r.error) return;
-  geositeRules = r.rules || [];
-  renderGeositeRules();
-}
-
-function renderGeositeRules() {
-  const wrap = $('geositeRulesWrap');
-  if (!wrap) return;
-  wrap.innerHTML = '';
-  if (!geositeRules.length) {
-    wrap.innerHTML = '<div class="tuning-item" style="justify-content:center;color:var(--text-muted);font-size:0.82rem;padding:12px 0">no rules — all domains go through balancer</div>';
-    return;
-  }
-  geositeRules.forEach((rule, i) => {
-    const item = document.createElement('div');
-    item.className = 'tuning-item';
-    item.innerHTML = `
-      <input type="text" class="input geosite-domain" value="${rule.domain}" style="flex:1;font-family:monospace;max-width:360px" placeholder="geosite:google">
-      <select class="input geosite-outbound" style="width:auto;min-width:110px">
-        <option value="direct" ${rule.outboundTag === 'direct' ? 'selected' : ''}>direct</option>
-        <option value="proxy" ${rule.outboundTag === 'proxy' ? 'selected' : ''}>proxy (balancer)</option>
-      </select>
-      <button class="btn btn-danger" onclick="removeGeositeRule(${i})" style="padding:2px 10px;font-size:12px;line-height:1.6">✕</button>
-    `;
-    wrap.appendChild(item);
-  });
-}
-
-function addGeositeRule() {
-  syncGeositeDomToArray();
-  geositeRules.push({ domain: 'geosite:google', outboundTag: 'direct' });
-  renderGeositeRules();
-}
-
-function syncGeositeDomToArray() {
-  const items = document.querySelectorAll('#geositeRulesWrap .tuning-item');
-  const rules = [];
-  items.forEach(item => {
-    const domain = item.querySelector('.geosite-domain');
-    const outbound = item.querySelector('.geosite-outbound');
-    if (domain && outbound && domain.value.trim()) {
-      rules.push({ domain: domain.value.trim(), outboundTag: outbound.value });
-    }
-  });
-  if (rules.length) geositeRules = rules;
-}
-
-function removeGeositeRule(idx) {
-  geositeRules.splice(idx, 1);
-  renderGeositeRules();
-}
-
-async function saveGeositeRules() {
-  syncGeositeDomToArray();
-  const rules = geositeRules;
-  const r = await api('POST', '/api/geosite-rules', { rules });
-  if (r.error) { toast(r.error, 'error'); return; }
-  toast(`Saved ${r.count} GeoSite rules — config rebuilding...`, 'success');
-  loadGeositeRules();
-}
-
-// ─── Country Filter ───
-
-let countryData = [];
-
-async function loadCountries() {
-  const data = await api('GET', '/api/countries');
-  if (data.error) return;
-  countryData = data.countries || [];
-  renderCountryFilter(data.allowed);
-}
-
-function renderCountryFilter(allowedRaw) {
-  const tb = $('countryFilterBody');
-  if (!tb) return;
-  tb.innerHTML = '';
-  if (!countryData.length) {
-    tb.innerHTML = '<tr><td colspan="3" class="empty">no countries detected yet — import some proxies</td></tr>';
-    const cnt = $('countryFilterCount');
-    if (cnt) cnt.textContent = '';
-    return;
-  }
-  const allowedSet = new Set(allowedRaw.split(',').map(s => s.trim()).filter(Boolean));
-  let selected = 0;
-  for (const c of countryData) {
-    const checked = !allowedRaw ? true : allowedSet.has(c.code);
-    if (checked) selected++;
-    const tr = document.createElement('tr');
-    tr.style.cssText = 'border-bottom:1px solid var(--border)';
-    tr.innerHTML = `
-      <td style="padding:4px 12px;width:40px">
-        <input type="checkbox" class="chk-custom" data-code="${c.code}" ${checked ? 'checked' : ''}>
-      </td>
-      <td style="padding:4px 6px;font-weight:bold;color:var(--text-primary)">${c.code}</td>
-      <td style="padding:4px 6px;color:var(--text-muted);font-size:0.72rem">
-        ${c.working} working / ${c.total} total
-      </td>
-    `;
-    tb.appendChild(tr);
-  }
-  const cnt = $('countryFilterCount');
-  if (cnt) cnt.textContent = `${selected} / ${countryData.length} selected`;
-}
-
-function selectAllCountries(checked) {
-  const boxes = document.querySelectorAll('#countryFilterBody input[type="checkbox"]');
-  boxes.forEach(cb => cb.checked = checked);
-}
-
-async function saveCountryFilter() {
-  const checked = [];
-  document.querySelectorAll('#countryFilterBody input[type="checkbox"]:checked').forEach(cb => {
-    checked.push(cb.dataset.code);
-  });
-  const val = checked.join(',');
-  const r = await api('POST', '/api/settings', { allowed_countries: val });
-  if (r.error) { toast(r.error, 'error'); return; }
-  toast('Country filter saved — rebuilding config...', 'success');
-}
-
 // ─── Xray Daemon ───
-
 function renderXrayStatus(s) {
   const el = $('xrayStatus');
   if (!el) return;
@@ -390,7 +491,6 @@ async function stopXrayDaemon() {
 }
 
 // ─── Backup ───
-
 async function exportBackup() {
   const r = await api('GET', '/api/backup');
   if (r.error) { toast(r.error, 'error'); return; }
@@ -401,6 +501,12 @@ async function exportBackup() {
   a.click();
   URL.revokeObjectURL(a.href);
   toast('Backup downloaded', 'success');
+}
+
+function confirmImportBackup() {
+  if (confirm('Import backup? This will overwrite all current settings and sources.')) {
+    document.getElementById('backupFile').click();
+  }
 }
 
 async function importBackup(event) {

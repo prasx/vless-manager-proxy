@@ -362,6 +362,9 @@ select.input { color-scheme:dark; }
 .tuning-item:last-child {
   border-bottom:none;
 }
+.tuning-item-wrap {
+  flex-wrap:wrap;
+}
 .tuning-cards {
   display:flex;
   flex-direction:column;
@@ -506,6 +509,213 @@ select.input { color-scheme:dark; }
   display:flex;
   align-items:center;
   gap:12px;
+}
+
+/* Settings nav */
+.settings-nav {
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin-bottom:20px;
+  padding:12px 16px;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:4px;
+}
+.settings-nav a {
+  padding:4px 12px;
+  font-size:0.78rem;
+  color:var(--text-secondary);
+  text-decoration:none;
+  border:1px solid var(--border);
+  border-radius:3px;
+  transition:all var(--transition);
+}
+.settings-nav a:hover {
+  color:var(--text-primary);
+  border-color:var(--border-hover);
+  background:var(--bg-secondary);
+}
+
+/* Scroll offset for anchored sections */
+.settings-section[id] {
+  scroll-margin-top:16px;
+}
+
+/* Section sub-elements */
+.settings-h2-row {
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.settings-h2-toggle {
+  font-size:0.72rem;
+  font-weight:normal;
+  display:flex;
+  align-items:center;
+  gap:4px;
+  cursor:pointer;
+  color:var(--text-muted);
+}
+.settings-h2-toggle input {
+  cursor:pointer;
+}
+.settings-desc {
+  font-size:0.7rem;
+  color:var(--text-muted);
+  margin:-12px 0 14px;
+  line-height:1.4;
+}
+.chk-inline {
+  width:auto !important;
+  height:auto !important;
+  margin:0 !important;
+  cursor:pointer;
+}
+.chk-group {
+  display:flex;
+  gap:12px;
+  align-items:center;
+  flex-wrap:wrap;
+}
+.chk-label {
+  display:flex;
+  align-items:center;
+  gap:4px;
+  font-size:0.8rem;
+  cursor:pointer;
+}
+.input-narrow {
+  max-width:120px;
+}
+.input-tight {
+  width:76px;
+}
+.input-row {
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex:1;
+  max-width:480px;
+}
+.input-row .input {
+  flex:1;
+}
+.btn-icon {
+  width:45px;
+  height:34px;
+  padding:0;
+  flex-shrink:0;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
+.settings-sep {
+  margin-top:14px;
+  padding-top:14px;
+  border-top:1px solid var(--border);
+}
+.settings-config-row {
+  display:flex;
+  align-items:center;
+  gap:12px;
+  flex-wrap:wrap;
+}
+.settings-config-label {
+  font-size:0.82rem;
+  color:var(--text-secondary);
+}
+.settings-muted-label {
+  font-size:0.72rem;
+  color:var(--text-muted);
+  margin-bottom:8px;
+}
+.country-filter-list {
+  max-height:260px;
+  overflow-y:auto;
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:8px 0;
+}
+.country-filter-table {
+  width:100%;
+  font-size:0.8rem;
+}
+.country-filter-actions {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-top:8px;
+}
+.country-filter-count {
+  font-size:0.72rem;
+  color:var(--text-muted);
+  flex:1;
+}
+.form-actions-wrap {
+  flex-wrap:wrap;
+}
+.label-daemon {
+  margin-bottom:12px;
+}
+.daemon-hint {
+  font-size:0.68rem;
+  color:var(--text-muted);
+  margin-top:12px;
+  line-height:1.4;
+}
+.hidden-input {
+  display:none;
+}
+.geosite-cheatsheet {
+  font-size:0.74rem;
+  line-height:1.8;
+  margin-bottom:12px;
+}
+/* Dirty indicator */
+.settings-dirty-indicator {
+  font-size:0.72rem;
+  color:var(--text-muted);
+}
+.settings-dirty-indicator.dirty {
+  color:var(--orange);
+  font-weight:600;
+}
+/* API Reference */
+.api-ref {
+  overflow-x:auto;
+  cursor:pointer;
+}
+.api-ref-summary {
+  font-size:0.9rem;
+  font-weight:600;
+  padding:8px 0;
+  cursor:pointer;
+  color:var(--text-secondary);
+}
+.api-ref-arrow {
+  font-size:0.7rem;
+  color:var(--text-muted);
+}
+.api-ref-table {
+  width:100%;
+  border-collapse:collapse;
+  font-size:0.78rem;
+  margin-top:8px;
+}
+.api-ref-table th {
+  text-align:left;
+  padding:6px 8px;
+  border-bottom:1px solid var(--border);
+}
+.api-ref-table td {
+  padding:4px 8px;
+}
+.api-method-get { color:var(--green); }
+.api-method-post { color:var(--orange); }
+.api-method-delete { color:var(--red); }
+.api-link {
+  color:var(--green);
 }
 
 /* Footer */
