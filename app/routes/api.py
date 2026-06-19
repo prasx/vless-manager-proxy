@@ -650,6 +650,7 @@ def api_test_progress():
         last_label=p["last_label"],
         last_ok=p["last_ok"],
         last_total=p["last_total"],
+        started_at=p["started_at"],
     )
 
 
@@ -670,6 +671,7 @@ def api_test_progress_stream():
                 last_label=p["last_label"],
                 last_ok=p["last_ok"],
                 last_total=p["last_total"],
+                started_at=p["started_at"],
             )
             if d["done"] != last_done or not d["running"]:
                 yield f"data: {json.dumps(d)}\n\n"

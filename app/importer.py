@@ -1,5 +1,6 @@
 """Импорт прокси из URL-подписки."""
 
+import base64
 import sqlite3
 import urllib.request
 from pathlib import Path
@@ -67,6 +68,12 @@ def import_from_url(url, source_id=None):
         add_log("ERROR", f"Import failed for {url[:80]}: {e}")
         return 0
     lines = [line for line in content.splitlines() if line.startswith("vless://")]
+    if not lines:
+        try:
+            decoded = base64.b64decode(content).decode("utf-8", errors="replace")
+            lines = [line for line in decoded.splitlines() if line.startswith("vless://")]
+        except Exception:
+            pass
     safe_only = Settings.safe_only_import()
     added = 0
     skipped = 0

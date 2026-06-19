@@ -21,6 +21,16 @@
 .stat-card .num { font-size:1.2rem; color:var(--text-primary); line-height:1.2; }
 .stat-card .label-s { font-size:0.65rem; color:var(--text-muted); margin-top:2px; text-transform:uppercase; letter-spacing:0.1em; }
 .stat-card .label-s::before { content:'// '; }
+.stat-card.updating { position:relative; }
+.stat-card.updating .num { opacity:0.45; transition:opacity .3s; }
+.stat-card.updating .num::after {
+  content:''; display:inline-block; width:10px; height:10px;
+  margin-left:6px; border:2px solid var(--text-muted);
+  border-top-color:transparent; border-radius:50%;
+  animation:stat-spin .7s linear infinite;
+  vertical-align:middle;
+}
+@keyframes stat-spin { to { transform:rotate(360deg); } }
 @media(min-width:480px) {
   .stats { grid-template-columns:repeat(4,1fr); margin-bottom:20px; }
   .stat-card { padding:20px 18px; }

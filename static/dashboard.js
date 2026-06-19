@@ -429,6 +429,41 @@ function updateLastTestRow(text) {
 
 let _wasRunning = false;
 let _lastLoadDuringTest = 0;
+let _lastStatsRefresh = 0;
+
+function fmtElapsed(secs) {
+  const s = Math.floor(secs);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  if (h) return `${h}h ${m % 60}m ${s % 60}s`;
+  if (m) return `${m}m ${s % 60}s`;
+  return `${s}s`;
+}
+
+async function updateStats() {
+  try {
+    const status = await api('GET', '/api/status');
+    $('#statTotal').textContent = status.total;
+    $('#statWorking').textContent = status.working;
+    $('#statFailedRecent').textContent = status.failed_recent;
+    $('#statTopSpeed').textContent = status.top_speed;
+    const speedLabel = document.querySelector('.stat-card[data-filter="top_speed"] .label-s');
+    if (speedLabel && status.top_speed_threshold) {
+      const mbps = status.top_speed_threshold / 1000;
+      speedLabel.textContent = mbps >= 1 ? `top speed ≥${mbps}Mbps` : `top speed ≥${status.top_speed_threshold}Kbps`;
+    }
+  } catch (_) {}
+}
+
+function setStatUpdating(on) {
+  $$('.stat-card').forEach(el => el.classList.toggle('updating', on));
+}
+
+function resetStatNumbers() {
+  ['statTotal','statWorking','statFailedRecent','statTopSpeed'].forEach(id => {
+    $(`#${id}`).textContent = '—';
+  });
+}
 
 function onProgressEvent(p) {
   const bar = $('#testProgressBar');
@@ -437,6 +472,10 @@ function onProgressEvent(p) {
   const btns = ['testAllBtn', 'batchTestBtn'];
   const cancelBtn = $('#cancelTestBtn');
   if (p.running && p.total > 0) {
+    if (!_wasRunning) {
+      if (_initialMetaLoaded) resetStatNumbers();
+      setStatUpdating(true);
+    }
     _wasRunning = true;
     bar.style.display = 'block';
     bar.style.height = '4px';
@@ -444,12 +483,17 @@ function onProgressEvent(p) {
     fill.style.width = (p.done / p.total * 100) + '%';
     fill.style.background = 'var(--green)';
     fill.style.height = '100%';
-    label.textContent = `${p.label}: ${p.done}/${p.total} (${p.ok} ok)`;
+    const elapsed = p.started_at ? fmtElapsed((Date.now() / 1000) - p.started_at) : '';
+    label.textContent = `${p.label}: ${p.done}/${p.total} (${p.ok} ok) · ${elapsed}`;
     btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = true; });
     if (cancelBtn) cancelBtn.style.display = 'inline-flex';
     if (Date.now() - _lastLoadDuringTest > 5000) {
       _lastLoadDuringTest = Date.now();
       loadData();
+    }
+    if (Date.now() - _lastStatsRefresh > 5000) {
+      _lastStatsRefresh = Date.now();
+      updateStats();
     }
   } else {
     bar.style.display = p.last_completed ? 'block' : 'none';
@@ -466,8 +510,9 @@ function onProgressEvent(p) {
     if (_wasRunning) {
       _wasRunning = false;
       _lastLoadDuringTest = 0;
+      _lastStatsRefresh = 0;
       _initialMetaLoaded = false;
-      loadData();
+      loadData().then(() => setStatUpdating(false));
     }
   }
 }

@@ -43,6 +43,7 @@ class ProxyManager:
             "last_label": "",
             "last_ok": 0,
             "last_total": 0,
+            "started_at": 0.0,
         }
         self._progress_lock = threading.Lock()
 
@@ -336,13 +337,15 @@ class ProxyManager:
             )
 
     def _record_completion(self, label):
-        self.progress.update(
-            last_completed=moscow_str(),
-            last_label=label,
-            last_ok=self.progress["ok"],
-            last_total=self.progress["total"],
-        )
-        self.progress["running"] = False
+        with self._progress_lock:
+            self.progress.update(
+                last_completed=moscow_str(),
+                last_label=label,
+                last_ok=self.progress["ok"],
+                last_total=self.progress["total"],
+                started_at=0.0,
+            )
+            self.progress["running"] = False
 
     # ─── Single test entry point (from API) ───
 
@@ -395,7 +398,8 @@ class ProxyManager:
             return
         cid = uuid.uuid4().hex[:12]
         set_correlation_id(cid)
-        self.progress.update(running=True, total=len(rows), done=0, ok=0, label=label)
+        with self._progress_lock:
+            self.progress.update(running=True, total=len(rows), done=0, ok=0, label=label, started_at=time.time())
         self._speed_test_done = 0
         self._cancel.clear()
         try:
@@ -423,6 +427,9 @@ class ProxyManager:
 
     def test_all_vless(self):
         """Тест всех прокси из БД (без импорта)."""
+        if self._vless_busy:
+            add_log("WARN", "Test already in progress, ignoring test_all_vless")
+            return
         rows = db_q("SELECT id, link FROM proxies")
         if not rows:
             add_log("WARN", "Test all VLESS: no proxies to test")
@@ -433,6 +440,9 @@ class ProxyManager:
         xray_configurator.apply_all(blocking=True)
 
     def batch_test_vless(self, rows):
+        if self._vless_busy:
+            add_log("WARN", "Test already in progress, ignoring batch_test_vless")
+            return
         self._bg_vless_batch(rows, "batch-test")
         from .xray_configurator import xray_configurator
 
