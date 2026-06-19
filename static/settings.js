@@ -74,8 +74,12 @@ async function loadSettings() {
   $('sniffQuic').checked = destOverride.includes('quic');
   $('sniffFtp').checked = destOverride.includes('ftp');
   $('geoEnabled').checked = s.geo_enabled !== 'false';
+  $('maxWorkers').value = s.max_workers || '10';
+  $('probeTimeout').value = s.probe_timeout || '5';
+  $('xrayStartupRetries').value = s.xray_startup_retries || '30';
   updateConfigStatus(status);
   updateSpeedTestDependants();
+  loadPerfEstimate();
 }
 
 function updateConfigStatus(status) {
@@ -117,6 +121,28 @@ async function rebuildConfig() {
   setTimeout(() => loadSettings(), 2000);
 }
 
+async function loadPerfEstimate() {
+  const estVal = $('perfEstValue');
+  const estDetail = $('perfEstDetail');
+  const r = await api('GET', '/api/performance/recommendations');
+  if (r.error) return;
+  const c = r.current;
+  if (estVal) estVal.textContent = c.estimated_label;
+  if (estDetail) estDetail.textContent = `${c.total} profiles, ${c.workers} workers`;
+}
+    return a.estimated_seconds < b.estimated_seconds ? a : b;
+  });
+  const currentOk = c.estimated_seconds <= 180;
+  let msg;
+  if (currentOk) {
+    msg = `Текущие настройки оптимальны (${c.estimated_label}).`;
+  } else {
+    msg = `Рекомендация: ${best.workers} workers, ${best.probe_timeout}s probe — ${best.estimated_label}`;
+  }
+  txt.textContent = msg;
+  wrap.style.display = 'block';
+}
+
 async function saveSettings() {
   $('xrayBin').disabled = true;
   $('xrayConfigPath').disabled = true;
@@ -154,6 +180,10 @@ async function saveSettings() {
       if ($('sniffFtp').checked) parts.push('ftp');
       return parts.join(',');
     })(),
+    // Performance
+    max_workers: $('maxWorkers').value.trim() || '10',
+    probe_timeout: $('probeTimeout').value.trim() || '5',
+    xray_startup_retries: $('xrayStartupRetries').value.trim() || '30',
   };
   const r = await api('POST', '/api/settings', data);
   $('xrayBin').disabled = false;
@@ -179,6 +209,9 @@ function resetTuning() {
   $('speedTestAdaptiveSec').value = '2';
   $('safeOnlyImport').checked = false;
   $('balancerStrategy').value = 'random';
+  $('maxWorkers').value = '20';
+  $('probeTimeout').value = '5';
+  $('xrayStartupRetries').value = '15';
   toast('Tuning values reset to defaults — click Save to apply');
 }
 
@@ -389,6 +422,23 @@ async function importBackup(event) {
 _rangeDb = setupRange('checkIntervalDb', 'checkIntervalDbLabel');
 _rangeImport = setupRange('checkIntervalImport', 'checkIntervalImportLabel');
 $('speedTestEnabled').addEventListener('change', updateSpeedTestDependants);
+
+function updatePerfEstimate() {
+  const workers = parseInt($('maxWorkers').value) || 20;
+  const probeT = parseInt($('probeTimeout').value) || 5;
+  const retries = parseInt($('xrayStartupRetries').value) || 30;
+  const startup = retries * 0.05;
+  const perProxy = startup + probeT;
+  const est = 681 / workers * perProxy;
+  const estMin = (est / 60).toFixed(1);
+  const estVal = $('perfEstValue');
+  const estDetail = $('perfEstDetail');
+  if (estVal) estVal.textContent = `~${estMin} min`;
+  if (estDetail) estDetail.textContent = `681 profiles, ${workers} workers`;
+}
+$('maxWorkers').addEventListener('input', updatePerfEstimate);
+$('probeTimeout').addEventListener('input', updatePerfEstimate);
+$('xrayStartupRetries').addEventListener('input', updatePerfEstimate);
 
 loadSettings();
 loadCountries();

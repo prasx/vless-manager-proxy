@@ -57,27 +57,48 @@ def fmt_log(level: str, message: str) -> str:
 
 _log_insert_count = 0
 _log_count_lock = threading.Lock()
+_log_buffer: list = []
+_log_buffer_lock = threading.Lock()
+_log_flush_timer = None
 
 
-def add_log(level: str, message: str, correlation_id: str = "") -> None:
-    """Добавляет запись в лог-таблицу БД. correlation_id автоматически подхватывается из потока."""
-    global _log_insert_count
-    cid = correlation_id or get_correlation_id()
-    msg = fmt_log(level, message)
+def _flush_log_buffer():
+    """Вставляет накопленные логи одним запросом."""
+    global _log_buffer, _log_flush_timer
+    with _log_buffer_lock:
+        batch = _log_buffer[:]
+        _log_buffer.clear()
+        _log_flush_timer = None
+    if not batch:
+        return
     conn = _get_conn()
     try:
-        conn.execute(
+        conn.executemany(
             "INSERT INTO logs (timestamp, level, message, correlation_id) VALUES (?, ?, ?, ?)",
-            (now_utc(), level, msg, cid or None),
+            batch,
         )
         conn.commit()
     finally:
         conn.close()
     with _log_count_lock:
-        _log_insert_count += 1
+        global _log_insert_count
+        _log_insert_count += len(batch)
         do_trim = _log_insert_count % Settings.log_trim_every() == 0
     if do_trim:
         _trim_logs()
+
+
+def add_log(level: str, message: str, correlation_id: str = "") -> None:
+    """Добавляет запись в лог-таблицу БД. Батчит вставки для производительности."""
+    global _log_flush_timer
+    cid = correlation_id or get_correlation_id()
+    msg = fmt_log(level, message)
+    with _log_buffer_lock:
+        _log_buffer.append((now_utc(), level, msg, cid or None))
+        if _log_flush_timer is None:
+            _log_flush_timer = threading.Timer(0.3, _flush_log_buffer)
+            _log_flush_timer.daemon = True
+            _log_flush_timer.start()
 
 
 def _trim_logs() -> None:

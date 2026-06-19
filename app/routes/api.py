@@ -132,34 +132,32 @@ def api_proxies():
 @api_bp.route("/status")
 def api_status():
     """GET /api/status — статистика по прокси (total, working, failed_recent, ru, world)."""
-    total = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
-    working = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working'")[0]["c"]
-    failed_recent = db_q(
-        "SELECT COUNT(*) c FROM proxies WHERE status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
-    )[0]["c"]
     min_kbps = Settings.min_speed_kbps()
     top_threshold = min_kbps if min_kbps > 0 else 5000
-    top_speed = db_q(f"SELECT COUNT(*) c FROM proxies WHERE speed_kbps >= {top_threshold}")[0]["c"]
-    ru = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working' AND country='RU'")[
-        0
-    ]["c"]
-    world = db_q(
-        "SELECT COUNT(*) c FROM proxies WHERE status='working' AND country != '' AND country != 'RU'"
-    )[0]["c"]
+    row = db_q(
+        f"""SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN status='working' THEN 1 ELSE 0 END) as working,
+            SUM(CASE WHEN status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours')) THEN 1 ELSE 0 END) as failed_recent,
+            SUM(CASE WHEN speed_kbps >= {top_threshold} THEN 1 ELSE 0 END) as top_speed,
+            SUM(CASE WHEN status='working' AND country='RU' THEN 1 ELSE 0 END) as ru,
+            SUM(CASE WHEN status='working' AND country != '' AND country != 'RU' THEN 1 ELSE 0 END) as world,
+            SUM(CASE WHEN source_id IS NULL THEN 1 ELSE 0 END) as unknown_count
+        FROM proxies"""
+    )[0]
     sources = db_q(
         "SELECT s.id, s.name, COUNT(p.id) cnt FROM sources s LEFT JOIN proxies p ON p.source_id = s.id GROUP BY s.id HAVING cnt > 0 ORDER BY s.name"
     )
-    unknown = db_q("SELECT COUNT(*) c FROM proxies WHERE source_id IS NULL")[0]["c"]
     return jsonify(
-        total=total,
-        working=working,
-        failed_recent=failed_recent,
-        top_speed=top_speed,
+        total=row["total"],
+        working=row["working"],
+        failed_recent=row["failed_recent"],
+        top_speed=row["top_speed"],
         top_speed_threshold=top_threshold,
-        ru=ru,
-        world=world,
+        ru=row["ru"],
+        world=row["world"],
         sources=[dict(r) for r in sources],
-        unknown_count=unknown,
+        unknown_count=row["unknown_count"],
     )
 
 
@@ -369,7 +367,7 @@ def api_settings_set():
 _INT_KEYS = {
     "max_active_proxies", "vless_per_proxy_timeout", "log_trim_every", "log_keep",
     "speed_test_max", "handshake_timeout", "conn_idle", "check_interval_db", "check_interval_import",
-    "speed_test_adaptive_sec",
+    "speed_test_adaptive_sec", "max_workers", "probe_timeout", "xray_startup_retries",
 }
 
 
@@ -604,23 +602,20 @@ def api_countries():
     allowed_raw = Settings.get("allowed_countries", "").strip()
     allowed_set = set(c.strip() for c in allowed_raw.split(",") if c.strip())
     rows = db_q(
-        "SELECT country, COUNT(*) cnt FROM proxies "
-        "WHERE country != '' AND country IS NOT NULL AND length(country)=2 "
-        "GROUP BY country ORDER BY country"
+        """SELECT p.country, COUNT(*) cnt,
+           SUM(CASE WHEN p.status='working' THEN 1 ELSE 0 END) as working
+        FROM proxies p
+        WHERE p.country != '' AND p.country IS NOT NULL AND length(p.country)=2
+        GROUP BY p.country ORDER BY p.country"""
     )
     countries = []
     for r in rows:
-        cc = r["country"]
-        working = db_q(
-            "SELECT COUNT(*) c FROM proxies WHERE country=? AND status='working'",
-            (cc,),
-        )[0]["c"]
         countries.append(
             {
-                "code": cc,
+                "code": r["country"],
                 "total": r["cnt"],
-                "working": working,
-                "enabled": cc in allowed_set if allowed_raw else True,
+                "working": r["working"],
+                "enabled": r["country"] in allowed_set if allowed_raw else True,
             }
         )
     return jsonify(countries=countries, allowed=allowed_raw)
@@ -683,6 +678,49 @@ def api_test_progress_stream():
 
 
 # ─── GeoSite Rules ───
+
+
+@api_bp.route("/performance/recommendations")
+def api_performance_recommendations():
+    """GET /api/performance/recommendations — рекомендации по настройкам производительности."""
+    total = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
+    working = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working'")[0]["c"]
+    speed_enabled = Settings.get("speed_test_enabled", "true") == "true"
+    speed_max = int(Settings.get("speed_test_max", "30"))
+    workers = Settings.max_workers()
+    probe_t = Settings.probe_timeout()
+    startup_r = Settings.xray_startup_retries()
+    vless_t = Settings.vless_per_proxy_timeout()
+
+    startup_time = startup_r * 0.05
+    per_proxy = startup_time + probe_t
+    if speed_enabled and working > 0:
+        speed_proxies = min(speed_max, working)
+        per_proxy += (vless_t + 5) * (speed_proxies / max(1, total))
+
+    batches = max(1, total // workers + (1 if total % workers else 0))
+    est_current = batches * per_proxy
+
+    targets = []
+    for w, pt in [(10, 5), (10, 4), (8, 5), (8, 4), (5, 5), (5, 4)]:
+        b = max(1, total // w + (1 if total % w else 0))
+        est = b * (startup_time + pt)
+        if speed_enabled and working > 0:
+            speed_proxies = min(speed_max, working)
+            est += (vless_t + 5) * (speed_proxies / max(1, total))
+        targets.append({
+            "workers": w,
+            "probe_timeout": pt,
+            "estimated_seconds": round(est),
+            "estimated_label": f"~{est/60:.1f} min",
+        })
+
+    return jsonify(
+        total=total,
+        working=working,
+        current={"workers": workers, "probe_timeout": probe_t, "xray_startup_retries": startup_r, "vless_per_proxy_timeout": vless_t, "estimated_seconds": round(est_current), "estimated_label": f"~{est_current/60:.1f} min"},
+        targets=targets,
+    )
 
 
 @api_bp.route("/geosite-rules", methods=["GET"])

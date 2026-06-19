@@ -103,7 +103,7 @@ class ProxyManager:
         opener = urllib.request.build_opener(proxy_handler)
         req_start = time.time()
         try:
-            resp = opener.open(probe_url, timeout=timeout)
+            resp = opener.open(probe_url, timeout=max(2, timeout - 1))
             ok = resp.status < 400
             lat = int((time.time() - req_start) * 1000)
             return ok, lat
@@ -188,13 +188,14 @@ class ProxyManager:
                 start_new_session=True,
             )
             proxy_manager._track_xray(proc)
-            for _ in range(30):
+            retries = Settings.xray_startup_retries()
+            for _ in range(retries):
                 try:
-                    s = socket.create_connection(("127.0.0.1", http_port), timeout=0.5)
+                    s = socket.create_connection(("127.0.0.1", http_port), timeout=0.3)
                     s.close()
                     return proc, tmp_path, http_port
                 except (OSError, ConnectionRefusedError):
-                    time.sleep(0.1)
+                    time.sleep(0.05)
         except Exception:
             pass
         ProxyManager._stop_xray(proc, tmp_path)
@@ -404,7 +405,8 @@ class ProxyManager:
         self._cancel.clear()
         try:
             add_log("INFO", f"Testing {label}: {len(rows)} proxies")
-            with ThreadPoolExecutor(max_workers=10) as tpool:
+            max_workers = Settings.max_workers()
+            with ThreadPoolExecutor(max_workers=max_workers) as tpool:
                 futures = {tpool.submit(self._test_one_spawn, r, timeout): r for r in rows}
                 for f in as_completed(futures):
                     if self._cancel.is_set():

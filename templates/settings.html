@@ -283,7 +283,44 @@
   </div>
 </div>
 
-<!-- ─── 7. GeoSite Rules ─── -->
+<!-- ─── 7. Performance ─── -->
+<div class="settings-section tuning-section">
+  <h2>Performance</h2>
+  <p style="font-size:0.7rem;color:var(--text-muted);margin:-12px 0 14px;line-height:1.4">
+    Параллельное тестирование и таймауты. Больше воркеров = быстрее, но больше нагрузка на CPU.
+  </p>
+  <div class="tuning-grid">
+    <div class="tuning-group">
+      <div class="tuning-item">
+        <span class="tuning-label">Max workers</span>
+        <input type="number" id="maxWorkers" class="input" min="1" max="30" style="width:80px">
+        <span class="tuning-suffix">threads</span>
+        <span class="tuning-comment">15-20 оптимально</span>
+      </div>
+      <div class="tuning-item">
+        <span class="tuning-label">Probe timeout</span>
+        <input type="number" id="probeTimeout" class="input" min="1" max="15" style="width:80px">
+        <span class="tuning-suffix">sec</span>
+        <span class="tuning-comment">2-5 сек</span>
+      </div>
+    </div>
+    <div class="tuning-group">
+      <div class="tuning-item">
+        <span class="tuning-label">Xray startup retries</span>
+        <input type="number" id="xrayStartupRetries" class="input" min="5" max="50" style="width:80px">
+        <span class="tuning-suffix">×0.05s</span>
+        <span class="tuning-comment">макс. время ожидания старта</span>
+      </div>
+      <div class="tuning-item" id="perfEstimate" style="margin-top:8px">
+        <span class="tuning-label">Est. test time</span>
+        <span id="perfEstValue" style="font-size:0.9rem;font-weight:600;color:var(--green)">—</span>
+        <span class="tuning-comment" id="perfEstDetail"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── 8. GeoSite Rules ─── -->
 <div class="settings-section">
   <h2 style="display:flex;align-items:center;gap:10px">
     GeoSite Rules
@@ -340,7 +377,7 @@
   </div>
 </div>
 
-<!-- ─── 8. Logging + Backup ─── -->
+<!-- ─── 9. Logging + Backup ─── -->
 <div class="settings-section">
   <div class="settings-cols">
     <div class="settings-col">

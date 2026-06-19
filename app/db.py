@@ -12,6 +12,9 @@ def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DATABASE), timeout=15)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA mmap_size=67108864")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA cache_size=-4000")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -143,6 +146,10 @@ def init_db() -> None:
         "sniffing_enabled": "true",
         "sniffing_dest_override": "http,tls",
         "sniffing_route_only": "true",
+        # Performance tuning
+        "max_workers": "20",
+        "probe_timeout": "5",
+        "xray_startup_retries": "15",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
@@ -250,6 +257,21 @@ class Settings:
     def speed_test_adaptive_sec(cls) -> int:
         """Через сколько секунд adaptive speed test проверяет порог."""
         return max(1, int(cls.get("speed_test_adaptive_sec", "2")))
+
+    @classmethod
+    def max_workers(cls) -> int:
+        """Количество параллельных воркеров для тестирования прокси."""
+        return max(1, min(30, int(cls.get("max_workers", "10"))))
+
+    @classmethod
+    def probe_timeout(cls) -> int:
+        """Таймаут проверки прокси (секунды)."""
+        return max(1, min(15, int(cls.get("probe_timeout", "5"))))
+
+    @classmethod
+    def xray_startup_retries(cls) -> int:
+        """Количество попыток дождаться старта Xray (каждая 0.1с)."""
+        return max(5, min(50, int(cls.get("xray_startup_retries", "30"))))
 
 def default_xray_config_path() -> Path:
     """Определяет путь к конфигу Xray по умолчанию."""
