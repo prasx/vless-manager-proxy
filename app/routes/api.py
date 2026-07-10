@@ -10,7 +10,7 @@ import time
 from flask import Blueprint, request, jsonify, Response
 
 from ..db import db_q, Settings
-from ..utils import add_log, moscow_str, now_utc
+from ..utils import add_log, moscow_str, now_utc, count_active_connections, list_active_connections, close_connection, flush_all_connections
 from config import SUBSCRIBE_FILE
 from ..vless import parse_vless
 from ..proxy_manager import proxy_manager
@@ -754,3 +754,108 @@ def api_import():
     added = import_from_url(url)
     threading.Thread(target=proxy_manager.test_all_vless, daemon=True).start()
     return jsonify(success=True, added=added)
+
+
+# ─── Traffic history ───
+
+
+@api_bp.route("/traffic/current")
+def api_traffic_current():
+    """GET /api/traffic/current — трафик (nftables real-time + DB history) + активные соединения."""
+    from ..proxy_manager import proxy_manager
+
+    conns = count_active_connections([1080, 1081])
+    total_conn = conns.get(1080, 0) + conns.get(1081, 0)
+    # nftables raw counters (real-time, для скорости)
+    nft_down, nft_up = proxy_manager.get_live_traffic()
+    # DB last row (график не дёргается)
+    last = db_q(
+        "SELECT collected_at, total_downlink, total_uplink FROM traffic_history ORDER BY id DESC LIMIT 1"
+    )
+    return jsonify(
+        downlink=last[0]["total_downlink"] if last else 0,
+        uplink=last[0]["total_uplink"] if last else 0,
+        nft_down_raw=nft_down,
+        nft_up_raw=nft_up,
+        active_outbounds=0,
+        active_connections=total_conn,
+        socls_conns=conns.get(1080, 0),
+        http_conns=conns.get(1081, 0),
+    )
+
+
+@api_bp.route("/traffic/history")
+def api_traffic_history():
+    """GET /api/traffic/history?limit= — история трафика за последние N часов."""
+    limit = request.args.get("limit", type=int, default=900)
+    # усредняем до точек для графика — группируем по минутам
+    rows = db_q(
+        """SELECT
+            collected_at,
+            total_downlink,
+            total_uplink,
+            active_outbounds,
+            active_connections
+        FROM traffic_history
+        ORDER BY id DESC LIMIT ?""",
+        (limit,),
+    )
+    points = []
+    for r in reversed(rows):
+        points.append({
+            "t": r["collected_at"],
+            "down": r["total_downlink"],
+            "up": r["total_uplink"],
+            "conn": r["active_connections"],
+        })
+    return jsonify(points=points)
+
+
+# ─── Active connections ───
+
+
+@api_bp.route("/connections/list")
+def api_connections_list():
+    """GET /api/connections/list — список активных TCP-соединений через прокси."""
+    conns = list_active_connections()
+    return jsonify(connections=conns, total=len(conns))
+
+
+@api_bp.route("/connections/close", methods=["POST"])
+def api_connections_close():
+    """POST /api/connections/close — закрыть соединение с указанным remote IP:PORT.
+    Body: {remote_host, remote_port, local_port?}"""
+    body = request.get_json(silent=True) or {}
+    rh = body.get("remote_host", "").strip()
+    rp = body.get("remote_port", 0)
+    lp = body.get("local_port")
+    if not rh or not rp:
+        return jsonify(error="remote_host and remote_port required"), 400
+    ok = close_connection(rh, int(rp), lp)
+    add_log("INFO", f"Close connection {rh}:{rp} -> {'ok' if ok else 'failed'}")
+    return jsonify(success=ok)
+
+
+@api_bp.route("/connections/traffic")
+def api_connections_traffic():
+    """GET /api/connections/traffic — трафик сгруппированный по IP клиента."""
+    conns = list_active_connections()
+    per_ip = {}
+    for c in conns:
+        ip = c.get("remote", "")
+        if not ip or ip == "0.0.0.0":
+            continue
+        if ip not in per_ip:
+            per_ip[ip] = {"ip": ip, "connections": 0, "bytes_down": 0, "bytes_up": 0}
+        per_ip[ip]["connections"] += 1
+        per_ip[ip]["bytes_down"] += c.get("bytes_out", 0)
+        per_ip[ip]["bytes_up"] += c.get("bytes_in", 0)
+    return jsonify(clients=sorted(per_ip.values(), key=lambda x: x["bytes_down"], reverse=True))
+
+
+@api_bp.route("/connections/flush", methods=["POST"])
+def api_connections_flush():
+    """POST /api/connections/flush — закрыть все активные соединения через прокси."""
+    killed = flush_all_connections()
+    add_log("INFO", f"Flushed {killed} connections")
+    return jsonify(success=True, killed=killed)

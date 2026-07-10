@@ -62,6 +62,7 @@ class XrayConfigurator:
             "listen": listen,
             "protocol": "socks",
             "settings": {"udp": True},
+            "stats": {"enabled": True},
         }
         if sniffing:
             socks_in["sniffing"] = sniffing
@@ -71,6 +72,7 @@ class XrayConfigurator:
             "listen": listen,
             "protocol": "http",
             "settings": {},
+            "stats": {"enabled": True},
         }
         if sniffing:
             http_in["sniffing"] = sniffing
@@ -129,6 +131,7 @@ class XrayConfigurator:
                 ]
             },
             "streamSettings": stream_settings(parsed),
+            "stats": {"enabled": True},
         }
         flow = sanitize_flow(parsed.get("flow"))
         if flow:
@@ -206,14 +209,20 @@ class XrayConfigurator:
 
     @staticmethod
     def _policy_config() -> dict:
-        """Политика таймаутов для Xray."""
+        """Политика таймаутов + статистика для Xray."""
         return {
             "levels": {
                 "0": {
                     "handshake": int(Settings.get("handshake_timeout", "8")),
                     "connIdle": int(Settings.get("conn_idle", "300")),
                 }
-            }
+            },
+            "system": {
+                "statsInboundDownlink": True,
+                "statsInboundUplink": True,
+                "statsOutboundDownlink": True,
+                "statsOutboundUplink": True,
+            },
         }
 
     @staticmethod
@@ -228,6 +237,7 @@ class XrayConfigurator:
                     "protocol": "dokodemo-door",
                     "settings": {"address": API_LISTEN},
                     "tag": "api",
+                    "stats": {"enabled": True},
                 }
             ]
         )
@@ -296,10 +306,11 @@ class XrayConfigurator:
         config = {
             "api": self._api_config(),
             "log": {"loglevel": "warning"},
+            "stats": {},
             "inbounds": self._inbounds_config(),
             "outbounds": proxy_obs + [
-                {"protocol": "freedom", "tag": "direct"},
-                {"protocol": "freedom", "tag": "api"},
+                {"protocol": "freedom", "tag": "direct", "stats": {"enabled": True}},
+                {"protocol": "freedom", "tag": "api", "stats": {"enabled": True}},
             ],
             "routing": {"domainStrategy": "IPIfNonMatch", "rules": routing_rules},
             "policy": self._policy_config(),
@@ -372,6 +383,40 @@ class XrayConfigurator:
             if m:
                 tags.add(m.group(1))
         return sorted(tags)
+
+    def get_traffic_values(self) -> dict:
+        """Возвращает числовые значения трафика по outbound-ам.
+        Формат: {tag: {downlink: int, uplink: int}}."""
+        rc, out = self._cached_statsquery()
+        result = {}
+        if rc != 0:
+            return result
+        for line in out.splitlines():
+            m = re.search(r"outbound>>>([^>]+)>>>traffic>>>([a-z]+)", line)
+            if not m:
+                continue
+            tag, direction = m.group(1), m.group(2)
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    value = int(parts[-1])
+                except (ValueError, IndexError):
+                    value = 0
+            else:
+                value = 0
+            result.setdefault(tag, {})[direction] = result.get(tag, {}).get(direction, 0) + value
+        return result
+
+    def get_total_traffic(self) -> dict:
+        """Возвращает суммарный downlink/uplink по всем node* outbound-ам."""
+        values = self.get_traffic_values()
+        total_down = 0
+        total_up = 0
+        for tag, stats in values.items():
+            if tag.startswith("node"):
+                total_down += stats.get("downlink", 0)
+                total_up += stats.get("uplink", 0)
+        return {"downlink": total_down, "uplink": total_up}
 
     @staticmethod
     def _remove_outbound(tag):

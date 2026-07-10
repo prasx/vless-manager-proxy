@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -15,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .db import db_q, Settings
-from .utils import add_log, now_utc, moscow_str, set_correlation_id
+from .utils import add_log, now_utc, moscow_str, set_correlation_id, count_active_connections
 from .importer import import_from_url
 from .vless import parse_vless, stream_settings
 
@@ -534,6 +535,125 @@ class ProxyManager:
             add_log("ERROR", f"DB check cycle crashed: {e}")
         finally:
             self._vless_busy = False
+
+
+    _nft_inited = False
+
+    def _nft_init(self):
+        """Удаляет старые iptables-compat правила, добавляет nftables счётчики на прокси-порты."""
+        if self._nft_inited:
+            return True
+        try:
+            # удаляем старые правила с jump VLESS_MGR (от iptables-compat) — у них handle в nft
+            for chain in ("INPUT", "OUTPUT"):
+                # получаем хендлы правил
+                r = subprocess.run(
+                    ["nft", "-a", "list", "chain", "ip", "filter", chain],
+                    capture_output=True, text=True, timeout=5,
+                )
+                for line in r.stdout.splitlines():
+                    if "jump VLESS_MGR" not in line:
+                        continue
+                    # match: ... # handle N
+                    m = re.search(r'# handle (\d+)', line)
+                    if m:
+                        h = m.group(1)
+                        subprocess.run(
+                            ["nft", "delete", "rule", "ip", "filter", chain, f"handle {h}"],
+                            capture_output=True, timeout=5,
+                        )
+            # удаляем старую цепочку VLESS_MGR (если осталась без правил)
+            subprocess.run(
+                ["nft", "delete", "chain", "ip", "filter", "VLESS_MGR"],
+                capture_output=True, timeout=5,
+            )
+            # добавляем свои правила-счётчики (в начало цепочки: insert = position 0)
+            for cmd in (
+                ["nft", "insert", "rule", "ip", "filter", "INPUT", "tcp", "dport", "1080", "counter", "accept"],
+                ["nft", "insert", "rule", "ip", "filter", "INPUT", "tcp", "dport", "1081", "counter", "accept"],
+                ["nft", "insert", "rule", "ip", "filter", "OUTPUT", "tcp", "sport", "1080", "counter", "accept"],
+                ["nft", "insert", "rule", "ip", "filter", "OUTPUT", "tcp", "sport", "1081", "counter", "accept"],
+            ):
+                subprocess.run(cmd, capture_output=True, timeout=5)
+            self._nft_inited = True
+            add_log("INFO", "nftables proxy counters added")
+            return True
+        except Exception as e:
+            add_log("WARN", f"nft init failed: {e}")
+            return False
+
+    def _nft_read(self):
+        """Читает кумулятивные байты из nftables (текстовый парсинг).
+        Возвращает (downlink_bytes=OUTPUT, uplink_bytes=INPUT)."""
+        down = 0; up = 0
+        for chain, direction in (("OUTPUT", "down"), ("INPUT", "up")):
+            try:
+                r = subprocess.run(
+                    ["nft", "list", "chain", "ip", "filter", chain],
+                    capture_output=True, text=True, timeout=5,
+                )
+            except Exception as e:
+                add_log("DEBUG", f"nft read {chain}: {e}")
+                continue
+            for line in r.stdout.splitlines():
+                if "dport 1080" not in line and "dport 1081" not in line and \
+                   "sport 1080" not in line and "sport 1081" not in line:
+                    continue
+                m = re.search(r'bytes\s+(\d+)', line)
+                if m:
+                    val = int(m.group(1))
+                    if direction == "down":
+                        down += val
+                    else:
+                        up += val
+        return down, up
+
+    def _collect_traffic(self):
+        """Один цикл сбора: соединения через ss, трафик через nftables."""
+        try:
+            if not self._nft_inited:
+                self._nft_init()
+            raw_down, raw_up = self._nft_read()
+
+            conns = count_active_connections([1080, 1081])
+            total_conn = conns.get(1080, 0) + conns.get(1081, 0)
+
+            db_q(
+                "INSERT INTO traffic_history (collected_at, total_downlink, total_uplink, active_outbounds, active_connections) VALUES (?, ?, ?, ?, ?)",
+                (now_utc(), raw_down, raw_up, 0, total_conn),
+            )
+
+            trim_hours = Settings.traffic_history_hours()
+            db_q(
+                f"DELETE FROM traffic_history WHERE collected_at < datetime('now', '-{trim_hours} hours')"
+            )
+        except Exception as e:
+            add_log("DEBUG", f"Traffic collector: {e}")
+
+    def traffic_collector_loop(self):
+        """Фоновый сборщик статистики трафика и активных соединений."""
+        add_log("INFO", "Traffic collector loop started")
+        # Первый сбор сразу
+        self._collect_traffic()
+        while not self._shutdown.is_set():
+            if self._shutdown.wait(timeout=Settings.traffic_collect_interval()):
+                break
+            self._collect_traffic()
+
+    def get_live_traffic(self):
+        """Возвращает (raw_down_bytes, raw_up_bytes) напрямую из nftables (real-time)."""
+        try:
+            if not self._nft_inited:
+                self._nft_init()
+            return self._nft_read()
+        except Exception as e:
+            add_log("DEBUG", f"get_live_traffic: {e}")
+            return 0, 0
+
+    def start_traffic_collector(self):
+        """Запускает фоновый поток сбора статистики трафика."""
+        t = threading.Thread(target=self.traffic_collector_loop, daemon=True)
+        t.start()
 
 
 proxy_manager = ProxyManager()

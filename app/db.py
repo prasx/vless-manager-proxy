@@ -73,6 +73,14 @@ _SCHEMA = {
         ("key", "TEXT PRIMARY KEY"),
         ("value", "TEXT"),
     ],
+    "traffic_history": [
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("collected_at", "TEXT"),
+        ("total_downlink", "INTEGER DEFAULT 0"),
+        ("total_uplink", "INTEGER DEFAULT 0"),
+        ("active_outbounds", "INTEGER DEFAULT 0"),
+        ("active_connections", "INTEGER DEFAULT 0"),
+    ],
 }
 
 
@@ -93,6 +101,34 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
                     pass
 
 
+_MIGRATIONS = [
+    {
+        "version": 1,
+        "description": "Обновление дефолтов traffic_collect_interval, traffic_history_hours",
+        "sql": [
+            "UPDATE settings SET value='2' WHERE key='traffic_collect_interval'",
+            "UPDATE settings SET value='0.5' WHERE key='traffic_history_hours'",
+        ],
+    },
+]
+
+
+def _run_migrations(c: sqlite3.Cursor) -> None:
+    """Применяет миграции по version."""
+    current = 0
+    row = c.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()
+    if row:
+        current = int(row["value"])
+    for m in _MIGRATIONS:
+        if m["version"] > current:
+            for sql in m.get("sql", []):
+                c.execute(sql)
+            c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', ?)",
+                      (str(m["version"]),))
+            from .utils import add_log
+            add_log("INFO", f"Migration v{m['version']}: {m['description']}")
+
+
 def init_db() -> None:
     """Создаёт/дополняет таблицы и устанавливает настройки по умолчанию."""
     conn = _get_conn()
@@ -104,6 +140,7 @@ def init_db() -> None:
     c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_latency ON proxies(latency)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_source_id ON proxies(source_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_failed_since ON proxies(failed_since)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_traffic_history_collected_at ON traffic_history(collected_at)")
 
     # backfill security для старых строк
     from .vless import parse_vless
@@ -116,6 +153,8 @@ def init_db() -> None:
             c.execute("UPDATE proxies SET security=? WHERE id=?", (sec, row["id"]))
         else:
             c.execute("UPDATE proxies SET security='none' WHERE id=?", (row["id"],))
+
+    _run_migrations(c)
 
     defaults = {
         "xray_bin": "/usr/local/bin/xray",
@@ -150,6 +189,9 @@ def init_db() -> None:
         "max_workers": "20",
         "probe_timeout": "5",
         "xray_startup_retries": "15",
+        # Traffic monitoring
+        "traffic_collect_interval": "2",
+        "traffic_history_hours": "0.5",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
@@ -272,6 +314,16 @@ class Settings:
     def xray_startup_retries(cls) -> int:
         """Количество попыток дождаться старта Xray (каждая 0.1с)."""
         return max(5, min(50, int(cls.get("xray_startup_retries", "30"))))
+
+    @classmethod
+    def traffic_collect_interval(cls) -> int:
+        """Интервал сбора статистики трафика, секунд."""
+        return max(2, int(cls.get("traffic_collect_interval", "2")))
+
+    @classmethod
+    def traffic_history_hours(cls) -> float:
+        """Сколько часов хранить историю трафика."""
+        return max(0.5, float(cls.get("traffic_history_hours", "0.5")))
 
 def default_xray_config_path() -> Path:
     """Определяет путь к конфигу Xray по умолчанию."""

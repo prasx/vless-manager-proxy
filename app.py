@@ -41,4 +41,5 @@ if __name__ == "__main__":
 
     threading.Thread(target=enrich_all_unknown_countries, daemon=True).start()
     threading.Thread(target=proxy_manager.background_checker, daemon=True).start()
+    proxy_manager.start_traffic_collector()
     app.run(host="0.0.0.0", port=5000, debug=False)

@@ -538,3 +538,272 @@ function fallbackPoll() {
 }
 
 let sseSource = connectSSE();
+
+// ─── Traffic & Connections Chart ───
+
+let _trafficData = [];
+let _connData = [];
+let _chartWidths = {};
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function hexToRgba(hex, a) {
+  const h = hex.replace('#', '');
+  if (h.length === 6) {
+    const r = parseInt(h.substring(0,2), 16);
+    const g = parseInt(h.substring(2,4), 16);
+    const b = parseInt(h.substring(4,6), 16);
+    return `rgba(${r},${g},${b},${a})`;
+  }
+  return hex;
+}
+
+function drawMiniChart(canvasId, data, valueKey, hexColor, maxPoints=120) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  // cache width on first render to prevent layout shifts
+  if (!_chartWidths[canvasId]) {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    _chartWidths[canvasId] = Math.max(200, Math.min(600, rect.width - 24));
+  }
+  const w = _chartWidths[canvasId];
+  const h = 80;
+  const dpr = window.devicePixelRatio || 1;
+  // skip canvas re-init if dimensions unchanged
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const muted = cssVar('--text-muted') || '#555';
+
+  if (!data || data.length < 2) {
+    return;
+  }
+
+  const slice = data.slice(-maxPoints);
+  const values = slice.map(p => p[valueKey] || 0);
+  const maxVal = Math.max(...values, 1);
+  const pad = 4;
+
+  ctx.strokeStyle = hexColor;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i < slice.length; i++) {
+    const x = pad + (i / (slice.length - 1)) * (w - pad * 2);
+    const y = h - pad - (values[i] / maxVal) * (h - pad * 2);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // fill
+  ctx.lineTo(w - pad, h - pad);
+  ctx.lineTo(pad, h - pad);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, hexToRgba(hexColor, 0.18));
+  grad.addColorStop(1, hexToRgba(hexColor, 0.03));
+  ctx.fillStyle = grad;
+  ctx.fill();
+}
+
+function formatBytes(b) {
+  if (!b) return '0 B';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+  return (b / 1073741824).toFixed(2) + ' GB';
+}
+
+function formatBytesPerSec(b, sec) {
+  if (!b || !sec) return '—';
+  const rate = b / sec;
+  return formatBytes(rate) + '/s';
+}
+
+let _lastTrafficFetch = 0;
+let _lastTrafficValues = { nft_down_raw: 0 };
+let _trafficTimer;
+
+async function updateTrafficCharts() {
+  try {
+    const [current, history] = await Promise.all([
+      api('GET', '/api/traffic/current'),
+      api('GET', '/api/traffic/history?limit=900'),
+    ]);
+
+    const points = history.points || [];
+    _trafficData = points;
+    _connData = points;
+
+    const colorDown = cssVar('--green') || '#4ade80';
+    const colorConn = cssVar('--orange') || '#fb923c';
+    drawMiniChart('trafficChart', _trafficData, 'down', colorDown, 900);
+    drawMiniChart('connChart', _connData, 'conn', colorConn, 900);
+
+    // live traffic rate (из nftables real-time counter)
+    const now = Date.now() / 1000;
+    const dt = now - _lastTrafficFetch;
+    const rateEl = $('#trafficLive');
+    if (rateEl) {
+      if (_lastTrafficFetch > 0 && dt > 0 && current.nft_down_raw != null) {
+        const dDown = current.nft_down_raw - _lastTrafficValues.nft_down_raw;
+        rateEl.textContent = '↓' + formatBytesPerSec(Math.max(0, dDown), dt);
+      } else {
+        rateEl.textContent = '↓ —';
+      }
+    }
+    _lastTrafficFetch = now;
+    _lastTrafficValues = { nft_down_raw: current.nft_down_raw || 0 };
+
+    // active connections
+    const connEl = $('#connLive');
+    if (connEl) {
+      connEl.textContent = (current.active_connections != null ? current.active_connections : '—') + ' conn';
+    }
+
+  } catch (_) {}
+}
+
+function startTrafficPolling() {
+  updateTrafficCharts();
+  _trafficTimer = setInterval(updateTrafficCharts, 2000);
+}
+
+document.addEventListener('DOMContentLoaded', startTrafficPolling);
+
+// ─── Connections Modal ───
+
+let _connRefreshTimer = null;
+
+function toggleConnModal() {
+  const m = $('#connModal');
+  if (!m) return;
+  const open = m.classList.toggle('open');
+  if (open) {
+    loadConnections();
+    loadPerIPTraffic();
+    _connRefreshTimer = setInterval(() => {
+      loadConnections();
+      loadPerIPTraffic();
+    }, 3000);
+  } else {
+    if (_connRefreshTimer) clearInterval(_connRefreshTimer);
+    _connRefreshTimer = null;
+  }
+}
+
+function closeConnModal() {
+  const m = $('#connModal');
+  if (m) m.classList.remove('open');
+  if (_connRefreshTimer) clearInterval(_connRefreshTimer);
+  _connRefreshTimer = null;
+}
+
+function formatConnBytes(b) {
+  if (b == null) return '0B';
+  if (b <= 0) return '0B';
+  if (b < 1024) return b + 'B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + 'KB';
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + 'MB';
+  return (b / 1073741824).toFixed(2) + 'GB';
+}
+
+async function loadPerIPTraffic() {
+  const el = $('#connPerIP');
+  if (!el) return;
+  try {
+    const data = await api('GET', '/api/connections/traffic');
+    const clients = data.clients || [];
+    if (!clients.length) { el.innerHTML = ''; return; }
+    const maxBytes = Math.max(...clients.map(c => c.bytes_down), 1);
+    let html = '<table><thead><tr><th>Client</th><th>Conn</th><th>↓ Down</th><th>↑ Up</th><th></th></tr></thead><tbody>';
+    for (const c of clients) {
+      const pct = (c.bytes_down / maxBytes) * 100;
+      html += `<tr>
+        <td class="ip">${c.ip}</td>
+        <td>${c.connections}</td>
+        <td class="bytes">${formatConnBytes(c.bytes_down)}</td>
+        <td class="bytes">${formatConnBytes(c.bytes_up)}</td>
+        <td><span class="bar" style="width:${pct}%"></span></td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  } catch (_) { /* silent */ }
+}
+
+function filterConnTable() {
+  const q = ($('#connFilter') || {}).value || '';
+  const rows = ($('#connTbody') || {}).children;
+  if (!rows) return;
+  for (const tr of rows) {
+    const text = tr.textContent || '';
+    tr.style.display = q ? (text.includes(q) ? '' : 'none') : '';
+  }
+}
+
+async function loadConnections() {
+  const wrap = $('#connTableWrap');
+  if (!wrap) return;
+  try {
+    const data = await api('GET', '/api/connections/list');
+    const conns = data.connections || [];
+    if (!conns.length) {
+      wrap.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.8rem">// no active connections</div>';
+      return;
+    }
+    let html = `<table class="conn-table">
+      <thead><tr><th>Process</th><th>PID</th><th>Local</th><th>Remote</th><th>Status</th><th class="bytes">↓/↑</th><th></th></tr></thead>
+      <tbody id="connTbody">`;
+    for (const c of conns) {
+      const remote = `${c.remote}:${c.remote_port}`;
+      const local = `${c.local}:${c.local_port}`;
+      const traffic = formatConnBytes(c.bytes_out || 0) + (c.bytes_in ? '/' + formatConnBytes(c.bytes_in) : '');
+      html += `<tr>
+        <td class="proc" title="${c.process || '—'}">${c.process || '—'}</td>
+        <td>${c.pid || '—'}</td>
+        <td>${local}</td>
+        <td>${remote}</td>
+        <td><span class="badge badge-green">${c.status}</span></td>
+        <td class="bytes" title="down/up">${traffic}</td>
+        <td><button class="btn btn-sm btn-danger" onclick="closeConn('${c.remote}',${c.remote_port})">close</button></td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+    // переприменяем активный фильтр
+    filterConnTable();
+  } catch (_) {
+    wrap.innerHTML = '<div style="padding:20px;text-align:center;color:var(--red)">failed to load</div>';
+  }
+}
+
+async function closeConn(host, port) {
+  if (!confirm(`Close connection to ${host}:${port}?`)) return;
+  const r = await api('POST', '/api/connections/close', {remote_host: host, remote_port: port});
+  if (r.success) toast(`closed ${host}:${port}`, 'success');
+  else toast(`failed to close ${host}:${port}`, 'error');
+  loadConnections();
+  loadPerIPTraffic();
+}
+
+async function flushConns() {
+  if (!confirm('Close ALL active connections? May disrupt active downloads.')) return;
+  const r = await api('POST', '/api/connections/flush');
+  toast(`closed ${r.killed} connections`, 'success');
+  loadConnections();
+  loadPerIPTraffic();
+}
+
+// close modal on Escape
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeConnModal();
+});

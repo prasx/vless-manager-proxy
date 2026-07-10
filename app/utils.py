@@ -160,6 +160,292 @@ def enrich_country(pid, host):
 
 _enrich_lock = threading.Lock()
 
+def count_active_connections(ports: list[int]) -> dict[int, int]:
+    """Подсчитывает активные TCP-соединения на указанных портах (через netstat/ss)."""
+    result = {p: 0 for p in ports}
+    try:
+        conns = list_active_connections(ports)
+        for c in conns:
+            lp = c.get("local_port")
+            if lp in ports:
+                result[lp] = result.get(lp, 0) + 1
+    except Exception:
+        pass
+    return result
+
+
+def _get_conntrack_map():
+    """Парсит conntrack, возвращает {(client_ip, client_port): (bytes_to_client, bytes_from_client)}.
+    Тихий возврат {} если conntrack недоступен."""
+    import re
+    result = {}
+    if os.name == "nt":
+        return result
+    try:
+        r = subprocess.run(
+            ["conntrack", "-L"],
+            capture_output=True, text=True, timeout=5,
+        )
+        lines = r.stdout.splitlines()
+    except Exception:
+        try:
+            with open("/proc/net/nf_conntrack") as f:
+                lines = f.read().splitlines()
+        except Exception:
+            return result
+
+    for line in lines:
+        if "dport=1080" not in line and "dport=1081" not in line:
+            continue
+        vals = re.findall(r'bytes=(\d+)', line)
+        if len(vals) < 2:
+            continue
+        m = re.search(r'src=([^\s]+)\s+.*?sport=(\d+)\s+dport=108[01]', line)
+        if not m:
+            continue
+        client_ip = m.group(1)
+        client_port = int(m.group(2))
+        bytes_to_client = int(vals[1])
+        bytes_from_client = int(vals[0])
+        key = (client_ip, client_port)
+        existing = result.get(key, (0, 0))
+        result[key] = (existing[0] + bytes_to_client, existing[1] + bytes_from_client)
+    return result
+
+
+def list_active_connections(proxy_ports: list[int] = (1080, 1081)) -> list[dict]:
+    """Возвращает детальный список TCP-соединений через прокси-порты.
+    Каждый элемент: {pid, process, local, local_port, remote, remote_port, status, direction, bytes_in, bytes_out}"""
+    import os
+    import subprocess
+
+    is_win = os.name == "nt"
+    result = []
+
+    try:
+        if is_win:
+            pid_map = _win_pid_map()
+            r = subprocess.run(
+                ["netstat", "-ano"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in r.stdout.splitlines():
+                parts = line.strip().split()
+                if len(parts) < 5:
+                    continue
+                proto = parts[0].upper()
+                if proto not in ("TCP",):
+                    continue
+                local = parts[1]
+                remote = parts[2]
+                status = parts[3]
+                pid_str = parts[4]
+                pid = int(pid_str) if pid_str.isdigit() else 0
+                process_name = pid_map.get(pid, "")
+
+                local_host, local_port = _split_addr_port(local)
+                remote_host, remote_port = _split_addr_port(remote)
+
+                # Показываем только ESTABLISHED + связанные с прокси
+                if status.upper() != "ESTABLISHED":
+                    continue
+                is_client = local_port in proxy_ports or remote_port in proxy_ports
+                if is_client:
+                    result.append(dict(
+                        pid=pid, process=process_name,
+                        local=local_host, local_port=local_port,
+                        remote=remote_host, remote_port=remote_port,
+                        status=status, direction="up" if remote_port in proxy_ports else "down",
+                        bytes_in=0, bytes_out=0,
+                    ))
+        else:
+            # Linux: ss -antp (с -p для PID). Если нет прав — fallback без -p
+            try:
+                r = subprocess.run(
+                    ["ss", "-antp"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if r.returncode != 0:
+                    r = subprocess.run(
+                        ["ss", "-ant"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+            except Exception:
+                r = subprocess.run(
+                    ["ss", "-ant"],
+                    capture_output=True, text=True, timeout=5,
+                )
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if not line or line[0].isalpha() and not line.startswith("ESTAB") and not line.startswith("LISTEN"):
+                    continue
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                state = parts[0].upper()
+                if state != "ESTAB":
+                    continue
+                local = parts[3]
+                remote = parts[4]
+                peername = ""
+                for p in parts:
+                    if p.startswith("users:("):
+                        peername = p
+
+                local_host, local_port = _split_addr_port(local)
+                remote_host, remote_port = _split_addr_port(remote)
+                pid, process_name = _parse_ss_peername(peername)
+
+                is_client = local_port in proxy_ports or remote_port in proxy_ports
+                if is_client:
+                    result.append(dict(
+                        pid=pid, process=process_name,
+                        local=local_host, local_port=local_port,
+                        remote=remote_host, remote_port=remote_port,
+                        status=state, direction="up" if remote_port in proxy_ports else "down",
+                        bytes_in=0, bytes_out=0,
+                    ))
+        # обогащаем трафиком из conntrack (внутри try чтобы не сломал список)
+        if not is_win and result:
+            try:
+                ct_map = _get_conntrack_map()
+                for c in result:
+                    key = (c["remote"], c["remote_port"])
+                    ct = ct_map.get(key)
+                    if ct:
+                        c["bytes_out"] = ct[0]
+                        c["bytes_in"] = ct[1]
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return result
+
+
+def close_connection(remote_host, remote_port, local_port=None):
+    """Закрывает TCP-соединение с указанным удалённым хостом:портом.
+    Linux: tcpkill или ss -K. Windows: RST через TCP_KILL."""
+    import os
+    import subprocess
+
+    is_win = os.name == "nt"
+    try:
+        if is_win:
+            # Находим соединение и завершаем процесс-владелец
+            conns = list_active_connections()
+            for c in conns:
+                if c["remote"] == remote_host and c["remote_port"] == remote_port:
+                    if c.get("pid") and c["pid"] > 0:
+                        subprocess.run(
+                            ["taskkill", "/F", "/PID", str(c["pid"])],
+                            capture_output=True, timeout=5,
+                        )
+                        return True
+        else:
+            # Linux: ss -K (kill)
+            from config import API_LISTEN
+            filter_expr = f"( dst {remote_host} and dport {remote_port} )"
+            r = subprocess.run(
+                ["ss", "-K", filter_expr],
+                capture_output=True, timeout=5,
+            )
+            if r.returncode == 0:
+                return True
+            # fallback: tcpkill
+            r = subprocess.run(
+                ["tcpkill", "-9", f"host {remote_host} and port {remote_port}"],
+                capture_output=True, timeout=5,
+            )
+            return r.returncode == 0
+    except Exception:
+        pass
+    return False
+
+
+def flush_all_connections():
+    """Закрывает все ESTABLISHED соединения через прокси-порты.
+    Возвращает количество закрытых соединений."""
+    conns = list_active_connections()
+    killed = 0
+    for c in conns:
+        try:
+            if c.get("pid") and c["pid"] > 0 and c.get("process") != "xray":
+                import os
+                import signal
+                if os.name == "nt":
+                    import subprocess
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", str(c["pid"])],
+                        capture_output=True, timeout=3,
+                    )
+                else:
+                    os.kill(c["pid"], signal.SIGTERM)
+                killed += 1
+        except Exception:
+            pass
+    return killed
+
+
+def _win_pid_map() -> dict[int, str]:
+    """Возвращает {pid: process_name} для всех процессов Windows."""
+    import subprocess
+    m = {}
+    try:
+        r = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in r.stdout.splitlines():
+            line = line.strip().strip('"')
+            parts = line.split('","')
+            if len(parts) >= 2:
+                name = parts[0].strip('"')
+                pid_str = parts[1].strip().strip('"') if len(parts) > 1 else ""
+                if pid_str.isdigit():
+                    m[int(pid_str)] = name
+    except Exception:
+        pass
+    return m
+
+
+def _split_addr_port(addr: str) -> tuple:
+    """Разделяет '127.0.0.1:1080' на ('127.0.0.1', 1080).
+    Убирает ::ffff: префикс (IPv4-mapped IPv6)."""
+    if not addr:
+        return ("", 0)
+    if addr.startswith("["):
+        # IPv6: [::1]:1080
+        try:
+            host, port = addr.rsplit("]:", 1)
+            host = host.lstrip("[")
+            if host.startswith("::ffff:"):
+                host = host[7:]
+            return (host, int(port))
+        except Exception:
+            return (addr, 0)
+    try:
+        host, port = addr.rsplit(":", 1)
+        if host.startswith("::ffff:"):
+            host = host[7:]
+        return (host, int(port) if port.isdigit() else 0)
+    except Exception:
+        return (addr, 0)
+
+
+def _parse_ss_peername(peername: str) -> tuple:
+    """Парсит 'users:((\"chrome\",pid=1234,fd=42))' в (1234, 'chrome')."""
+    if not peername:
+        return (0, "")
+    try:
+        import re
+        m = re.search(r'"([^"]+)".*?pid=(\d+)', peername)
+        if m:
+            return (int(m.group(2)), m.group(1))
+    except Exception:
+        pass
+    return (0, "")
+
+
 def enrich_all_unknown_countries():
     """Заполняет страну для всех прокси, у которых она отсутствует или невалидна.
     Предотвращает конкурентный запуск через threading.Lock()."""

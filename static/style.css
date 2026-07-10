@@ -9,6 +9,7 @@
   --text-muted: #555;
   --green: #4ade80;
   --red: #f87171;
+  --orange: #fb923c;
   --transition: 0.15s ease;
 }
 [data-theme="light"] {
