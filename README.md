@@ -5,6 +5,10 @@
 [![Flask](https://img.shields.io/badge/Flask-3.1%2B-green)](https://flask.palletsprojects.com/)
 [![Xray](https://img.shields.io/badge/Xray-26.3+-orange)](https://github.com/XTLS/Xray-core)
 
+
+<img width="1862" height="1098" alt="" src="https://github.com/user-attachments/assets/ddc23a63-8cab-4f81-88c4-ba2459040003" />
+
+
 Веб-панель для управления VLESS прокси. Добавляй подписки и отдельные ссылки — панель параллельно тестирует каждый прокси через реальный запуск Xray, собирает конфиг с рабочими узлами и применяет через Xray API. **Observatory + Balancer** (random, leastLoad, leastPing) автоматически выбирают лучший узел.
 
 ## Особенности
