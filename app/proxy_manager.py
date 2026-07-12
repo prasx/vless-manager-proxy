@@ -527,6 +527,12 @@ class ProxyManager:
                 add_log("INFO", f"DB check: {len(rows)} proxies")
                 self._bg_vless_batch(rows, "db-check")
 
+            if Settings.get("db_check_auto_cleanup", "false") == "true":
+                deleted = db_q("SELECT COUNT(*) c FROM proxies WHERE status='failed'")[0]["c"]
+                if deleted:
+                    db_q("DELETE FROM proxies WHERE status='failed'")
+                    add_log("INFO", f"DB check auto-cleanup: deleted {deleted} failed proxies")
+
             if Settings.get("apply_after_test", "true") == "true":
                 from .xray_configurator import xray_configurator
 

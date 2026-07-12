@@ -251,6 +251,7 @@ async function loadSettings() {
   $('balancerStrategy').value = s.balancer_strategy || 'random';
   $('handshakeTimeout').value = s.handshake_timeout || '8';
   $('connIdle').value = s.conn_idle || '300';
+  $('dbCheckAutoCleanup').checked = s.db_check_auto_cleanup === 'true';
   $('speedTestEnabled').checked = s.speed_test_enabled !== 'false';
   $('speedTestMax').value = s.speed_test_max || '30';
   $('speedTestUrl').value = s.speed_test_url || 'http://speedtest.selectel.ru/10MB';
@@ -390,6 +391,7 @@ async function saveSettings() {
     speed_test_enabled: $('speedTestEnabled').checked ? 'true' : 'false',
     speed_test_max: $('speedTestMax').value.trim() || '30',
     speed_test_url: $('speedTestUrl').value.trim() || 'http://speedtest.selectel.ru/10MB',
+    db_check_auto_cleanup: $('dbCheckAutoCleanup').checked ? 'true' : 'false',
     apply_after_test: $('applyAfterTest').checked ? 'true' : 'false',
     min_speed_mbps: $('minSpeedMbps').value.trim() || '0',
     speed_test_adaptive_sec: $('speedTestAdaptiveSec').value.trim() || '2',

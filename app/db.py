@@ -192,6 +192,7 @@ def init_db() -> None:
         # Traffic monitoring
         "traffic_collect_interval": "2",
         "traffic_history_hours": "0.5",
+        "db_check_auto_cleanup": "false",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
