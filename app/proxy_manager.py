@@ -15,6 +15,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from config import SOCKS_PORT, HTTP_PORT
 from .db import db_q, Settings
 from .utils import add_log, now_utc, moscow_str, set_correlation_id, count_active_connections
 from .importer import import_from_url
@@ -544,7 +545,18 @@ class ProxyManager:
         if self._nft_inited:
             return True
         try:
-            # удаляем старые правила с jump VLESS_MGR (от iptables-compat) — у них handle в nft
+            # 1. Создаём таблицу + базовые цепочки, если их нет (на чистой Ubuntu их нет)
+            subprocess.run(["nft", "add", "table", "ip", "filter"],
+                           capture_output=True, timeout=5)
+            for name, hook in (
+                ("INPUT",  "type filter hook input priority 0;"),
+                ("OUTPUT", "type filter hook output priority 0;"),
+            ):
+                subprocess.run(
+                    ["nft", "add", "chain", "ip", "filter", name, "{" + hook + "}"],
+                    capture_output=True, timeout=5,
+                )
+            # 2. удаляем старые правила с jump VLESS_MGR (от iptables-compat) — у них handle в nft
             for chain in ("INPUT", "OUTPUT"):
                 # получаем хендлы правил
                 r = subprocess.run(
@@ -569,10 +581,10 @@ class ProxyManager:
             )
             # добавляем свои правила-счётчики (в начало цепочки: insert = position 0)
             for cmd in (
-                ["nft", "insert", "rule", "ip", "filter", "INPUT", "tcp", "dport", "1080", "counter", "accept"],
-                ["nft", "insert", "rule", "ip", "filter", "INPUT", "tcp", "dport", "1081", "counter", "accept"],
-                ["nft", "insert", "rule", "ip", "filter", "OUTPUT", "tcp", "sport", "1080", "counter", "accept"],
-                ["nft", "insert", "rule", "ip", "filter", "OUTPUT", "tcp", "sport", "1081", "counter", "accept"],
+                ["nft", "insert", "rule", "ip", "filter", "INPUT", "tcp", "dport", str(SOCKS_PORT), "counter", "accept"],
+                ["nft", "insert", "rule", "ip", "filter", "INPUT", "tcp", "dport", str(HTTP_PORT), "counter", "accept"],
+                ["nft", "insert", "rule", "ip", "filter", "OUTPUT", "tcp", "sport", str(SOCKS_PORT), "counter", "accept"],
+                ["nft", "insert", "rule", "ip", "filter", "OUTPUT", "tcp", "sport", str(HTTP_PORT), "counter", "accept"],
             ):
                 subprocess.run(cmd, capture_output=True, timeout=5)
             self._nft_inited = True
@@ -586,6 +598,7 @@ class ProxyManager:
         """Читает кумулятивные байты из nftables (текстовый парсинг).
         Возвращает (downlink_bytes=OUTPUT, uplink_bytes=INPUT)."""
         down = 0; up = 0
+        socks = str(SOCKS_PORT); http = str(HTTP_PORT)
         for chain, direction in (("OUTPUT", "down"), ("INPUT", "up")):
             try:
                 r = subprocess.run(
@@ -596,8 +609,7 @@ class ProxyManager:
                 add_log("DEBUG", f"nft read {chain}: {e}")
                 continue
             for line in r.stdout.splitlines():
-                if "dport 1080" not in line and "dport 1081" not in line and \
-                   "sport 1080" not in line and "sport 1081" not in line:
+                if socks not in line and http not in line:
                     continue
                 m = re.search(r'bytes\s+(\d+)', line)
                 if m:
@@ -615,8 +627,8 @@ class ProxyManager:
                 self._nft_init()
             raw_down, raw_up = self._nft_read()
 
-            conns = count_active_connections([1080, 1081])
-            total_conn = conns.get(1080, 0) + conns.get(1081, 0)
+            conns = count_active_connections([SOCKS_PORT, HTTP_PORT])
+            total_conn = conns.get(SOCKS_PORT, 0) + conns.get(HTTP_PORT, 0)
 
             db_q(
                 "INSERT INTO traffic_history (collected_at, total_downlink, total_uplink, active_outbounds, active_connections) VALUES (?, ?, ?, ?, ?)",

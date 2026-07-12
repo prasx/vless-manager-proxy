@@ -178,6 +178,8 @@ def _get_conntrack_map():
     """Парсит conntrack, возвращает {(client_ip, client_port): (bytes_to_client, bytes_from_client)}.
     Тихий возврат {} если conntrack недоступен."""
     import re
+    from config import SOCKS_PORT, HTTP_PORT
+    proxy_ports_str = [str(SOCKS_PORT), str(HTTP_PORT)]
     result = {}
     if os.name == "nt":
         return result
@@ -194,13 +196,15 @@ def _get_conntrack_map():
         except Exception:
             return result
 
+    ports_filter = tuple(f"dport={p}" for p in proxy_ports_str)
     for line in lines:
-        if "dport=1080" not in line and "dport=1081" not in line:
+        if not any(p in line for p in ports_filter):
             continue
         vals = re.findall(r'bytes=(\d+)', line)
         if len(vals) < 2:
             continue
-        m = re.search(r'src=([^\s]+)\s+.*?sport=(\d+)\s+dport=108[01]', line)
+        port_pattern = '|'.join(proxy_ports_str)
+        m = re.search(rf'src=([^\s]+)\s+.*?sport=(\d+)\s+dport=({port_pattern})', line)
         if not m:
             continue
         client_ip = m.group(1)
@@ -213,7 +217,10 @@ def _get_conntrack_map():
     return result
 
 
-def list_active_connections(proxy_ports: list[int] = (1080, 1081)) -> list[dict]:
+def list_active_connections(proxy_ports: list[int] | None = None) -> list[dict]:
+    if proxy_ports is None:
+        from config import SOCKS_PORT, HTTP_PORT
+        proxy_ports = [SOCKS_PORT, HTTP_PORT]
     """Возвращает детальный список TCP-соединений через прокси-порты.
     Каждый элемент: {pid, process, local, local_port, remote, remote_port, status, direction, bytes_in, bytes_out}"""
     import os

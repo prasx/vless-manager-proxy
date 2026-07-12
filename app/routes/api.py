@@ -11,7 +11,7 @@ from flask import Blueprint, request, jsonify, Response
 
 from ..db import db_q, Settings
 from ..utils import add_log, moscow_str, now_utc, count_active_connections, list_active_connections, close_connection, flush_all_connections
-from config import SUBSCRIBE_FILE
+from config import SUBSCRIBE_FILE, SOCKS_PORT, HTTP_PORT
 from ..vless import parse_vless
 from ..proxy_manager import proxy_manager
 from ..importer import import_from_url
@@ -764,8 +764,8 @@ def api_traffic_current():
     """GET /api/traffic/current — трафик (nftables real-time + DB history) + активные соединения."""
     from ..proxy_manager import proxy_manager
 
-    conns = count_active_connections([1080, 1081])
-    total_conn = conns.get(1080, 0) + conns.get(1081, 0)
+    conns = count_active_connections([SOCKS_PORT, HTTP_PORT])
+    total_conn = conns.get(SOCKS_PORT, 0) + conns.get(HTTP_PORT, 0)
     # nftables raw counters (real-time, для скорости)
     nft_down, nft_up = proxy_manager.get_live_traffic()
     # DB last row (график не дёргается)
@@ -779,8 +779,8 @@ def api_traffic_current():
         nft_up_raw=nft_up,
         active_outbounds=0,
         active_connections=total_conn,
-        socls_conns=conns.get(1080, 0),
-        http_conns=conns.get(1081, 0),
+        socls_conns=conns.get(SOCKS_PORT, 0),
+        http_conns=conns.get(HTTP_PORT, 0),
     )
 
 

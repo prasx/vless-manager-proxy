@@ -20,6 +20,9 @@
 - **Массовые операции** — Чекбоксы, выбор всех, удалить/протестировать выбранные.
 - **Backup** — Экспорт/импорт настроек и источников в JSON.
 - **Traffic stats** — Активные outbound и узлы с трафиком.
+- **Live traffic graph** — Real-time график скорости (↓/↑) через nftables счётчики.
+- **Connections monitor** — Модалка со списком активных TCP-соединений через прокси (кто, куда, сколько байт, закрытие по одному или всех).
+- **Анализатор соединений** — Per-IP группировка трафика, conntrack для per-connection байтов.
 - **Прогресс тестов** — Прогресс-бар в реальном времени.
 
 ## Конфигурация
@@ -55,8 +58,11 @@
 
 ```bash
 sudo apt update
-sudo apt install -y unzip wget git python3 python3-pip python3-venv
+sudo apt install -y unzip wget git python3 python3-pip python3-venv nftables conntrack
 ```
+
+> **`nftables`** — требуется для счётчиков трафика (live speed graph, real-time bandwidth).  
+> **`conntrack`** (conntrack-tools) — требуется для per-connection байтов (колонка ↓/↑ в модалке Connections).
 
 ### 2. Установка Xray
 
@@ -223,10 +229,19 @@ vless-manager/
 | POST | `/api/xray/start` | `systemctl start xray` |
 | POST | `/api/xray/stop` | `systemctl stop xray` |
 | POST | `/api/xray-restart` | `systemctl restart xray` |
+| POST | `/api/xray/rebuild` | Пересобрать конфиг и применить |
 | POST | `/api/import` | Импорт по URL `{"url":"..."}` |
 | GET | `/api/subscribe.txt` | Subscription URL |
 | GET | `/api/logs?limit=&offset=&level=` | Логи |
 | POST | `/api/logs/clear` | Очистить логи |
+| GET | `/api/traffic/current` | Текущий трафик (nftables + active connections) |
+| GET | `/api/traffic/history?limit=` | История трафика для графика |
+| GET | `/api/connections/list` | Список активных TCP-соединений через прокси |
+| GET | `/api/connections/traffic` | Трафик сгруппированный по IP клиента |
+| POST | `/api/connections/close` | Закрыть соединение `{"remote_host","remote_port"}` |
+| POST | `/api/connections/flush` | Закрыть все активные соединения |
+| GET | `/api/performance/recommendations` | Рекомендации по настройкам производительности |
+| GET | `/api/health` | Health check для systemd/monitoring |
 
 ## Лицензия
 
