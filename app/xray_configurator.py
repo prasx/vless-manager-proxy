@@ -35,7 +35,7 @@ class XrayConfigurator:
         self._apply_lock = threading.Lock()
         self._last_config_hash = ""
         self._last_restart_time = 0.0
-        self._restart_cooldown = 120  # seconds
+        self._restart_cooldown = 20  # seconds
         self._stats_cache = {"data": None, "ts": 0.0}
         self._stats_cache_lock = threading.Lock()
 
@@ -571,31 +571,43 @@ class XrayConfigurator:
             return 0
         return sum(1 for t in self.list_active_outbounds() if t.startswith("node"))
 
+    def _sync_outbounds(self, desired_obs):
+        """Diff-based синхронизация node* outbound через Xray API.
+
+        Вместо тотального remove_all + add_all делает только
+        точечные изменения: удаляет только теги, которых нет в желаемом
+        списке, добавляет только недостающие.
+        Возвращает (added_count, total_desired).
+        """
+        current = self.list_active_outbounds()
+        current_tags = {t for t in current if t.startswith("node")}
+        desired_tags = {ob["tag"] for ob in desired_obs}
+
+        to_remove = sorted(current_tags - desired_tags)
+        to_add = [ob for ob in desired_obs if ob["tag"] not in current_tags]
+
+        for tag in to_remove:
+            self._remove_outbound(tag)
+        for ob in to_add:
+            self.add_outbound(ob)
+
+        return len(to_add), len(desired_obs)
+
     def _apply_all_impl_safe(self):
         cfg_path = xray_config_path()
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
 
         max_active = Settings.max_active_proxies()
         min_kbps = Settings.min_speed_kbps()
-        speed_sql = f"AND speed_kbps >= {min_kbps}" if min_kbps > 0 else ""
-        proxy_count = db_q(
-            f"SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0 {speed_sql}"
-        )[0]["c"]
-        expected_nodes = min(proxy_count, max_active) if max_active > 0 else proxy_count
 
-        new_hash = self._compute_config_hash()
-        if new_hash == self._last_config_hash:
-            active_nodes = self._active_node_count()
-            if active_nodes >= expected_nodes:
-                return
-            add_log(
-                "WARN",
-                f"Hash unchanged but only {active_nodes}/{expected_nodes} outbounds running — reapplying",
-            )
-        self._last_config_hash = new_hash
+        full = self.generate_full_config(max_outbounds=max_active)
+        limited_obs = [o for o in full["outbounds"] if o["tag"].startswith("node")]
 
-        has_work = proxy_count > 0
+        # Всегда пишем конфиг на диск (нужен для systemd-рестарта и диагностики)
+        cfg_path.write_text(json.dumps(full, indent=2))
+        add_log("DEBUG", f"Config written to disk ({len(limited_obs)} outbounds)")
 
+        has_work = bool(limited_obs)
         geosite_rules_list = self._geosite_rules(has_balancer=has_work)
         if geosite_rules_list:
             domains = [
@@ -607,54 +619,42 @@ class XrayConfigurator:
                 "INFO",
                 f"GeoSite rules active ({len(geosite_rules_list)}): {', '.join(domains)}",
             )
-        else:
-            add_log("DEBUG", "No GeoSite rules configured — all domains via balancer")
 
-        full = self.generate_full_config(max_outbounds=max_active)
-        limited_obs = [o for o in full["outbounds"] if o["tag"].startswith("node")]
-
-        if self.api_ok():
-            cfg_path.write_text(json.dumps(full, indent=2))
-            add_log("INFO", "Full config written to disk")
-
-            # Cooldown после рестарта: не дёргаем API, даём Xray устаканиться
-            since_restart = time.time() - self._last_restart_time
-            if since_restart < self._restart_cooldown:
-                add_log(
-                    "INFO",
-                    f"Restart cooldown ({self._restart_cooldown - since_restart:.0f}s left) — skipping API hot-reload, config on disk",
-                )
-                return
-
-            # Удаляем все старые node* outbound и добавляем новые
-            self.remove_all_outbounds()
-            added = 0
-            for ob in limited_obs:
-                if self.add_outbound(ob):
-                    added += 1
-            if added == len(limited_obs):
-                add_log(
-                    "INFO",
-                    f"Applied {added}/{len(limited_obs)} proxies via API (total working: {proxy_count})",
-                )
-            elif added == 0:
-                add_log(
-                    "WARN",
-                    f"All {len(limited_obs)} outbound adds failed via API — restarting Xray to reload config from disk",
-                )
-                self.restart_via_systemd()
-                self._last_restart_time = time.time()
-                for wait in (5, 10, 15):
-                    time.sleep(wait)
-                    if self.api_ok():
-                        break
-            else:
-                add_log(
-                    "WARN",
-                    f"Only {added}/{len(limited_obs)} outbound adds succeeded via API — config on disk is intact for next cycle",
-                )
-        else:
+        if not self.api_ok():
             self._write_and_restart(cfg_path, max_active)
+            update_subscribe_cache()
+            return
+
+        # Cooldown после рестарта: не дёргаем API, даём Xray устаканиться
+        since_restart = time.time() - self._last_restart_time
+        if since_restart < self._restart_cooldown:
+            add_log(
+                "INFO",
+                f"Restart cooldown ({self._restart_cooldown - since_restart:.0f}s left) — API hot-reload deferred",
+            )
+            return
+
+        added, total = self._sync_outbounds(limited_obs)
+        if added == total:
+            add_log(
+                "INFO",
+                f"Applied {added}/{total} outbounds via API (diff-based sync)",
+            )
+        elif added == 0 and total > 0:
+            add_log(
+                "WARN",
+                f"All {total} outbound adds failed via API — restarting Xray",
+            )
+            self.restart_via_systemd()
+            self._last_restart_time = time.time()
+        elif added < total:
+            add_log(
+                "WARN",
+                f"Only {added}/{total} outbounds synced via API — partial apply",
+            )
+        else:
+            add_log("DEBUG", f"All {total} outbounds already in sync, no API calls needed")
+
         update_subscribe_cache()
 
     def _write_and_restart(self, cfg_path, max_active, attempt=1, skip_geosite=False):

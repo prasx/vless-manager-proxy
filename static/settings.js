@@ -247,9 +247,9 @@ async function loadSettings() {
   $('vlessPerProxyTimeout').value = s.vless_per_proxy_timeout || '5';
   $('logTrimEvery').value = s.log_trim_every || '500';
   $('logKeep').value = s.log_keep || '2000';
-  $('observatoryProbeInterval').value = s.observatory_probe_interval || '15s';
-  $('balancerStrategy').value = s.balancer_strategy || 'random';
-  $('handshakeTimeout').value = s.handshake_timeout || '8';
+  $('observatoryProbeInterval').value = s.observatory_probe_interval || '10s';
+  $('balancerStrategy').value = s.balancer_strategy || 'leastPing';
+  $('handshakeTimeout').value = s.handshake_timeout || '5';
   $('connIdle').value = s.conn_idle || '300';
   $('dbCheckAutoCleanup').checked = s.db_check_auto_cleanup === 'true';
   $('speedTestEnabled').checked = s.speed_test_enabled !== 'false';
@@ -267,9 +267,9 @@ async function loadSettings() {
   $('sniffQuic').checked = destOverride.includes('quic');
   $('sniffFtp').checked = destOverride.includes('ftp');
   $('geoEnabled').checked = s.geo_enabled !== 'false';
-  $('maxWorkers').value = s.max_workers || '10';
-  $('probeTimeout').value = s.probe_timeout || '5';
-  $('xrayStartupRetries').value = s.xray_startup_retries || '30';
+  $('maxWorkers').value = s.max_workers || '30';
+  $('probeTimeout').value = s.probe_timeout || '3';
+  $('xrayStartupRetries').value = s.xray_startup_retries || '15';
   updateConfigStatus(status);
   updateSpeedTestDependants();
   loadPerfEstimate();
@@ -430,22 +430,22 @@ async function saveSettings() {
 }
 
 function resetTuning() {
-  setRangeValue(_rangeDb, 0.5);
+  setRangeValue(_rangeDb, 0.25);
   setRangeValue(_rangeImport, 3);
-  $('vlessPerProxyTimeout').value = '5';
-  $('observatoryProbeInterval').value = '15s';
+  $('vlessPerProxyTimeout').value = '3';
+  $('observatoryProbeInterval').value = '10s';
   $('logTrimEvery').value = '500';
   $('logKeep').value = '2000';
-  $('handshakeTimeout').value = '8';
+  $('handshakeTimeout').value = '5';
   $('connIdle').value = '300';
-  $('speedTestMax').value = '30';
+  $('speedTestMax').value = '15';
   $('speedTestUrl').value = 'http://speedtest.selectel.ru/10MB';
   $('minSpeedMbps').value = '0';
   $('speedTestAdaptiveSec').value = '2';
   $('safeOnlyImport').checked = false;
-  $('balancerStrategy').value = 'random';
-  $('maxWorkers').value = '20';
-  $('probeTimeout').value = '5';
+  $('balancerStrategy').value = 'leastPing';
+  $('maxWorkers').value = '30';
+  $('probeTimeout').value = '3';
   $('xrayStartupRetries').value = '15';
   markDirty();
   toast('Tuning values reset to defaults — click Save to apply');

@@ -29,7 +29,6 @@ class ProxyManager:
         self._vless_busy = False
         self._last_run_db = 0.0
         self._last_run_import = 0.0
-        self._speed_test_done = 0
         self._shutdown = threading.Event()
         self._cancel = threading.Event()
         self._xray_children: dict[int, subprocess.Popen] = {}
@@ -365,36 +364,64 @@ class ProxyManager:
     # ─── Parallel batch testing (spawn/kill + inline speed) ───
 
     def _test_one_spawn(self, r, timeout):
-        """Fallback: spawn/kill Xray на каждый прокси + inline speed."""
+        """VLESS-тест одного прокси (без speed test — вынесен в отдельный проход)."""
         parsed = parse_vless(r["link"])
         ok = False
         lat = 0
-        speed_kbps = 0
         proc, tmp_path, http_port = ProxyManager._start_xray(parsed) if parsed else (None, None, None)
         if proc:
             ok, lat = ProxyManager._probe(http_port, timeout)
-            if ok:
-                speed_enabled = Settings.get("speed_test_enabled", "true") == "true"
-                speed_max = int(Settings.get("speed_test_max", "30"))
-                if speed_enabled and self._speed_test_done < speed_max:
-                    speed_timeout = timeout * 3
-                    speed_kbps = ProxyManager._measure_kbps(http_port, speed_timeout)
-                    if speed_kbps:
-                        self._speed_test_done += 1
             ProxyManager._stop_xray(proc, tmp_path)
         self._update_vless_status(r["id"], ok, lat if ok else 0)
-        if speed_kbps:
-            db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (speed_kbps, r["id"]))
         with self._progress_lock:
             self.progress["done"] += 1
             if ok:
                 self.progress["ok"] += 1
         add_log(
             "INFO",
-            f"Test proxy #{r['id']} -> {'working' if ok else 'failed'} ({lat}ms)" +
-            (f" speed={speed_kbps}kbps" if speed_kbps else ""),
+            f"Test proxy #{r['id']} -> {'working' if ok else 'failed'} ({lat}ms)",
         )
         return r["id"], ok
+
+    def _run_speed_test_pass(self, rows, label):
+        """Отдельный проход speed test для top-N рабочих прокси.
+        Запускается после VLESS-теста, чтобы не замедлять основной цикл."""
+        speed_enabled = Settings.get("speed_test_enabled", "true") == "true"
+        if not speed_enabled:
+            return
+        speed_max = int(Settings.get("speed_test_max", "30"))
+        if speed_max <= 0:
+            return
+
+        # Берём top-N рабочих прокси (отсортированы по latency)
+        working = db_q(
+            "SELECT id, link FROM proxies WHERE status='working' ORDER BY latency_vless ASC LIMIT ?",
+            (speed_max,),
+        )
+        if not working:
+            return
+
+        add_log("INFO", f"Speed test pass: {len(working)} proxies ({label})")
+        tested = 0
+        for r in working:
+            if self._cancel.is_set():
+                break
+            parsed = parse_vless(r["link"])
+            if not parsed:
+                continue
+            proc, tmp_path, http_port = ProxyManager._start_xray(parsed)
+            if not proc:
+                continue
+            try:
+                speed_timeout = int(Settings.get("vless_per_proxy_timeout", "5")) * 3
+                kbps = ProxyManager._measure_kbps(http_port, speed_timeout)
+                if kbps:
+                    db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (kbps, r["id"]))
+                    tested += 1
+                    add_log("INFO", f"Speed test #{r['id']}: {kbps}kbps")
+            finally:
+                ProxyManager._stop_xray(proc, tmp_path)
+        add_log("INFO", f"Speed test pass done: {tested}/{len(working)} measured ({label})")
 
     def _run_batch(self, rows, label, timeout):
         if not rows:
@@ -403,7 +430,6 @@ class ProxyManager:
         set_correlation_id(cid)
         with self._progress_lock:
             self.progress.update(running=True, total=len(rows), done=0, ok=0, label=label, started_at=time.time())
-        self._speed_test_done = 0
         self._cancel.clear()
         try:
             add_log("INFO", f"Testing {label}: {len(rows)} proxies")
@@ -422,9 +448,12 @@ class ProxyManager:
 
             enrich_all_unknown_countries()
 
+            # Speed test отдельным проходом (не блокирует VLESS-тест)
+            self._run_speed_test_pass(rows, label)
+
             add_log(
                 "INFO",
-                f"{label}: {vless_ok}/{vless_total} ok, {self._speed_test_done} speed — {moscow_str()}",
+                f"{label}: {vless_ok}/{vless_total} ok — {moscow_str()}",
             )
         finally:
             self._record_completion(label)
@@ -488,6 +517,36 @@ class ProxyManager:
                     threading.Thread(target=self._run_db_chain, daemon=True).start()
             except Exception as e:
                 add_log("ERROR", f"Background checker crashed: {e}")
+
+    def failover_checker(self):
+        """Лёгкий фоновый поток: проверяет каждые 30 сек,
+        все ли ожидаемые node* outbound'ы живы в Xray.
+        Если часть нод пропала — инициирует apply_all() для пересборки конфига."""
+        add_log("INFO", "Failover checker started (interval: 30s)")
+        while not self._shutdown.is_set():
+            if self._shutdown.wait(timeout=30):
+                break
+            try:
+                from .xray_configurator import xray_configurator
+
+                if not xray_configurator.api_ok():
+                    continue
+
+                max_active = Settings.max_active_proxies()
+                working_count = db_q(
+                    "SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0"
+                )[0]["c"]
+                expected = min(working_count, max_active)
+
+                active = xray_configurator._active_node_count()
+                if active < expected:
+                    add_log(
+                        "WARN",
+                        f"Failover: only {active}/{expected} node outbounds active — triggering rebuild",
+                    )
+                    xray_configurator.apply_all(blocking=False)
+            except Exception as e:
+                add_log("ERROR", f"Failover checker crashed: {e}")
 
     def _run_import_chain(self):
         """Импорт из источников → проверка прокси → сборка конфига."""
