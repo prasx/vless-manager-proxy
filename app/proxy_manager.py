@@ -533,9 +533,18 @@ class ProxyManager:
                     continue
 
                 max_active = Settings.max_active_proxies()
-                working_count = db_q(
-                    "SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0"
-                )[0]["c"]
+                allowed = Settings.allowed_countries()
+                codes = [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
+                if codes:
+                    placeholders = ",".join("?" * len(codes))
+                    working_count = db_q(
+                        f"SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0 AND country IN ({placeholders})",
+                        codes,
+                    )[0]["c"]
+                else:
+                    working_count = db_q(
+                        "SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0"
+                    )[0]["c"]
                 expected = min(working_count, max_active)
 
                 active = xray_configurator._active_node_count()

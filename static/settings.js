@@ -427,6 +427,7 @@ async function saveSettings() {
   if (r.error) { toast(r.error, 'error'); return; }
   toast(r.restart_hint || 'Settings saved', 'success');
   loadSettings();
+  loadCountries();
 }
 
 function resetTuning() {

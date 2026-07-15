@@ -353,7 +353,8 @@ def api_settings_set():
     add_log("INFO", f"Settings updated: {', '.join(data.keys())}")
 
     if _REBUILD_KEYS & set(data.keys()):
-        threading.Thread(target=xray_configurator.apply_all, daemon=True).start()
+        update_subscribe_cache()
+        threading.Thread(target=lambda: xray_configurator.apply_all(blocking=True), daemon=True).start()
 
     d = xray_configurator.diagnose()
     hint = None
@@ -533,7 +534,7 @@ def api_xray_stop():
 @api_bp.route("/xray/rebuild", methods=["POST"])
 def api_xray_rebuild():
     """POST /api/xray/rebuild — пересобрать конфиг и применить (без перезапуска Xray)."""
-    threading.Thread(target=xray_configurator.apply_all, daemon=True).start()
+    threading.Thread(target=lambda: xray_configurator.apply_all(blocking=True), daemon=True).start()
     return jsonify(success=True, message="Config rebuild started")
 
 
@@ -740,7 +741,8 @@ def api_geosite_rules_set():
             return jsonify(error="Each rule needs 'domain' and 'outboundTag'"), 400
     Settings.set("geosite_rules", json.dumps(rules))
     add_log("INFO", f"GeoSite rules updated: {len(rules)} rules")
-    threading.Thread(target=xray_configurator.apply_all, daemon=True).start()
+    update_subscribe_cache()
+    threading.Thread(target=lambda: xray_configurator.apply_all(blocking=True), daemon=True).start()
     return jsonify(success=True, count=len(rules))
 
 
