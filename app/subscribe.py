@@ -9,13 +9,13 @@ def update_subscribe_cache() -> None:
     """Собирает subscribe.txt с vless-ссылками + метаданными для внешних клиентов."""
     try:
         max_active = Settings.max_active_proxies()
-        allowed = Settings.allowed_countries()
+        blocked = Settings.blocked_countries()
         codes = (
-            [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
+            [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
         )
         if codes:
             placeholders = ",".join("?" * len(codes))
-            country_sql = f"AND country IN ({placeholders})"
+            country_sql = f"AND country NOT IN ({placeholders})"
         else:
             placeholders = ""
             country_sql = ""
@@ -48,8 +48,8 @@ def update_subscribe_cache() -> None:
                 else f"{avg_speed} Kbps"
             )
             lines.append(f"# Avg speed: {speed_str}")
-        if allowed:
-            lines.append(f"# Filter: {allowed}")
+        if blocked:
+            lines.append(f"# Blocked: {blocked}")
         lines.append(f"# Probe: {probe_url}")
         lines.append("")
         for r in rows:

@@ -162,7 +162,7 @@ def init_db() -> None:
         "proxy_listen": "0.0.0.0",
         "max_active_proxies": "30",
         "safe_only_import": "false",
-        "allowed_countries": "",
+        "blocked_countries": "",
         "probe_url": "https://www.gstatic.com/generate_204",
         # Интервалы и тюнинг
         "check_interval_db": "1800",
@@ -241,9 +241,10 @@ class Settings:
         return cls.get("safe_only_import", "false") == "true"
 
     @classmethod
-    def allowed_countries(cls) -> str:
-        """Список разрешённых стран (строка с кодами через запятую)."""
-        return cls.get("allowed_countries", "").strip()
+    def blocked_countries(cls) -> str:
+        """Список заблокированных стран (строка с кодами через запятую).
+        Пустая строка — не блокировать никого (все страны разрешены)."""
+        return cls.get("blocked_countries", "").strip()
 
     @classmethod
     def probe_url(cls) -> str:

@@ -263,14 +263,14 @@ class XrayConfigurator:
         """Генерирует полный конфиг с observatory + balancer.
 
         Если max_outbounds > 0 — только N самых быстрых outbound.
-        Учитывает фильтр allowed_countries.
+        Учитывает фильтр blocked_countries.
         skip_geosite=True — временно исключить geosite-правила (для recovery).
         """
-        allowed = Settings.allowed_countries()
-        codes = [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
+        blocked = Settings.blocked_countries()
+        codes = [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
         if codes:
             placeholders = ",".join("?" * len(codes))
-            country_sql = f"AND country IN ({placeholders})"
+            country_sql = f"AND country NOT IN ({placeholders})"
         else:
             codes = []
             country_sql = ""
@@ -507,15 +507,15 @@ class XrayConfigurator:
     def _compute_config_hash(self):
         """Хэш входных данных для конфига — если не изменился, apply_all можно пропустить."""
         max_active = Settings.max_active_proxies()
-        allowed = Settings.allowed_countries()
-        codes = [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
+        blocked = Settings.blocked_countries()
+        codes = [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
         min_kbps = Settings.min_speed_kbps()
         speed_sql = f"AND speed_kbps >= {min_kbps}" if min_kbps > 0 else ""
         sort_col = "speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC"
         if codes:
             placeholders = ",".join("?" * len(codes))
             rows = db_q(
-                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 AND country IN ({placeholders}) {speed_sql} ORDER BY {sort_col} LIMIT ?",
+                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 AND country NOT IN ({placeholders}) {speed_sql} ORDER BY {sort_col} LIMIT ?",
                 codes + [max_active],
             )
         else:
@@ -528,7 +528,7 @@ class XrayConfigurator:
             [
                 links,
                 str(max_active),
-                allowed,
+                blocked,
                 Settings.proxy_listen(),
                 Settings.get("geo_enabled", "true"),
                 Settings.get("geosite_rules", "[]"),

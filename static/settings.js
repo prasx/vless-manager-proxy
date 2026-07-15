@@ -177,10 +177,10 @@ async function loadCountries() {
   const data = await api('GET', '/api/countries');
   if (data.error) return;
   countryData = data.countries || [];
-  renderCountryFilter(data.allowed);
+  renderCountryFilter(data.blocked);
 }
 
-function renderCountryFilter(allowedRaw) {
+function renderCountryFilter(blockedRaw) {
   const tb = $('countryFilterBody');
   if (!tb) return;
   tb.innerHTML = '';
@@ -190,16 +190,16 @@ function renderCountryFilter(allowedRaw) {
     if (cnt) cnt.textContent = '';
     return;
   }
-  const allowedSet = new Set(allowedRaw.split(',').map(s => s.trim()).filter(Boolean));
+  const blockedSet = new Set(blockedRaw ? blockedRaw.split(',').map(s => s.trim()).filter(Boolean) : []);
   let selected = 0;
   for (const c of countryData) {
-    const checked = !allowedRaw ? true : allowedSet.has(c.code);
-    if (checked) selected++;
+    const blocked = blockedSet.has(c.code);
+    if (blocked) selected++;
     const tr = document.createElement('tr');
     tr.style.cssText = 'border-bottom:1px solid var(--border)';
     tr.innerHTML = `
       <td style="padding:4px 12px;width:40px">
-        <input type="checkbox" class="chk-custom" data-code="${c.code}" ${checked ? 'checked' : ''}>
+        <input type="checkbox" class="chk-custom" data-code="${c.code}" ${blocked ? 'checked' : ''}>
       </td>
       <td style="padding:4px 6px;font-weight:bold;color:var(--text-primary)">${c.code}</td>
       <td style="padding:4px 6px;color:var(--text-muted);font-size:0.72rem">
@@ -210,16 +210,16 @@ function renderCountryFilter(allowedRaw) {
     tb.appendChild(tr);
   }
   const cnt = $('countryFilterCount');
-  if (cnt) cnt.textContent = `${selected} / ${countryData.length} selected`;
+  if (cnt) cnt.textContent = `${selected} / ${countryData.length} blocked`;
 }
 
-function selectAllCountries(checked) {
+function selectAllCountries(blocked) {
   const boxes = document.querySelectorAll('#countryFilterBody input[type="checkbox"]');
-  boxes.forEach(cb => { cb.checked = checked; });
+  boxes.forEach(cb => { cb.checked = blocked; });
   markDirty();
 }
 
-function collectAllowedCountries() {
+function collectBlockedCountries() {
   const checked = [];
   document.querySelectorAll('#countryFilterBody input[type="checkbox"]:checked').forEach(cb => {
     checked.push(cb.dataset.code);
@@ -413,7 +413,7 @@ async function saveSettings() {
     })(),
     // Geo
     geo_enabled: $('geoEnabled').checked ? 'true' : 'false',
-    allowed_countries: collectAllowedCountries(),
+    blocked_countries: collectBlockedCountries(),
     geosite_rules: JSON.stringify(geositeRules),
     // Performance
     max_workers: $('maxWorkers').value.trim() || '10',

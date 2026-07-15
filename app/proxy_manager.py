@@ -533,12 +533,12 @@ class ProxyManager:
                     continue
 
                 max_active = Settings.max_active_proxies()
-                allowed = Settings.allowed_countries()
-                codes = [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
+                blocked = Settings.blocked_countries()
+                codes = [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
                 if codes:
                     placeholders = ",".join("?" * len(codes))
                     working_count = db_q(
-                        f"SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0 AND country IN ({placeholders})",
+                        f"SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0 AND country NOT IN ({placeholders})",
                         codes,
                     )[0]["c"]
                 else:

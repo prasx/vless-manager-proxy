@@ -84,12 +84,26 @@ def proxy_filter_clause(f):
     return ""
 
 
+def _blocked_countries_clause() -> tuple[str, list]:
+    """SQL-условие для исключения заблокированных стран."""
+    blocked = Settings.blocked_countries()
+    codes = [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
+    if codes:
+        placeholders = ",".join("?" * len(codes))
+        return f"country NOT IN ({placeholders})", codes
+    return "", []
+
+
 def _build_where(f, src, search) -> tuple[str, list]:
     clauses = []
     params = []
     fc = proxy_filter_clause(f)
     if fc:
         clauses.append(fc)
+    bc_clause, bc_params = _blocked_countries_clause()
+    if bc_clause:
+        clauses.append(bc_clause)
+        params.extend(bc_params)
     if src == "unknown":
         clauses.append("source_id IS NULL")
     elif src and src.isdigit():
@@ -134,6 +148,8 @@ def api_status():
     """GET /api/status — статистика по прокси (total, working, failed_recent, ru, world)."""
     min_kbps = Settings.min_speed_kbps()
     top_threshold = min_kbps if min_kbps > 0 else 5000
+    bc_clause, bc_params = _blocked_countries_clause()
+    bc_where = f"WHERE {bc_clause}" if bc_clause else ""
     row = db_q(
         f"""SELECT
             COUNT(*) as total,
@@ -143,7 +159,8 @@ def api_status():
             SUM(CASE WHEN status='working' AND country='RU' THEN 1 ELSE 0 END) as ru,
             SUM(CASE WHEN status='working' AND country != '' AND country != 'RU' THEN 1 ELSE 0 END) as world,
             SUM(CASE WHEN source_id IS NULL THEN 1 ELSE 0 END) as unknown_count
-        FROM proxies"""
+        FROM proxies {bc_where}""",
+        bc_params if bc_clause else [],
     )[0]
     sources = db_q(
         "SELECT s.id, s.name, COUNT(p.id) cnt FROM sources s LEFT JOIN proxies p ON p.source_id = s.id GROUP BY s.id HAVING cnt > 0 ORDER BY s.name"
@@ -324,7 +341,7 @@ def api_sources_import_all():
 # ─── Настройки ───
 
 _REBUILD_KEYS = {
-    "allowed_countries", "geo_enabled", "max_active_proxies", "probe_url",
+    "blocked_countries", "geo_enabled", "max_active_proxies", "probe_url",
     "observatory_probe_interval", "balancer_strategy", "handshake_timeout", "conn_idle",
     "min_speed_mbps", "sniffing_enabled", "sniffing_dest_override", "sniffing_route_only",
     "geosite_rules",
@@ -465,9 +482,9 @@ def api_xray_status():
     running = api_ok or (d["systemd_active"] and d["ports"].get("1080"))
     active = xray_configurator.list_active_outbounds() if api_ok else []
     nodes = [t for t in active if t.startswith("node")]
-    allowed = Settings.allowed_countries()
-    codes = [c.strip() for c in allowed.split(",") if c.strip()] if allowed else []
-    country_sql = f"AND country IN ({','.join(['?']*len(codes))})" if codes else ""
+    blocked = Settings.blocked_countries()
+    codes = [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
+    country_sql = f"AND country NOT IN ({','.join(['?']*len(codes))})" if codes else ""
     min_kbps = Settings.min_speed_kbps()
     speed_sql = f"AND speed_kbps >= {min_kbps}" if min_kbps > 0 else ""
     candidate = db_q(
@@ -600,9 +617,9 @@ def api_subscribe():
 
 @api_bp.route("/countries")
 def api_countries():
-    """GET /api/countries — список стран с количеством прокси и статусом enabled."""
-    allowed_raw = Settings.get("allowed_countries", "").strip()
-    allowed_set = set(c.strip() for c in allowed_raw.split(",") if c.strip())
+    """GET /api/countries — список стран с количеством прокси и статусом blocked."""
+    blocked_raw = Settings.get("blocked_countries", "").strip()
+    blocked_set = set(c.strip() for c in blocked_raw.split(",") if c.strip())
     rows = db_q(
         """SELECT p.country, COUNT(*) cnt,
            SUM(CASE WHEN p.status='working' THEN 1 ELSE 0 END) as working
@@ -617,10 +634,10 @@ def api_countries():
                 "code": r["country"],
                 "total": r["cnt"],
                 "working": r["working"],
-                "enabled": r["country"] in allowed_set if allowed_raw else True,
+                "blocked": r["country"] in blocked_set if blocked_raw else False,
             }
         )
-    return jsonify(countries=countries, allowed=allowed_raw)
+    return jsonify(countries=countries, blocked=blocked_raw)
 
 
 # ─── Прогресс тестов ───
