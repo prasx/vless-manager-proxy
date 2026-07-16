@@ -1,4 +1,4 @@
-"""Импорт прокси из URL-подписки."""
+"""Импорт прокси из URL-подписки и TXT-контента."""
 
 import base64
 import sqlite3
@@ -38,35 +38,11 @@ def _write_etag(url, val):
         pass
 
 
-def import_from_url(url, source_id=None):
-    """Загружает подписку по URL, разбирает vless:// строки и сохраняет в БД.
-
-    Учитывает флаг safe_only_import (пропускает security=none).
-    Принимает source_id для привязки импортированных прокси к источнику.
-    Удаляет старые прокси источника, которых больше нет в подписке.
-    Использует ETag/If-Modified-Since для пропуска неизменённых источников.
+def _parse_and_import_content(content, source_id=None, src_label=""):
+    """Парсит контент подписки (vless:// строки, возможно в base64),
+    сохраняет прокси в БД, удаляет устаревшие для указанного source_id.
     Возвращает количество добавленных прокси.
     """
-    req = urllib.request.Request(url)
-    etag = _read_etag(url)
-    if etag:
-        req.add_header("If-None-Match", etag)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            content = r.read().decode("utf-8", errors="replace")
-            # Сохраняем ETag
-            new_etag = r.headers.get("ETag") or ""
-            if new_etag:
-                _write_etag(url, new_etag)
-    except urllib.error.HTTPError as e:
-        if e.code == 304:
-            add_log("DEBUG", f"Source unchanged (304): {url[:60]}")
-            return 0
-        add_log("ERROR", f"Import failed HTTP {e.code} for {url[:80]}")
-        return 0
-    except Exception as e:
-        add_log("ERROR", f"Import failed for {url[:80]}: {e}")
-        return 0
     lines = [line for line in content.splitlines() if line.startswith("vless://")]
     if not lines:
         try:
@@ -132,5 +108,52 @@ def import_from_url(url, source_id=None):
     msg = f"Imported {added} proxies"
     if skipped:
         msg += f" (skipped {skipped} unencrypted)"
-    add_log("INFO", f"{msg} from {url[:60]}")
+    add_log("INFO", f"{msg} from {src_label}")
     return added
+
+
+def import_from_url(url, source_id=None):
+    """Загружает подписку по URL, разбирает vless:// строки и сохраняет в БД.
+
+    Учитывает флаг safe_only_import (пропускает security=none).
+    Принимает source_id для привязки импортированных прокси к источнику.
+    Удаляет старые прокси источника, которых больше нет в подписке.
+    Использует ETag/If-Modified-Since для пропуска неизменённых источников.
+    Возвращает количество добавленных прокси.
+    """
+    req = urllib.request.Request(url)
+    etag = _read_etag(url)
+    if etag:
+        req.add_header("If-None-Match", etag)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            content = r.read().decode("utf-8", errors="replace")
+            new_etag = r.headers.get("ETag") or ""
+            if new_etag:
+                _write_etag(url, new_etag)
+    except urllib.error.HTTPError as e:
+        if e.code == 304:
+            add_log("DEBUG", f"Source unchanged (304): {url[:60]}")
+            return 0
+        add_log("ERROR", f"Import failed HTTP {e.code} for {url[:80]}")
+        return 0
+    except Exception as e:
+        add_log("ERROR", f"Import failed for {url[:80]}: {e}")
+        return 0
+    return _parse_and_import_content(content, source_id, url[:60])
+
+
+def import_from_txt(source_id):
+    """Импортирует прокси из TXT-содержимого источника.
+
+    Читает поле content из таблицы sources, парсит vless:// строки,
+    вставляет/обновляет прокси с source_id.
+    Возвращает количество добавленных прокси.
+    """
+    rows = db_q("SELECT name, content FROM sources WHERE id=?", (source_id,))
+    if not rows or not rows[0]["content"]:
+        add_log("WARN", f"TXT source #{source_id} has no content")
+        return 0
+    name = rows[0]["name"]
+    content = rows[0]["content"]
+    return _parse_and_import_content(content, source_id, f"txt://{name}")

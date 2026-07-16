@@ -21,13 +21,34 @@
 </div>
 
 <div class="section-label">Proxy sources</div>
-<div class="add-form">
+
+<div class="source-tabs">
+  <button class="tab tab-active" data-tab="url" onclick="switchTab('url')">URL</button>
+  <button class="tab" data-tab="txt" onclick="switchTab('txt')">TXT</button>
+</div>
+
+<div id="urlSourceForm" class="add-form">
   <input class="inp-name" id="inpName" placeholder="name" spellcheck="false">
   <input class="inp-url" id="inpUrl" placeholder="https://..." spellcheck="false">
-  <button class="btn btn-primary" onclick="addSource()">+ Add Source</button>
+  <button class="btn btn-primary" onclick="addSource()">+ Add URL Source</button>
+</div>
+
+<div id="txtSourceForm" class="add-form" style="display:none">
+  <input class="inp-name" id="inpNameTxt" placeholder="name" spellcheck="false">
+  <textarea class="inp-txt" id="inpTxtContent" placeholder="vless://... (one per line)" rows="6" spellcheck="false"></textarea>
+  <button class="btn btn-primary" onclick="addTxtSource()">+ Add TXT Source</button>
 </div>
 
 <div class="card-list" id="list"></div>
+
+<dialog id="dlgEditTxt" class="modal">
+  <div class="modal-header">Edit TXT source</div>
+  <textarea id="dlgTxtContent" rows="12" spellcheck="false" style="width:100%;box-sizing:border-box"></textarea>
+  <div class="modal-actions">
+    <button class="btn" onclick="document.getElementById('dlgEditTxt').close()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveTxtContent()">Save</button>
+  </div>
+</dialog>
 {% endblock %}
 {% block extra_js %}
 <script src="{{ url_for('static', filename='sources.js') }}"></script>

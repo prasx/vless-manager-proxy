@@ -59,6 +59,8 @@ _SCHEMA = {
         ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
         ("name", "TEXT"),
         ("url", "TEXT UNIQUE"),
+        ("type", "TEXT DEFAULT 'url'"),
+        ("content", "TEXT"),
         ("last_import", "TIMESTAMP"),
         ("created_at", "TIMESTAMP"),
     ],

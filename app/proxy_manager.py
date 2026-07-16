@@ -18,7 +18,7 @@ from pathlib import Path
 from config import SOCKS_PORT, HTTP_PORT
 from .db import db_q, Settings
 from .utils import add_log, now_utc, moscow_str, set_correlation_id, count_active_connections
-from .importer import import_from_url
+from .importer import import_from_url, import_from_txt
 from .vless import parse_vless, stream_settings
 
 
@@ -561,9 +561,12 @@ class ProxyManager:
         """Импорт из источников → проверка прокси → сборка конфига."""
         self._vless_busy = True
         try:
-            src_list = db_q("SELECT id, url FROM sources")
+            src_list = db_q("SELECT id, url, type FROM sources")
             for src in src_list:
-                import_from_url(src["url"], source_id=src["id"])
+                if src["type"] == "txt":
+                    import_from_txt(src["id"])
+                else:
+                    import_from_url(src["url"], source_id=src["id"])
             from .utils import enrich_all_unknown_countries
 
             enrich_all_unknown_countries()

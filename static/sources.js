@@ -1,4 +1,5 @@
 const $ = s => document.querySelector(s);
+let _editTxtId = null;
 
 async function load() {
   const [sources, settings] = await Promise.all([
@@ -16,13 +17,18 @@ async function load() {
       const imported = s.last_import
         ? new Date(s.last_import).toLocaleString()
         : 'never';
+      const isTxt = (s.type || 'url') === 'txt';
       card.innerHTML = `
         <div class="c-body">
-          <div class="c-name">${s.name}</div>
-          <div class="c-url" title="${s.url}">${s.url}</div>
+          <div class="c-name">
+            <span class="c-type ${isTxt ? 'type-txt' : 'type-url'}">${isTxt ? 'TXT' : 'URL'}</span>
+            ${s.name}
+          </div>
+          <div class="c-url" title="${isTxt ? 'TXT content source' : s.url}">${isTxt ? 'TXT source' : s.url}</div>
           <div class="c-meta">last import: ${imported}</div>
         </div>
         <div class="c-actions">
+          ${isTxt ? `<button class="btn btn-sm" onclick="editTxtContent(${s.id})">edit</button>` : ''}
           <button class="btn btn-sm" onclick="importOne(${s.id})">import</button>
           <button class="btn btn-sm btn-danger" onclick="delSource(${s.id})">del</button>
         </div>
@@ -34,6 +40,13 @@ async function load() {
   if (chk && settings.safe_only_import === 'true') {
     chk.checked = true;
   }
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('tab-active'));
+  document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('tab-active');
+  document.getElementById('urlSourceForm').style.display = tab === 'url' ? '' : 'none';
+  document.getElementById('txtSourceForm').style.display = tab === 'txt' ? '' : 'none';
 }
 
 async function toggleSafeOnly() {
@@ -60,6 +73,37 @@ async function addSource() {
   $('#inpName').value = '';
   $('#inpUrl').value = '';
   toast('source added');
+  load();
+}
+
+async function addTxtSource() {
+  const name = $('#inpNameTxt').value.trim();
+  const content = $('#inpTxtContent').value.trim();
+  if (!name || !content) return;
+  const res = await api('POST','/api/sources/txt', {name, content});
+  if (res.error) return toast(res.error, 'error');
+  $('#inpNameTxt').value = '';
+  $('#inpTxtContent').value = '';
+  toast('TXT source added');
+  load();
+}
+
+async function editTxtContent(id) {
+  const res = await api('GET',`/api/sources/${id}/content`);
+  if (res.error) return toast(res.error, 'error');
+  _editTxtId = id;
+  $('#dlgTxtContent').value = res.content || '';
+  document.getElementById('dlgEditTxt').showModal();
+}
+
+async function saveTxtContent() {
+  if (_editTxtId === null) return;
+  const content = $('#dlgTxtContent').value.trim();
+  if (!content) return toast('content cannot be empty', 'error');
+  await api('PUT',`/api/sources/${_editTxtId}/content`, {content});
+  document.getElementById('dlgEditTxt').close();
+  _editTxtId = null;
+  toast('TXT content updated');
   load();
 }
 

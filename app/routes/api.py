@@ -14,7 +14,7 @@ from ..utils import add_log, moscow_str, now_utc, count_active_connections, list
 from config import SUBSCRIBE_FILE, SOCKS_PORT, HTTP_PORT
 from ..vless import parse_vless
 from ..proxy_manager import proxy_manager
-from ..importer import import_from_url
+from ..importer import import_from_url, import_from_txt
 from ..xray_configurator import xray_configurator
 from ..subscribe import update_subscribe_cache
 
@@ -281,7 +281,7 @@ def api_proxies_batch_test():
 @api_bp.route("/sources", methods=["GET"])
 def api_sources_list():
     """GET /api/sources — список источников."""
-    rows = db_q("SELECT * FROM sources ORDER BY created_at DESC")
+    rows = db_q("SELECT id, name, url, type, last_import, created_at FROM sources ORDER BY created_at DESC")
     return jsonify([dict(r) for r in rows])
 
 
@@ -312,13 +312,57 @@ def api_sources_delete(sid):
     return jsonify(success=True)
 
 
+@api_bp.route("/sources/txt", methods=["POST"])
+def api_sources_txt_add():
+    """POST /api/sources/txt — добавляет TXT-источник."""
+    body = request.get_json(silent=True) or {}
+    name = body.get("name", "").strip()
+    content = body.get("content", "").strip()
+    if not name or not content:
+        return jsonify(error="Name and content required"), 400
+    fake_url = f"txt://{name}"
+    try:
+        db_q(
+            "INSERT INTO sources (name, url, type, content, created_at) VALUES (?, ?, 'txt', ?, ?)",
+            (name, fake_url, content, now_utc()),
+        )
+        add_log("INFO", f"Added TXT source: {name}")
+        return jsonify(success=True)
+    except sqlite3.IntegrityError:
+        return jsonify(error="Source with this name already exists"), 409
+
+
+@api_bp.route("/sources/<int:sid>/content", methods=["GET"])
+def api_sources_content_get(sid):
+    """GET /api/sources/<id>/content — возвращает TXT-контент источника."""
+    rows = db_q("SELECT type, content, name FROM sources WHERE id=?", (sid,))
+    if not rows:
+        return jsonify(error="Not found"), 404
+    return jsonify(type=rows[0]["type"], content=rows[0]["content"] or "", name=rows[0]["name"])
+
+
+@api_bp.route("/sources/<int:sid>/content", methods=["PUT"])
+def api_sources_content_update(sid):
+    """PUT /api/sources/<id>/content — обновляет TXT-контент источника."""
+    body = request.get_json(silent=True) or {}
+    content = body.get("content", "").strip()
+    if not content:
+        return jsonify(error="Content required"), 400
+    db_q("UPDATE sources SET content=? WHERE id=? AND type='txt'", (content, sid))
+    add_log("INFO", f"Updated content for TXT source #{sid}")
+    return jsonify(success=True)
+
+
 @api_bp.route("/sources/<int:sid>/import", methods=["POST"])
 def api_sources_import_one(sid):
     """POST /api/sources/<id>/import — импортирует из одного источника."""
-    rows = db_q("SELECT url FROM sources WHERE id=?", (sid,))
+    rows = db_q("SELECT url, type FROM sources WHERE id=?", (sid,))
     if not rows:
         return jsonify(error="Not found"), 404
-    added = import_from_url(rows[0]["url"], source_id=sid)
+    if rows[0]["type"] == "txt":
+        added = import_from_txt(sid)
+    else:
+        added = import_from_url(rows[0]["url"], source_id=sid)
     db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), sid))
     threading.Thread(target=proxy_manager.test_all_vless, daemon=True).start()
     return jsonify(success=True, added=added)
@@ -327,10 +371,13 @@ def api_sources_import_one(sid):
 @api_bp.route("/sources/import-all", methods=["POST"])
 def api_sources_import_all():
     """POST /api/sources/import-all — импортирует из всех источников."""
-    rows = db_q("SELECT id, url FROM sources")
+    rows = db_q("SELECT id, url, type FROM sources")
     total = 0
     for r in rows:
-        added = import_from_url(r["url"], source_id=r["id"])
+        if r["type"] == "txt":
+            added = import_from_txt(r["id"])
+        else:
+            added = import_from_url(r["url"], source_id=r["id"])
         db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), r["id"]))
         total += added
     threading.Thread(target=proxy_manager.test_all_vless, daemon=True).start()
@@ -415,7 +462,7 @@ def api_backup_export():
     sources = [
         dict(r)
         for r in db_q(
-            "SELECT id, name, url, last_import, created_at FROM sources ORDER BY created_at"
+            "SELECT id, name, url, type, content, last_import, created_at FROM sources ORDER BY created_at"
         )
     ]
     return jsonify(
@@ -456,9 +503,11 @@ def api_backup_import():
         try:
             last_import = src.get("last_import") or None
             created_at = src.get("created_at") or now_utc()
+            typ = src.get("type", "url")
+            content = src.get("content") or None
             db_q(
-                "INSERT OR IGNORE INTO sources (name, url, last_import, created_at) VALUES (?, ?, ?, ?)",
-                (name, url, last_import, created_at),
+                "INSERT OR IGNORE INTO sources (name, url, type, content, last_import, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (name, url, typ, content, last_import, created_at),
             )
             imported["sources"] += 1
         except Exception:
