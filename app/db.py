@@ -110,6 +110,11 @@ _MIGRATIONS = [
             "UPDATE settings SET value='0.5' WHERE key='traffic_history_hours'",
         ],
     },
+    {
+        "version": 2,
+        "description": "allowed_countries → blocked_countries (смена allowlist на blocklist)",
+        "sql": [],
+    },
 ]
 
 
@@ -123,10 +128,30 @@ def _run_migrations(c: sqlite3.Cursor) -> None:
         if m["version"] > current:
             for sql in m.get("sql", []):
                 c.execute(sql)
+
+            if m["version"] == 2:
+                _migrate_allowed_to_blocked(c)
+
             c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', ?)",
                       (str(m["version"]),))
             from .utils import add_log
             add_log("INFO", f"Migration v{m['version']}: {m['description']}")
+
+
+def _migrate_allowed_to_blocked(c: sqlite3.Cursor) -> None:
+    """allowed_countries (allowlist) → blocked_countries (blocklist), v2."""
+    from .utils import add_log
+
+    row = c.execute("SELECT value FROM settings WHERE key='allowed_countries'").fetchone()
+    old_val = row["value"].strip() if row else ""
+    if old_val:
+        add_log(
+            "WARN",
+            f"Migration v2: old 'allowed_countries' had value '{old_val[:80]}...'. "
+            "Система фильтрации изменена с allowlist на blocklist. "
+            "Старое значение удалено. Настройте блокировку стран заново в Settings → Country Filter.",
+        )
+    c.execute("DELETE FROM settings WHERE key='allowed_countries'")
 
 
 def init_db() -> None:
