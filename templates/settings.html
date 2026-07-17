@@ -125,7 +125,11 @@
     </div>
     <div class="settings-col settings-col-narrow">
       <h2>Country Filter</h2>
-      <p class="settings-muted-label">Заблокированные страны (отмечай те, что нужно исключить)</p>
+      <p class="settings-muted-label">Заблокированные страны — исключаются из конфига</p>
+      <div id="countryVerifyBadge" style="font-size:0.72rem;color:var(--text-muted);margin-bottom:6px"></div>
+      <div class="country-filter-search">
+        <input type="text" id="countryFilterSearch" class="input" placeholder="Search country code..." style="width:100%;box-sizing:border-box">
+      </div>
       <div class="country-filter-list">
         <table class="country-filter-table">
           <tbody id="countryFilterBody"></tbody>
@@ -135,6 +139,7 @@
         <span id="countryFilterCount" class="country-filter-count"></span>
         <button class="btn btn-sm" onclick="selectAllCountries(true)">All</button>
         <button class="btn btn-sm" onclick="selectAllCountries(false)">Clear</button>
+        <button class="btn btn-sm btn-danger" onclick="blockCountry('RU')" style="margin-left:auto">Block RU</button>
       </div>
     </div>
   </div>

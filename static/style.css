@@ -653,6 +653,9 @@ select.input { color-scheme:dark; }
   color:var(--text-muted);
   flex:1;
 }
+.country-filter-search {
+  margin-bottom:6px;
+}
 .form-actions-wrap {
   flex-wrap:wrap;
 }

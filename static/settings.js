@@ -172,50 +172,77 @@ function removeGeositeRule(idx) {
 
 // ─── Country Filter ───
 let countryData = [];
+let countrySearchValue = '';
+let _blockedRaw = '';
 
 async function loadCountries() {
   const data = await api('GET', '/api/countries');
   if (data.error) return;
   countryData = data.countries || [];
-  renderCountryFilter(data.blocked);
+  _blockedRaw = data.blocked || '';
+  const badge = $('countryVerifyBadge');
+  if (badge && data.last_verify) {
+    badge.textContent = `ip-api verified · last check ${data.last_verify.slice(0, 10)}`;
+  } else if (badge) {
+    badge.textContent = countryData.length ? 'geo-verification pending...' : '';
+  }
+  renderCountryFilter();
 }
 
-function renderCountryFilter(blockedRaw) {
+function renderCountryFilter() {
   const tb = $('countryFilterBody');
   if (!tb) return;
   tb.innerHTML = '';
   if (!countryData.length) {
-    tb.innerHTML = '<tr><td colspan="3" class="empty">no countries detected yet — import some proxies</td></tr>';
+    tb.innerHTML = '<tr><td colspan="4" class="empty">no countries detected yet — import some proxies</td></tr>';
     const cnt = $('countryFilterCount');
     if (cnt) cnt.textContent = '';
     return;
   }
-  const blockedSet = new Set(blockedRaw ? blockedRaw.split(',').map(s => s.trim()).filter(Boolean) : []);
+  const blockedSet = new Set(_blockedRaw ? _blockedRaw.split(',').map(s => s.trim()).filter(Boolean) : []);
+  const search = countrySearchValue.trim().toUpperCase();
   let selected = 0;
+  let shown = 0;
   for (const c of countryData) {
+    if (search && !c.code.includes(search)) continue;
+    shown++;
     const blocked = blockedSet.has(c.code);
     if (blocked) selected++;
     const tr = document.createElement('tr');
     tr.style.cssText = 'border-bottom:1px solid var(--border)';
+    const allVerified = c.verified === c.total;
+    const verifiedLabel = allVerified ? 'ip-api' : (c.verified === 0 ? 'fragment' : 'mixed');
     tr.innerHTML = `
-      <td style="padding:4px 12px;width:40px">
+      <td style="padding:4px 10px;width:32px">
         <input type="checkbox" class="chk-custom" data-code="${c.code}" ${blocked ? 'checked' : ''}>
       </td>
-      <td style="padding:4px 6px;font-weight:bold;color:var(--text-primary)">${c.code}</td>
+      <td style="padding:4px 6px;font-weight:bold;color:var(--text-primary)">
+        <span style="font-size:0.65rem;color:var(--text-muted);cursor:default" title="source: ${verifiedLabel} (${c.verified}/${c.total} verified)">[${verifiedLabel}]</span>
+        ${c.code}
+      </td>
       <td style="padding:4px 6px;color:var(--text-muted);font-size:0.72rem">
-        ${c.working} working / ${c.total} total
+        ${c.working}/${c.total} working
+      </td>
+      <td style="padding:4px 6px;color:var(--text-muted);font-size:0.7rem;text-align:right;white-space:nowrap">
+        ${blocked ? '<span style="color:var(--red)">excluded</span>' : ''}
       </td>
     `;
     tr.querySelector('input[type="checkbox"]').addEventListener('change', markDirty);
     tb.appendChild(tr);
   }
   const cnt = $('countryFilterCount');
-  if (cnt) cnt.textContent = `${selected} / ${countryData.length} blocked`;
+  if (cnt) cnt.textContent = `${selected} / ${shown} blocked`;
 }
 
 function selectAllCountries(blocked) {
   const boxes = document.querySelectorAll('#countryFilterBody input[type="checkbox"]');
   boxes.forEach(cb => { cb.checked = blocked; });
+  markDirty();
+}
+
+function blockCountry(code) {
+  const boxes = document.querySelectorAll('#countryFilterBody input[type="checkbox"]');
+  boxes.forEach(cb => { cb.checked = cb.dataset.code === code || cb.checked; });
   markDirty();
 }
 
@@ -225,6 +252,16 @@ function collectBlockedCountries() {
     checked.push(cb.dataset.code);
   });
   return checked.join(',');
+}
+
+{
+  const searchInput = $('countryFilterSearch');
+  if (searchInput) {
+    searchInput.addEventListener('input', function () {
+      countrySearchValue = this.value;
+      renderCountryFilter();
+    });
+  }
 }
 
 // ─── Load ───

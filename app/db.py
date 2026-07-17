@@ -46,6 +46,7 @@ _SCHEMA = {
         ("host", "TEXT"),
         ("port", "INTEGER"),
         ("country", "TEXT"),
+        ("country_verified", "INTEGER DEFAULT 0"),
         ("status", "TEXT DEFAULT 'pending'"),
         ("latency", "INTEGER DEFAULT 0"),
         ("added_at", "TIMESTAMP"),

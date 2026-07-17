@@ -148,14 +148,18 @@ def detect_country(host):
 
 
 def enrich_country(pid, host):
-    """Обновляет страну для прокси по его ID."""
+    """Обновляет страну для прокси по его ID через ip-api, проставляет флаг верификации."""
     from .db import db_q
 
     cc = detect_country(host)
-    if cc:
-        db_q("UPDATE proxies SET country=? WHERE id=?", (cc, pid))
-        return True
-    return False
+    if not cc:
+        return False
+    current = db_q("SELECT country FROM proxies WHERE id=?", (pid,))
+    if current and current[0]["country"] == cc:
+        db_q("UPDATE proxies SET country_verified=1 WHERE id=?", (pid,))
+        return False
+    db_q("UPDATE proxies SET country=?, country_verified=1 WHERE id=?", (cc, pid))
+    return True
 
 
 _enrich_lock = threading.Lock()
@@ -454,21 +458,22 @@ def _parse_ss_peername(peername: str) -> tuple:
 
 
 def enrich_all_unknown_countries():
-    """Заполняет страну для всех прокси, у которых она отсутствует или невалидна.
+    """Верифицирует страну для ВСЕХ прокси через ip-api.com.
+    Ранее заполняла только пропущенные — теперь перепроверяет все,
+    чтобы исправить неверную страну из VLESS-фрагмента (#XX).
+    Кеш detect_country() исключает повторные запросы для одного хоста.
     Предотвращает конкурентный запуск через threading.Lock()."""
     if not _enrich_lock.acquire(blocking=False):
         return
     try:
         from .db import db_q
 
-        rows = db_q(
-            "SELECT id, host FROM proxies WHERE country IS NULL OR country = '' OR length(country) > 2"
-        )
+        rows = db_q("SELECT id, host FROM proxies")
         enriched = 0
         for r in rows:
             if enrich_country(r["id"], r["host"]):
                 enriched += 1
         if enriched:
-            add_log("INFO", f"Enriched country for {enriched} proxies")
+            add_log("INFO", f"Country corrected for {enriched}/{len(rows)} proxies via ip-api.com")
     finally:
         _enrich_lock.release()

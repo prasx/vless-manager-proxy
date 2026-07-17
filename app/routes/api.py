@@ -666,15 +666,16 @@ def api_subscribe():
 
 @api_bp.route("/countries")
 def api_countries():
-    """GET /api/countries — список стран с количеством прокси и статусом blocked."""
+    """GET /api/countries — список стран с количеством прокси, верификацией и статусом blocked."""
     blocked_raw = Settings.get("blocked_countries", "").strip()
     blocked_set = set(c.strip() for c in blocked_raw.split(",") if c.strip())
     rows = db_q(
         """SELECT p.country, COUNT(*) cnt,
-           SUM(CASE WHEN p.status='working' THEN 1 ELSE 0 END) as working
+           SUM(CASE WHEN p.status='working' THEN 1 ELSE 0 END) as working,
+           SUM(CASE WHEN p.country_verified=1 THEN 1 ELSE 0 END) as verified
         FROM proxies p
         WHERE p.country != '' AND p.country IS NOT NULL AND length(p.country)=2
-        GROUP BY p.country ORDER BY p.country"""
+        GROUP BY p.country ORDER BY cnt DESC, working DESC"""
     )
     countries = []
     for r in rows:
@@ -683,10 +684,14 @@ def api_countries():
                 "code": r["country"],
                 "total": r["cnt"],
                 "working": r["working"],
+                "verified": r["verified"],
                 "blocked": r["country"] in blocked_set if blocked_raw else False,
             }
         )
-    return jsonify(countries=countries, blocked=blocked_raw)
+    last_verify = db_q(
+        "SELECT MAX(added_at) FROM proxies WHERE country_verified=1"
+    )[0][0]
+    return jsonify(countries=countries, blocked=blocked_raw, last_verify=last_verify)
 
 
 # ─── Прогресс тестов ───

@@ -43,22 +43,26 @@ def _parse_and_import_content(content, source_id=None, src_label=""):
     сохраняет прокси в БД, удаляет устаревшие для указанного source_id.
     Возвращает количество добавленных прокси.
     """
-    lines = [line for line in content.splitlines() if line.startswith("vless://")]
+    lines = [line.strip() for line in content.splitlines() if line.strip().startswith("vless://")]
     if not lines:
         try:
             decoded = base64.b64decode(content).decode("utf-8", errors="replace")
-            lines = [line for line in decoded.splitlines() if line.startswith("vless://")]
+            lines = [line.strip() for line in decoded.splitlines() if line.strip().startswith("vless://")]
         except Exception:
             pass
+    if not lines:
+        add_log("WARN", f"No vless:// links found in content from {src_label} (content length={len(content)})")
     safe_only = Settings.safe_only_import()
     added = 0
     skipped = 0
-    valid_links = []
+    valid_links_set = set()
     for link in lines:
         parsed = parse_vless(link)
         if not parsed:
             continue
-        valid_links.append(link)
+        if link in valid_links_set:
+            continue
+        valid_links_set.add(link)
         sec = parsed.get("security", "none") or "none"
         if safe_only and sec == "none":
             skipped += 1
@@ -81,6 +85,7 @@ def _parse_and_import_content(content, source_id=None, src_label=""):
         except sqlite3.IntegrityError:
             pass
 
+    valid_links = list(valid_links_set)
     # Удаляем старые прокси источника, которых нет в свежей подписке
     if source_id is not None and valid_links:
         placeholders = ",".join("?" * len(valid_links))
@@ -112,6 +117,9 @@ def _parse_and_import_content(content, source_id=None, src_label=""):
     return added
 
 
+_IMPORT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+
+
 def import_from_url(url, source_id=None):
     """Загружает подписку по URL, разбирает vless:// строки и сохраняет в БД.
 
@@ -121,13 +129,14 @@ def import_from_url(url, source_id=None):
     Использует ETag/If-Modified-Since для пропуска неизменённых источников.
     Возвращает количество добавленных прокси.
     """
-    req = urllib.request.Request(url)
+    url = url.strip().strip('"').strip("'")
+    req = urllib.request.Request(url, headers={"User-Agent": _IMPORT_UA})
     etag = _read_etag(url)
     if etag:
         req.add_header("If-None-Match", etag)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
-            content = r.read().decode("utf-8", errors="replace")
+            raw = r.read()
             new_etag = r.headers.get("ETag") or ""
             if new_etag:
                 _write_etag(url, new_etag)
@@ -140,6 +149,10 @@ def import_from_url(url, source_id=None):
     except Exception as e:
         add_log("ERROR", f"Import failed for {url[:80]}: {e}")
         return 0
+
+    content = raw.decode("utf-8", errors="replace")
+    # Если ответ выглядит как чистый base64 (нет vless:// и нет переводов строк) — не декодировать повторно
+    # _parse_and_import_content сам попробует base64 если vless:// не найдено
     return _parse_and_import_content(content, source_id, url[:60])
 
 

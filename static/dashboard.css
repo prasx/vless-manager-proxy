@@ -31,6 +31,9 @@
   vertical-align:middle;
 }
 @keyframes stat-spin { to { transform:rotate(360deg); } }
+@keyframes skeleton-pulse { 0%,100% { opacity:.35 } 50% { opacity:.7 } }
+.skeleton { display:inline-block; background:var(--text-muted); border-radius:3px; animation:skeleton-pulse 1.4s ease-in-out infinite; }
+.skeleton-num { width:42px; height:1.2rem; vertical-align:middle; }
 @media(min-width:480px) {
   .stats { grid-template-columns:repeat(4,1fr); margin-bottom:10px; }
   .stat-card { padding:20px 18px; }
