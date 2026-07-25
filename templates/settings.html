@@ -12,6 +12,7 @@
   <a href="#sec-speed">Speed Test</a>
   <a href="#sec-perf">Performance</a>
   <a href="#sec-geo">GeoSite</a>
+  <a href="#sec-network">Network</a>
   <a href="#sec-system">Logging &amp; Backup</a>
 </nav>
 
@@ -385,7 +386,24 @@
   </div>
 </div>
 
-<!-- ─── 9. Logging + Backup ─── -->
+<!-- ─── 9. Network ─── -->
+<div class="settings-section" id="sec-network">
+  <h2>Network</h2>
+  <p class="settings-desc">
+    Настройки сети для импорта подписок. Если сервер находится в России и не может подключиться к источникам (raw.githack.com и др.), задайте прокси для обхода блокировок.
+  </p>
+  <div class="tuning-grid">
+    <div class="tuning-group">
+      <div class="tuning-item tuning-item-wrap">
+        <span class="tuning-label">Import proxy</span>
+        <input type="text" id="importProxy" class="input" placeholder="socks5://127.0.0.1:1080 или http://proxy:8080" style="flex:1;min-width:250px">
+        <span class="tuning-comment">socks5:// или http:// — прокси для загрузки подписок. Пусто = напрямую</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── 10. Logging + Backup ─── -->
 <div class="settings-section" id="sec-system">
   <div class="settings-cols">
     <div class="settings-col">

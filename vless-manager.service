@@ -1,0 +1,19 @@
+[Unit]
+Description=VLESS Manager Proxy
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vless-manager-proxy
+ExecStart=/usr/bin/python3 app.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Graceful shutdown: SIGTERM → sys.exit(0) в коде
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

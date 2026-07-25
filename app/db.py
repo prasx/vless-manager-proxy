@@ -221,6 +221,7 @@ def init_db() -> None:
         "traffic_collect_interval": "2",
         "traffic_history_hours": "0.5",
         "db_check_auto_cleanup": "false",
+        "import_proxy": "",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
@@ -354,6 +355,16 @@ class Settings:
     def traffic_history_hours(cls) -> float:
         """Сколько часов хранить историю трафика."""
         return max(0.5, float(cls.get("traffic_history_hours", "0.5")))
+
+    @classmethod
+    def import_proxy(cls) -> str:
+        """Прокси для импорта подписок (socks5://host:port или http://host:port).
+        Пустая строка — напрямую. Приоритет: БД > env IMPORT_PROXY."""
+        db_val = cls.get("import_proxy", "").strip()
+        if db_val:
+            return db_val
+        import os
+        return (os.environ.get("IMPORT_PROXY") or "").strip()
 
 def default_xray_config_path() -> Path:
     """Определяет путь к конфигу Xray по умолчанию."""

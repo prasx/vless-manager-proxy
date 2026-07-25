@@ -296,6 +296,7 @@ async function loadSettings() {
   $('minSpeedMbps').value = s.min_speed_mbps || '0';
   $('speedTestAdaptiveSec').value = s.speed_test_adaptive_sec || '2';
   $('safeOnlyImport').checked = s.safe_only_import === 'true';
+  $('importProxy').value = s.import_proxy || '';
   $('sniffingEnabled').checked = s.sniffing_enabled !== 'false';
   $('sniffingRouteOnly').checked = s.sniffing_route_only !== 'false';
   const destOverride = (s.sniffing_dest_override || 'http,tls').split(',').map(x => x.trim());
@@ -435,6 +436,7 @@ async function saveSettings() {
     observatory_probe_interval: $('observatoryProbeInterval').value.trim() || '15s',
     balancer_strategy: $('balancerStrategy').value,
     safe_only_import: $('safeOnlyImport').checked ? 'true' : 'false',
+    import_proxy: $('importProxy').value.trim(),
     handshake_timeout: $('handshakeTimeout').value.trim() || '8',
     conn_idle: $('connIdle').value.trim() || '300',
     // Sniffing

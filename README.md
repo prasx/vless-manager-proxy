@@ -15,12 +15,21 @@
 
 - **Два фоновых таймера** — DB-only Check (только тест из БД) и Import+Check (импорт + enrich стран + тест). Import+Check имеет приоритет, не запускаются одновременно.
 - **Реальный VLESS-тест** — Каждый прокси проверяется через временный Xray с HTTP-пробой (`generate_204`).
-- **Speed test** — После VLESS-теста топ-N рабочих прокси замеряют пропускную способность. Результат — primary сортировка в конфиге.
-- **Параллельное тестирование** — До 5 прокси одновременно.
+- **Speed test** — После VLESS-теста топ-N рабочих прокси замеряют пропускную способность. Результат — primary сортировка в конфиге. Адаптивный ранний выход при достижении порога.
+- **Параллельное тестирование** — До 15 прокси одновременно (настраивается).
+- **Failover checker** — Фоновая проверка каждые 30 сек: если часть нод пропала из Xray, автоматически пересобирает конфиг.
+- **Auto-delete failed** — Автоудаление нерабочих прокси после проверки (опционально).
 - **Автоопределение страны** — Из фрагмента ссылки (`#RU`) или через ip-api.com.
 - **GeoSite-роутинг** — Настраиваемые правила (`geosite:ru-blocked`, `geoip:telegram`, ...) с направлениями direct/proxy.
-- **Фильтр по странам** — Выбор разрешённых стран; конфиг и подписка собираются только из них.
+- **Sniffing** — Настройка определения протоколов (HTTP, TLS, QUIC, FTP) с режимом route-only.
+- **Фильтр по странам** — Выбор заблокированных стран; конфиг и подписка собираются только из разрешённых.
+- **Import proxy** — Прокси для загрузки подписок (SOCKS5/HTTP) для обхода DPI/блокировок. Автоматический fallback на curl при ошибке urllib.
+- **ETag caching** — Пропуск неизменённых источников (HTTP 304) для ускорения повторных импортов.
+- **Stale cleanup** — При повторном импорте из источника удаляются прокси, которых больше нет в свежей подписке.
+- **TXT-источники** — Импорт vless:// ссылок напрямую из текста (без URL).
 - **Subscription URL** — `/api/subscribe.txt` для внешних клиентов (v2rayNG, Streisand, Hiddify).
+- **Тест с отменой** — Фоновый тест можно отменить через UI.
+- **SSE streaming** — Real-time прогресс тестов через Server-Sent Events.
 - **Массовые операции** — Чекбоксы, выбор всех, удалить/протестировать выбранные.
 - **Backup** — Экспорт/импорт настроек и источников в JSON.
 - **Traffic stats** — Активные outbound и узлы с трафиком.
@@ -28,33 +37,97 @@
 - **Connections monitor** — Модалка со списком активных TCP-соединений через прокси (кто, куда, сколько байт, закрытие по одному или всех).
 - **Анализатор соединений** — Per-IP группировка трафика, conntrack для per-connection байтов.
 - **Прогресс тестов** — Прогресс-бар в реальном времени.
+- **Performance recommendations** — API с рекомендациями по тюнингу (воркеры, таймауты, время теста).
 
 ## Конфигурация
 
-Базовые параметры в `config.py`. Интервалы и тюнинг — через UI (Settings → Check Intervals & Tuning):
+Базовые параметры в `config.py`:
 
-| Параметр | По умолчанию | Описание |
-|----------|-------------|----------|
+| Параметр | Значение | Описание |
+|----------|---------|----------|
 | `SOCKS_PORT` | 1080 | SOCKS5 inbound |
 | `HTTP_PORT` | 1081 | HTTP inbound |
 | `API_PORT` | 10085 | gRPC API Xray |
+| `API_LISTEN` | 127.0.0.1 | gRPC API listen address |
 | `DATABASE` | `proxies.db` | SQLite |
 | `SUBSCRIBE_FILE` | `subscribe.txt` | Кеш подписки |
+| `PROBE_INTERVAL` | 10s | Интервал Observatory |
 
-Параметры UI (Settings → Check Intervals & Tuning):
+Настройки через UI (Settings):
 
-| UI-поле | По умолчанию | Описание |
-|---------|-------------|----------|
-| DB-only Check | 0.5 ч | Интервал VLESS-теста прокси из БД |
-| Import+Check | 3 ч | Интервал импорта + enrich стран + тест |
-| Per-proxy timeout | 5 сек | Таймаут VLESS-теста одного прокси |
-| Speed test enabled | true | Замер скорости после VLESS |
-| Speed test Top-N | 30 | Сколько прокси тестировать на скорость |
-| Speed test URL | `http://speedtest.selectel.ru/10MB` | Файл для скачивания (HTTP) |
-| Balancer | random | Стратегия балансировки (random/leastLoad/leastPing) |
-| Observatory probe | 15s | Как часто Xray пингует узлы |
-| Handshake | 8 сек | Таймаут рукопожатия |
-| Idle timeout | 300 сек | Таймаут бездействия |
+### Xray
+
+| Параметр | По умолчанию | Описание |
+|----------|-------------|----------|
+| xray_bin | `/usr/local/bin/xray` | Путь к бинарнику Xray |
+| xray_config_path | auto-detected | Путь к конфигу Xray |
+| proxy_listen | `0.0.0.0` | Адрес для SOCKS/HTTP inbounds |
+
+### Sniffing
+
+| Параметр | По умолчанию | Описание |
+|----------|-------------|----------|
+| sniffing_enabled | true | Включить sniffing |
+| sniffing_dest_override | http,tls | Какие протоколы sniffить |
+| sniffing_route_only | true | Не менять destination, только маршрутизация |
+
+### Config & Filter
+
+| Параметр | По умолчанию | Описание |
+|----------|-------------|----------|
+| max_active_proxies | 30 | Макс. активных прокси в конфиге |
+| probe_url | `https://www.gstatic.com/generate_204` | URL для проверки прокси |
+| safe_only_import | false | Только TLS/Reality прокси |
+| min_speed_mbps | 0 | Мин. скорость (Mbps, 0 = фильтр откл.) |
+
+### Proxy Check
+
+| Параметр | По умолчанию | Описание |
+|----------|-------------|----------|
+| check_interval_db | 1800 сек (0.5 ч) | Интервал DB-only проверки |
+| check_interval_import | 10800 сек (3 ч) | Интервал Import+Check |
+| vless_per_proxy_timeout | 3 сек | Таймаут VLESS-теста одного прокси |
+| apply_after_test | true | Пересобрать конфиг после теста |
+| db_check_auto_cleanup | false | Удалять failed-прокси после проверки |
+
+### Speed Test
+
+| Параметр | По умолчанию | Описание |
+|----------|-------------|----------|
+| speed_test_enabled | true | Замер скорости после VLESS |
+| speed_test_max | 15 | Сколько прокси тестировать |
+| speed_test_url | `http://speedtest.selectel.ru/10MB` | Файл для скачивания |
+| speed_test_adaptive_sec | 2 | Через сколько сек проверять порог (early exit) |
+
+### Balancer
+
+| Параметр | По умолчанию | Описание |
+|----------|-------------|----------|
+| balancer_strategy | random | random / leastLoad / leastPing |
+| observatory_probe_interval | 10s | Как часто Xray пингует узлы |
+| handshake_timeout | 5 сек | Таймаут рукопожатия |
+| conn_idle | 300 сек | Таймаут бездействия |
+
+### Performance
+
+| Параметр | По умолчанию | Описание |
+|----------|-------------|----------|
+| max_workers | 15 | Параллельных воркеров (1-30) |
+| probe_timeout | 3 сек | Таймаут проверки прокси |
+| xray_startup_retries | 15 | Попыток дождаться старта Xray |
+
+### Network
+
+| Параметр | По умолчанию | Описание |
+|----------|-------------|----------|
+| import_proxy | (пусто) | Прокси для импорта подписок (socks5:// или http://) |
+
+### Logging
+
+| Параметр | По умолчанию | Описание |
+|----------|-------------|----------|
+| log_trim_every | 500 | Чистить логи каждые N записей |
+| log_keep | 2000 | Оставлять последние N записей |
 
 ## Быстрая установка
 
@@ -65,7 +138,7 @@ sudo apt update
 sudo apt install -y unzip wget git python3 python3-pip python3-venv nftables conntrack
 ```
 
-> **`nftables`** — требуется для счётчиков трафика (live speed graph, real-time bandwidth).  
+> **`nftables`** — требуется для счётчиков трафика (live speed graph, real-time bandwidth).
 > **`conntrack`** (conntrack-tools) — требуется для per-connection байтов (колонка ↓/↑ в модалке Connections).
 
 ### 2. Установка Xray
@@ -151,6 +224,8 @@ WorkingDirectory=/opt/vless-manager
 ExecStart=/opt/vless-manager/venv/bin/python app.py
 Restart=on-failure
 RestartSec=5
+# Если нужен прокси для импорта подписок:
+# Environment=IMPORT_PROXY=socks5://127.0.0.1:1080
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -180,16 +255,17 @@ journalctl -u vless-manager -f
 vless-manager/
 ├── app.py                   # Entry point
 ├── config.py                # Централизованная конфигурация
-├── proxies.db               # SQLite (создаётся automatic)
+├── proxies.db               # SQLite (создаётся автоматически)
 ├── requirements.txt
+├── vless-manager.service    # systemd unit (эталонный)
 ├── app/
 │   ├── __init__.py          # Фабрика Flask
-│   ├── db.py                # SQLite + Settings класс
+│   ├── db.py                # SQLite + Settings класс + миграции
 │   ├── vless.py             # Парсинг VLESS
-│   ├── utils.py             # Время, логи, geo
-│   ├── proxy_manager.py     # Тестирование, фоновый чекер
-│   ├── xray_configurator.py # Генерация конфига + Xray API
-│   ├── importer.py          # Импорт подписок
+│   ├── utils.py             # Время, логи, geo enrichment
+│   ├── proxy_manager.py     # Тестирование, фоновый чекер, failover, трафик
+│   ├── xray_configurator.py # Генерация конфига + Xray API + диагностика
+│   ├── importer.py          # Импорт подписок (urllib + curl fallback + прокси)
 │   ├── subscribe.py         # Генерация subscribe.txt
 │   └── routes/
 │       ├── pages.py         # HTML-роуты
@@ -206,10 +282,13 @@ vless-manager/
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/proxies?filter=&source=&limit=&offset=` | Список прокси с пагинацией |
-| GET | `/api/status` | Статистика (total, working, failed, sources) |
+| GET | `/api/proxies?filter=&source=&search=&limit=&offset=` | Список прокси с пагинацией и фильтрами |
+| GET | `/api/status` | Статистика (total, working, failed, top_speed, sources) |
+| GET | `/api/countries` | Список стран с количеством, верификацией и blocked-статусом |
 | GET | `/api/test-progress` | Статус фонового теста |
-| POST | `/api/add` | Добавить `{"link": "vless://..."}` + тест |
+| GET | `/api/test-progress/stream` | SSE-поток обновлений test-progress |
+| POST | `/api/test-cancel` | Отменить текущий фоновый тест |
+| POST | `/api/add` | Добавить `{"link": "vless://..."}` + тест + определение страны |
 | POST | `/api/test/<id>` | VLESS-тест одного прокси |
 | POST | `/api/test-all` | VLESS-тест всех прокси |
 | DELETE | `/api/delete/<id>` | Удалить прокси |
@@ -217,30 +296,32 @@ vless-manager/
 | POST | `/api/proxies/batch-delete` | Удалить выбранные `{"ids": [1,2,3]}` |
 | POST | `/api/proxies/batch-test` | Тест выбранных |
 | GET | `/api/sources` | Список источников |
-| POST | `/api/sources` | Добавить `{"name":"...","url":"..."}` |
+| POST | `/api/sources` | Добавить URL-источник `{"name":"...","url":"..."}` |
+| POST | `/api/sources/txt` | Добавить TXT-источник `{"name":"...","content":"vless://..."}` |
 | DELETE | `/api/sources/<id>` | Удалить источник |
-| POST | `/api/sources/<id>/import` | Импорт из источника + тест |
-| POST | `/api/sources/import-all` | Импорт из всех + тест |
+| GET | `/api/sources/<id>/content` | Получить TXT-контент источника |
+| PUT | `/api/sources/<id>/content` | Обновить TXT-контент `{"content":"..."}` |
+| POST | `/api/sources/<id>/import` | Импорт из источника + тест + страны |
+| POST | `/api/sources/import-all` | Импорт из всех + тест + страны |
 | GET | `/api/settings` | Все настройки |
 | POST | `/api/settings` | Сохранить настройки (с валидацией) |
 | GET | `/api/backup` | Экспорт настроек + источников |
 | POST | `/api/backup/import` | Импорт настроек + источников |
 | GET | `/api/geosite-rules` | Список geosite-правил |
 | POST | `/api/geosite-rules` | Сохранить geosite-правила |
-| GET | `/api/countries` | Список стран с enabled |
-| GET | `/api/xray/status` | Статус Xray |
-| GET | `/api/xray/outbounds` | Outbound + трафик |
+| GET | `/api/xray/status` | Статус Xray (running, API, systemd, outbounds) |
+| GET | `/api/xray/outbounds` | Outbound + трафик по узлам |
 | POST | `/api/xray/start` | `systemctl start xray` |
 | POST | `/api/xray/stop` | `systemctl stop xray` |
 | POST | `/api/xray-restart` | `systemctl restart xray` |
 | POST | `/api/xray/rebuild` | Пересобрать конфиг и применить |
 | POST | `/api/import` | Импорт по URL `{"url":"..."}` |
-| GET | `/api/subscribe.txt` | Subscription URL |
-| GET | `/api/logs?limit=&offset=&level=` | Логи |
+| GET | `/api/subscribe.txt` | Subscription URL для клиентов |
+| GET | `/api/logs?limit=&offset=&level=` | Логи с фильтрацией |
 | POST | `/api/logs/clear` | Очистить логи |
-| GET | `/api/traffic/current` | Текущий трафик (nftables + active connections) |
+| GET | `/api/traffic/current` | Текущий трафик (nftables + connections) |
 | GET | `/api/traffic/history?limit=` | История трафика для графика |
-| GET | `/api/connections/list` | Список активных TCP-соединений через прокси |
+| GET | `/api/connections/list` | Активные TCP-соединения через прокси |
 | GET | `/api/connections/traffic` | Трафик сгруппированный по IP клиента |
 | POST | `/api/connections/close` | Закрыть соединение `{"remote_host","remote_port"}` |
 | POST | `/api/connections/flush` | Закрыть все активные соединения |
