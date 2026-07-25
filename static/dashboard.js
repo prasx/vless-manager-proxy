@@ -361,7 +361,10 @@ $$('.stat-card').forEach(el => {
 
 async function testOne(id) {
   const r = await api('POST',`/api/test/${id}`);
-  if (r.status === 'working') toast(`proxy #${id} working — auto-applied`, 'success');
+  if (r.status === 'working') {
+    const speedStr = r.speed ? ` · ${formatSpeed(r.speed)}` : '';
+    toast(`proxy #${id} working — ${r.latency}ms${speedStr}`, 'success');
+  }
   else toast(`proxy #${id} failed`);
   loadData();
 }

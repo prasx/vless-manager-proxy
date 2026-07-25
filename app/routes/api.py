@@ -214,15 +214,20 @@ def api_add():
 
 @api_bp.route("/test/<int:pid>", methods=["POST"])
 def api_test(pid):
-    """POST /api/test/<id> — тестирует один прокси (VLESS)."""
+    """POST /api/test/<id> — тестирует один прокси (VLESS + скорость)."""
     rows = db_q("SELECT link FROM proxies WHERE id=?", (pid,))
     if not rows:
         return jsonify(error="Not found"), 404
     ok, lat = proxy_manager.test_vless_real(rows[0]["link"])
     proxy_manager._update_vless_status(pid, ok, lat if ok else 0)
+    speed = 0
+    if ok:
+        speed = proxy_manager._test_speed_single(rows[0]["link"])
+        if speed:
+            db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (speed, pid))
     status = "working" if ok else "failed"
-    add_log("INFO", f"Tested proxy #{pid} → {status} ({lat}ms)")
-    return jsonify(status=status, latency=lat)
+    add_log("INFO", f"Tested proxy #{pid} → {status} ({lat}ms, {speed}kbps)")
+    return jsonify(status=status, latency=lat, speed=speed)
 
 
 @api_bp.route("/delete/<int:pid>", methods=["DELETE"])
@@ -359,13 +364,17 @@ def api_sources_import_one(sid):
     rows = db_q("SELECT url, type FROM sources WHERE id=?", (sid,))
     if not rows:
         return jsonify(error="Not found"), 404
-    if rows[0]["type"] == "txt":
-        added = import_from_txt(sid)
-    else:
-        added = import_from_url(rows[0]["url"], source_id=sid)
+    try:
+        if rows[0]["type"] == "txt":
+            added = import_from_txt(sid)
+        else:
+            added = import_from_url(rows[0]["url"], source_id=sid)
+    except RuntimeError as e:
+        add_log("ERROR", f"Import source #{sid} failed: {e}")
+        return jsonify(error=str(e)), 502
     db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), sid))
-    threading.Thread(target=proxy_manager.test_all_vless, daemon=True).start()
-    return jsonify(success=True, added=added)
+    test_started = proxy_manager.test_all_vless()
+    return jsonify(success=True, added=added, test_queued=test_started)
 
 
 @api_bp.route("/sources/import-all", methods=["POST"])
@@ -373,16 +382,23 @@ def api_sources_import_all():
     """POST /api/sources/import-all — импортирует из всех источников."""
     rows = db_q("SELECT id, url, type FROM sources")
     total = 0
+    errors = []
     for r in rows:
-        if r["type"] == "txt":
-            added = import_from_txt(r["id"])
-        else:
-            added = import_from_url(r["url"], source_id=r["id"])
-        db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), r["id"]))
-        total += added
-    threading.Thread(target=proxy_manager.test_all_vless, daemon=True).start()
+        try:
+            if r["type"] == "txt":
+                added = import_from_txt(r["id"])
+            else:
+                added = import_from_url(r["url"], source_id=r["id"])
+            db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), r["id"]))
+            total += added
+        except RuntimeError as e:
+            errors.append(f"#{r['id']}: {e}")
+            add_log("ERROR", f"Import source #{r['id']} failed: {e}")
+    test_started = proxy_manager.test_all_vless()
+    if errors:
+        add_log("WARN", f"Import completed with errors: {'; '.join(errors)}")
     add_log("INFO", f"Imported {total} proxies from all sources")
-    return jsonify(success=True, added=total)
+    return jsonify(success=True, added=total, errors=errors, test_queued=test_started)
 
 
 # ─── Настройки ───

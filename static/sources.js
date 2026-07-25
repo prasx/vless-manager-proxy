@@ -116,6 +116,7 @@ async function delSource(id) {
 
 async function importOne(id) {
   const res = await api('POST',`/api/sources/${id}/import`);
+  if (res.error) return toast(`import failed: ${res.error}`, 'error');
   toast(`imported ${res.added} proxies`);
   load();
 }
@@ -123,7 +124,12 @@ async function importOne(id) {
 async function importAll() {
   toast('importing all sources...');
   const res = await api('POST','/api/sources/import-all');
-  toast(`imported ${res.added} proxies total`);
+  if (res.error) return toast(`import failed: ${res.error}`, 'error');
+  if (res.errors && res.errors.length) {
+    toast(`imported ${res.added} proxies — ${res.errors.length} source(s) failed: ${res.errors[0]}`, 'error');
+  } else {
+    toast(`imported ${res.added} proxies total`);
+  }
   load();
 }
 

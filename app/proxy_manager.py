@@ -459,27 +459,31 @@ class ProxyManager:
             self._record_completion(label)
 
     def test_all_vless(self):
-        """Тест всех прокси из БД (без импорта)."""
+        """Тест всех прокси из БД (без импорта).
+        Возвращает True если тест запущен, False если пропущен."""
         if self._vless_busy:
             add_log("WARN", "Test already in progress, ignoring test_all_vless")
-            return
+            return False
         rows = db_q("SELECT id, link FROM proxies")
         if not rows:
             add_log("WARN", "Test all VLESS: no proxies to test")
-            return
+            return False
         self._bg_vless_batch(rows, "all")
         from .xray_configurator import xray_configurator
 
         xray_configurator.apply_all(blocking=True)
+        return True
 
     def batch_test_vless(self, rows):
+        """Возвращает True если тест запущен, False если пропущен."""
         if self._vless_busy:
             add_log("WARN", "Test already in progress, ignoring batch_test_vless")
-            return
+            return False
         self._bg_vless_batch(rows, "batch-test")
         from .xray_configurator import xray_configurator
 
         xray_configurator.apply_all(blocking=True)
+        return True
 
     # ─── Background tasks ───
 

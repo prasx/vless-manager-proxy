@@ -128,6 +128,7 @@ def import_from_url(url, source_id=None):
     Удаляет старые прокси источника, которых больше нет в подписке.
     Использует ETag/If-Modified-Since для пропуска неизменённых источников.
     Возвращает количество добавленных прокси.
+    Бросает RuntimeError при ошибке загрузки (сеть, HTTP).
     """
     url = url.strip().strip('"').strip("'")
     req = urllib.request.Request(url, headers={"User-Agent": _IMPORT_UA})
@@ -145,14 +146,12 @@ def import_from_url(url, source_id=None):
             add_log("DEBUG", f"Source unchanged (304): {url[:60]}")
             return 0
         add_log("ERROR", f"Import failed HTTP {e.code} for {url[:80]}")
-        return 0
+        raise RuntimeError(f"HTTP {e.code}") from e
     except Exception as e:
         add_log("ERROR", f"Import failed for {url[:80]}: {e}")
-        return 0
+        raise RuntimeError(str(e)) from e
 
     content = raw.decode("utf-8", errors="replace")
-    # Если ответ выглядит как чистый base64 (нет vless:// и нет переводов строк) — не декодировать повторно
-    # _parse_and_import_content сам попробует base64 если vless:// не найдено
     return _parse_and_import_content(content, source_id, url[:60])
 
 
