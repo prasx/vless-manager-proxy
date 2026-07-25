@@ -394,10 +394,12 @@
   </p>
   <div class="tuning-grid">
     <div class="tuning-group">
-      <div class="tuning-item tuning-item-wrap">
+      <div class="tuning-item">
         <span class="tuning-label">Import proxy</span>
         <input type="text" id="importProxy" class="input" placeholder="socks5://127.0.0.1:1080 или http://proxy:8080" style="flex:1;min-width:250px">
-        <span class="tuning-comment">socks5:// или http:// — прокси для загрузки подписок. Пусто = напрямую</span>
+      </div>
+      <div class="tuning-item" style="border-bottom:none">
+        <span class="tuning-comment" style="display:block;margin:4px 0 0 0;font-style:normal">socks5:// или http:// — прокси для загрузки подписок. Пусто = напрямую. Также поддерживается env IMPORT_PROXY.</span>
       </div>
     </div>
   </div>
