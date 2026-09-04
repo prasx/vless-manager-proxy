@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}VLESS Manager — Logs{% endblock %}
-{% block page_title %}Logs{% endblock %}
+{% block title %}VLESS Manager — Логи{% endblock %}
+{% block page_title %}Логи{% endblock %}
 {% block extra_css %}
 <link rel="stylesheet" href="{{ url_for('static', filename='logs.css') }}">
 {% endblock %}
@@ -8,24 +8,24 @@
 
 <div class="toolbar">
   <select id="logLevelFilter" class="select-filter" onchange="setLevel(this.value)">
-    <option value="">All</option>
+    <option value="">Все</option>
     <option value="DEBUG">DEBUG</option>
     <option value="INFO">INFO</option>
     <option value="WARN">WARN</option>
     <option value="ERROR">ERROR</option>
   </select>
-  <button class="btn" onclick="clearLogs()">Clear</button>
+  <button class="btn" onclick="clearLogs()">Очистить</button>
 </div>
 
 <div class="table-wrap">
   <table>
     <thead>
-      <tr><th>Time</th><th>Level</th><th>CID</th><th>Message</th></tr>
+      <tr><th>Время</th><th>Уровень</th><th>CID</th><th>Сообщение</th></tr>
     </thead>
     <tbody id="logBody"></tbody>
   </table>
   <div class="pagination-bar" id="logPagination" style="display:none">
-    <button class="btn" id="logShowMoreBtn" onclick="loadMore()">Show next 50</button>
+    <button class="btn" id="logShowMoreBtn" onclick="loadMore()">Показать ещё 50</button>
     <span class="pagination-info" id="logPaginationInfo"></span>
   </div>
 </div>

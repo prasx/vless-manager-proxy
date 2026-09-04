@@ -1,18 +1,28 @@
 {% extends "base.html" %}
-{% block title %}VLESS Manager — Dashboard{% endblock %}
-{% block page_title %}Proxy Dashboard{% endblock %}
+{% block title %}VLESS Manager — Дашборд{% endblock %}
+{% block page_title %}Прокси{% endblock %}
 {% block nav_extra %}{% endblock %}
 {% block extra_css %}
 <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
 <style>
-.modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:1000; align-items:center; justify-content:center; padding:16px; }
+.modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:1000; overflow-y:auto; padding:16px; }
 .modal-overlay.open { display:flex; }
-.modal-box { background:var(--bg-card); border:1px solid var(--border); border-radius:6px; max-width:800px; width:100%; max-height:80vh; display:flex; flex-direction:column; }
+.modal-box {
+  margin:auto;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:6px;
+  width:100%;
+  max-width:min(820px, calc(100vw - 32px));
+  max-height:calc(100vh - 32px);
+  display:flex;
+  flex-direction:column;
+}
 .modal-head { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--border); }
 .modal-head h3 { margin:0; font-size:.85rem; font-weight:600; }
-.modal-close { cursor:pointer; opacity:.5; font-size:1.1rem; }
+.modal-close { cursor:pointer; opacity:.5; font-size:1.1rem; padding:0 2px; }
 .modal-close:hover { opacity:1; }
-.modal-body { overflow-y:auto; padding:8px 16px 16px; flex:1; }
+.modal-body { overflow:auto; padding:8px 16px 16px; flex:1 1 auto; min-height:0; }
 .conn-table { width:100%; border-collapse:collapse; font-size:.72rem; }
 .conn-table th { text-align:left; padding:6px 4px; color:var(--text-muted); border-bottom:1px solid var(--border); font-weight:500; white-space:nowrap; }
 .conn-table td { padding:5px 4px; border-bottom:1px solid var(--border); vertical-align:middle; }
@@ -32,41 +42,22 @@
 {% endblock %}
 {% block content %}
 
-
-<div class="monitor-row">
-  <div class="monitor-card" id="trafficCard">
-    <div class="monitor-header">
-      <span class="label-s">TRAFFIC</span>
-      <span id="trafficLive" class="label-s" style="font-weight:600"></span>
-    </div>
-    <canvas id="trafficChart" height="80"></canvas>
-  </div>
-  <div class="monitor-card" id="connCard">
-    <div class="monitor-header">
-      <span class="label-s">ACTIVE CONNECTIONS</span>
-      <span id="connLive" class="label-s" style="font-weight:600">—</span>
-    </div>
-    <canvas id="connChart" height="80"></canvas>
-  </div>
-</div>
-
-
 <div class="stats" id="statGrid">
   <div class="stat-card active" data-filter="">
     <div class="num" id="statTotal"><span class="skeleton skeleton-num"></span></div>
-    <div class="label-s">all</div>
+    <div class="label-s">все</div>
   </div>
   <div class="stat-card" data-filter="working">
     <div class="num" id="statWorking"><span class="skeleton skeleton-num"></span></div>
-    <div class="label-s">working</div>
+    <div class="label-s">рабочие</div>
   </div>
   <div class="stat-card" data-filter="top_speed">
     <div class="num" id="statTopSpeed"><span class="skeleton skeleton-num"></span></div>
-    <div class="label-s">top speed</div>
+    <div class="label-s">топ-скорость</div>
   </div>
-  <div class="stat-card" data-filter="failed_recent">
-    <div class="num" id="statFailedRecent"><span class="skeleton skeleton-num"></span></div>
-    <div class="label-s">failed &lt;24h</div>
+  <div class="stat-card" data-filter="failed">
+    <div class="num" id="statFailed"><span class="skeleton skeleton-num"></span></div>
+    <div class="label-s">не работает</div>
   </div>
 </div>
 
@@ -85,21 +76,23 @@
 <div class="toolbar">
   <div class="toolbar-row toolbar-row-1">
     <div class="toolbar-actions">
-      <button class="btn" id="testAllBtn" onclick="testAll()">Test All</button>
-      <button class="btn btn-danger" id="cancelTestBtn" style="display:none" onclick="cancelTest()">Cancel</button>
-      <button class="btn btn-danger" id="cleanupBtn" onclick="cleanupFailed()">Cleanup failed</button>
-      <button class="btn btn-apply" id="batchTestBtn" style="display:none" onclick="batchTest()">Test selected</button>
-      <button class="btn btn-danger" id="batchDeleteBtn" style="display:none" onclick="batchDelete()">Delete selected</button>
+      <button class="btn" id="testAllBtn" onclick="testAll()">Тест всех</button>
+      <button class="btn btn-apply" id="retestFailedBtn" onclick="retestFailed()" title="Перетестировать только failed-прокси">Перетест failed</button>
+      <button class="btn btn-danger" id="cancelTestBtn" style="display:none" onclick="cancelTest()">Отмена</button>
+      <button class="btn btn-danger" id="cleanupBtn" onclick="cleanupFailed()">Очистить failed</button>
+      <button class="btn btn-apply" id="batchTestBtn" style="display:none" onclick="batchTest()">Тест выбранных</button>
+      <button class="btn btn-danger" id="batchDeleteBtn" style="display:none" onclick="batchDelete()">Удалить выбранные</button>
       <span id="batchCount" style="font-size:0.72rem;color:var(--text-muted);display:none"></span>
     </div>
   </div>
   <div class="toolbar-row toolbar-row-2">
-    <input type="search" id="searchInput" class="input" placeholder="Search host or id..." style="font-size:0.78rem">
+    <input type="search" id="searchInput" class="input" placeholder="Поиск по хосту или id…" style="font-size:0.78rem">
+    <select id="reasonFilter" class="input" style="width:auto;max-width:260px;font-size:0.75rem;display:none" title="Фильтр по причине отказа"></select>
   </div>
   <div class="toolbar-row toolbar-row-3">
     <div class="source-bar" id="sourceBar">
-      <button class="btn btn-sm btn-primary" id="sourceAll" data-source="" onclick="setSource('')">All</button>
-      <button class="btn btn-sm" id="sourceUnknown" data-source="unknown" onclick="setSource('unknown')" style="display:none">Custom</button>
+      <button class="btn btn-sm btn-primary" id="sourceAll" data-source="" onclick="setSource('')">Все</button>
+      <button class="btn btn-sm" id="sourceUnknown" data-source="unknown" onclick="setSource('unknown')" style="display:none">Свои</button>
     </div>
   </div>
 </div>
@@ -107,7 +100,7 @@
 <div class="table-wrap">
   <table class="desktop-table">
     <thead>
-      <tr><th class="chk"><input type="checkbox" class="chk-custom" id="selectAll" onchange="toggleSelectAll()"></th><th>#</th><th>Host</th><th>Port</th><th>Country</th><th>Status</th><th>Speed</th><th>Latency</th><th></th></tr>
+      <tr><th class="chk"><input type="checkbox" class="chk-custom" id="selectAll" onchange="toggleSelectAll()"></th><th>#</th><th>Хост</th><th>Порт</th><th>Страна</th><th>Статус</th><th>Скорость</th><th>Задержка</th><th></th></tr>
     </thead>
     <tbody id="tbodyDesktop"></tbody>
   </table>
@@ -122,11 +115,11 @@
 <div class="modal-overlay" id="connModal">
   <div class="modal-box">
     <div class="modal-head">
-      <h3>Active Connections</h3>
+      <h3>Активные соединения</h3>
       <span class="modal-close" onclick="toggleConnModal()">&times;</span>
     </div>
     <div class="modal-body">
-      <input type="text" class="conn-filter" id="connFilter" placeholder="Filter by IP..." oninput="filterConnTable()" spellcheck="false">
+      <input type="text" class="conn-filter" id="connFilter" placeholder="Фильтр по IP…" oninput="filterConnTable()" spellcheck="false">
       <div id="connPerIP" class="conn-perip"></div>
       <div id="connTableWrap"></div>
     </div>

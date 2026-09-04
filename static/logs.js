@@ -49,7 +49,7 @@ function render() {
   const tb = $('#logBody');
   tb.innerHTML = '';
   if (!allLogs.length) {
-    tb.innerHTML = '<tr><td colspan="4" class="empty">no logs yet</td></tr>';
+    tb.innerHTML = '<tr><td colspan="4" class="empty">// логов пока нет</td></tr>';
     return;
   }
   for (const row of allLogs) {
@@ -119,14 +119,14 @@ function updatePagination() {
   bar.style.display = 'flex';
   const remaining = totalLogs - allLogs.length;
   const next = Math.min(PAGE_SIZE, remaining);
-  btn.textContent = `Show next ${next} (${allLogs.length}/${totalLogs})`;
-  info.textContent = `${allLogs.length} of ${totalLogs} entries`;
+  btn.textContent = `Показать ещё ${next} (${allLogs.length}/${totalLogs})`;
+  info.textContent = `Записей: ${allLogs.length} из ${totalLogs}`;
 }
 
 async function clearLogs() {
-  if (!confirm('Clear all logs?')) return;
+  if (!confirm('Очистить все логи?')) return;
   await api('POST', '/api/logs/clear');
-  toast('logs cleared');
+  toast('логи очищены', 'success');
   loadData();
 }
 

@@ -1,26 +1,27 @@
 {% extends "base.html" %}
-{% block title %}VLESS Manager — Sources{% endblock %}
-{% block page_title %}Proxy Sources{% endblock %}
+{% block title %}VLESS Manager — Источники{% endblock %}
+{% block page_title %}Источники{% endblock %}
 {% block extra_css %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sources.css') }}">
 {% endblock %}
 {% block content %}
 
-<div class="toolbar" style="margin-bottom:20px">
-  <button class="btn btn-primary" onclick="importAll()">Import All</button>
-  <label class="chk-safe" title="Skip proxies without TLS/Reality encryption">
+<div class="toolbar" style="margin-bottom:16px">
+  <button class="btn btn-primary" id="btnImportAll" onclick="importAll()">Импорт всех</button>
+  <label class="chk-safe" title="Пропускать прокси без TLS/Reality-шифрования">
     <input type="checkbox" id="chkSafeOnly" onchange="toggleSafeOnly()">
-    <span>Safe only (TLS/Reality)</span>
+    <span>Безопасный импорт (TLS/Reality)</span>
   </label>
+  <span class="src-summary" id="srcSummary"></span>
 </div>
 
-<div class="section-label">Add single proxy</div>
+<div class="section-label">Добавить прокси вручную</div>
 <div class="add-form" style="margin-bottom:24px;">
   <input class="inp-url" id="inpProxy" placeholder="vless://..." spellcheck="false" style="flex:1">
-  <button class="btn btn-primary" onclick="addProxy()">+ Add Proxy</button>
+  <button class="btn btn-primary" id="btnAddProxy" onclick="addProxy()">+ Добавить</button>
 </div>
 
-<div class="section-label">Proxy sources</div>
+<div class="section-label">Источники прокси</div>
 
 <div class="source-tabs">
   <button class="tab tab-active" data-tab="url" onclick="switchTab('url')">URL</button>
@@ -28,25 +29,27 @@
 </div>
 
 <div id="urlSourceForm" class="add-form">
-  <input class="inp-name" id="inpName" placeholder="name" spellcheck="false">
+  <input class="inp-name" id="inpName" placeholder="имя" spellcheck="false">
   <input class="inp-url" id="inpUrl" placeholder="https://..." spellcheck="false">
-  <button class="btn btn-primary" onclick="addSource()">+ Add URL Source</button>
+  <button class="btn btn-primary" id="btnAddSource" onclick="addSource()">+ Добавить URL-источник</button>
 </div>
 
 <div id="txtSourceForm" class="add-form" style="display:none">
-  <input class="inp-name" id="inpNameTxt" placeholder="name" spellcheck="false">
-  <textarea class="inp-txt" id="inpTxtContent" placeholder="vless://... (one per line)" rows="6" spellcheck="false"></textarea>
-  <button class="btn btn-primary" onclick="addTxtSource()">+ Add TXT Source</button>
+  <input class="inp-name" id="inpNameTxt" placeholder="имя" spellcheck="false">
+  <textarea class="inp-txt" id="inpTxtContent" placeholder="vless://... (по одной на строку)" rows="6" spellcheck="false"></textarea>
+  <button class="btn btn-primary" id="btnAddTxtSource" onclick="addTxtSource()">+ Добавить TXT-источник</button>
 </div>
 
 <div class="card-list" id="list"></div>
 
 <dialog id="dlgEditTxt" class="modal">
-  <div class="modal-header">Edit TXT source</div>
+  <div class="modal-header">Редактирование TXT-источника</div>
   <textarea id="dlgTxtContent" rows="12" spellcheck="false" style="width:100%;box-sizing:border-box"></textarea>
+  <p class="modal-hint">Изменения применятся к содержимому источника. Запустите «Импорт» для обновления прокси.</p>
   <div class="modal-actions">
-    <button class="btn" onclick="document.getElementById('dlgEditTxt').close()">Cancel</button>
-    <button class="btn btn-primary" onclick="saveTxtContent()">Save</button>
+    <button class="btn" onclick="document.getElementById('dlgEditTxt').close()">Отмена</button>
+    <button class="btn btn-primary" id="btnSaveTxt" onclick="saveTxtContent(false)">Сохранить</button>
+    <button class="btn btn-apply" onclick="saveTxtContent(true)">Сохранить и импортировать</button>
   </div>
 </dialog>
 {% endblock %}

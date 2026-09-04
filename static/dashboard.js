@@ -3,6 +3,7 @@ const $$ = s => Array.from(document.querySelectorAll(s));
 
 let currentFilter = '';
 let currentSource = '';
+let currentReason = '';
 let allProxies = [];
 let totalCount = 0;
 let isLoading = false;
@@ -21,6 +22,9 @@ let _initialMetaLoaded = false;
 
 function makeProxiesUrl(limit, offset) {
   let url = '/api/proxies?filter=' + currentFilter;
+  if (currentReason) {
+    url += '&reason=' + encodeURIComponent(currentReason);
+  }
   if (currentSource) {
     url += '&source=' + currentSource;
   }
@@ -42,6 +46,12 @@ $('#searchInput')?.addEventListener('input', () => {
 
 function setFilter(f) {
   currentFilter = f;
+  // reason-фильтр имеет смысл только в представлении «не работает»
+  if (f !== 'failed' && currentReason) {
+    currentReason = '';
+    const sel = $('#reasonFilter');
+    if (sel) sel.value = '';
+  }
   $$('.stat-card').forEach(el => el.classList.toggle('active', el.dataset.filter === f));
   loadData();
 }
@@ -49,6 +59,62 @@ function setFilter(f) {
 function setSource(src) {
   currentSource = src;
   updateSourceButtons();
+  loadData();
+}
+
+// ─── Фильтр по причине отказа ───
+const REASON_RU = {
+  'timeout': 'таймаут',
+  'connection refused': 'соединение отклонено',
+  'connection reset': 'соединение сброшено',
+  'dns lookup failed': 'DNS не резолвится',
+  'tls error': 'ошибка TLS',
+  'invalid link': 'некорректная ссылка',
+  'xray start failed': 'Xray не стартовал',
+  'internal test error': 'внутренняя ошибка теста',
+};
+
+function reasonRu(reason) {
+  if (!reason) return '';
+  if (reason === 'http') return 'HTTP-ошибка';
+  for (const [k, v] of Object.entries(REASON_RU)) {
+    if (reason.startsWith(k)) return v;
+  }
+  if (reason.startsWith('xray binary not found')) return 'нет бинарника Xray';
+  return reason;
+}
+
+function renderReasonFilter(reasons) {
+  const sel = $('#reasonFilter');
+  if (!sel) return;
+  const list = reasons || [];
+  let opts = '<option value="">причина отказа: все</option>';
+  if (list.length || (currentReason === 'none')) {
+    opts += '<option value="none">без причины</option>';
+  }
+  for (const r of list) {
+    opts += `<option value="${esc(r.reason)}" title="${esc(r.reason)}">${esc(reasonRu(r.reason))} · ${r.count}</option>`;
+  }
+  sel.innerHTML = opts;
+  sel.style.display = list.length || currentReason === 'none' ? '' : 'none';
+  if (currentReason && !list.some(x => x.reason === currentReason) && currentReason !== 'none') {
+    // причина исчезла (например, после перетеста) — сбрасываем фильтр
+    currentReason = '';
+    loadData();
+  } else {
+    sel.value = currentReason;
+  }
+}
+
+function onReasonChange() {
+  const sel = $('#reasonFilter');
+  const v = sel ? sel.value : '';
+  // выбор причины автоматически показывает раздел «failed»
+  if (v && currentFilter !== 'failed') {
+    currentFilter = 'failed';
+    $$('.stat-card').forEach(el => el.classList.toggle('active', el.dataset.filter === 'failed'));
+  }
+  currentReason = v;
   loadData();
 }
 
@@ -104,19 +170,20 @@ async function fetchPage(reset) {
       if (healthEl) {
         const ok = health?.status === 'ok';
         healthEl.innerHTML = ok
-          ? '<span class="badge badge-green" style="margin-left:8px;font-size:0.62rem">healthy</span>'
-          : '<span class="badge badge-red" style="margin-left:8px;font-size:0.62rem">unhealthy</span>';
+          ? '<span class="badge badge-green" style="margin-left:8px;font-size:0.62rem">исправен</span>'
+          : '<span class="badge badge-red" style="margin-left:8px;font-size:0.62rem">проблемы</span>';
       }
       $('#statTotal').textContent = status.total;
       $('#statWorking').textContent = status.working;
-      $('#statFailedRecent').textContent = status.failed_recent;
+      $('#statFailed').textContent = status.failed;
       $('#statTopSpeed').textContent = status.top_speed;
       const speedLabel = document.querySelector('.stat-card[data-filter="top_speed"] .label-s');
       if (speedLabel && status.top_speed_threshold) {
         const mbps = status.top_speed_threshold / 1000;
-        speedLabel.textContent = mbps >= 1 ? `top speed ≥${mbps}Mbps` : `top speed ≥${status.top_speed_threshold}Kbps`;
+        speedLabel.textContent = mbps >= 1 ? `топ-скорость ≥${mbps}Mbps` : `топ-скорость ≥${status.top_speed_threshold}Kbps`;
       }
       renderSourceButtons(status.sources, status.unknown_count, status.total);
+      renderReasonFilter(status.reasons || []);
       renderTraffic(ob, xr);
     }
     proxies.forEach(p => linkMap[p.id] = p.link);
@@ -139,13 +206,13 @@ function renderTraffic(ob, xr) {
   const withTraffic = nodes.filter(t => traffic[t]?.downlink);
   let html = '// outbounds: ';
   if (nodes.length) {
-    html += `<b>${nodes.length}</b> (${withTraffic.length} with traffic)`;
+    html += `<b>${nodes.length}</b> (с трафиком: ${withTraffic.length})`;
   } else {
     html += '—';
   }
   html += run
-    ? ' <span class="badge badge-green" style="font-size:0.62rem">running</span>'
-    : ' <span class="badge badge-red" style="font-size:0.62rem">stopped</span>';
+    ? ' <span class="badge badge-green" style="font-size:0.62rem">работает</span>'
+    : ' <span class="badge badge-red" style="font-size:0.62rem">остановлен</span>';
   el.innerHTML = html;
 }
 
@@ -170,7 +237,7 @@ function renderSourceButtons(sources, unknownCount, totalCount) {
         unknownBtn.onclick = () => setSource('unknown');
         bar.appendChild(unknownBtn);
       }
-      unknownBtn.textContent = 'Custom ' + unknownCount;
+      unknownBtn.textContent = 'Свои ' + unknownCount;
       unknownBtn.style.display = '';
     } else if (unknownBtn) {
       unknownBtn.style.display = 'none';
@@ -189,15 +256,14 @@ function renderSourceButtons(sources, unknownCount, totalCount) {
       btn.textContent = s.name + ' ' + s.cnt;
     }
   } else {
-    // select dropdown — hide All button, show select with All option
     if (allBtn) allBtn.style.display = 'none';
     const sel = document.createElement('select');
     sel.className = 'input source-select';
     sel.style.width = 'auto';
     sel.style.maxWidth = '280px';
-    let opts = `<option value="">All ${totalCount || 0}</option>`;
+    let opts = `<option value="">Все (${totalCount || 0})</option>`;
     if (unknownCount > 0) {
-      opts += `<option value="unknown">Custom ${unknownCount}</option>`;
+      opts += `<option value="unknown">Свои (${unknownCount})</option>`;
     }
     for (const s of (sources || [])) {
       opts += `<option value="${s.id}">${s.name} (${s.cnt})</option>`;
@@ -225,8 +291,8 @@ function updatePagination() {
   bar.style.display = 'flex';
   const remaining = totalCount - allProxies.length;
   const next = Math.min(PAGE_SIZE, remaining);
-  btn.textContent = `Show next ${next} (${allProxies.length}/${totalCount})`;
-  info.textContent = `${allProxies.length} of ${totalCount} shown`;
+  btn.textContent = `Показать ещё ${next} (${allProxies.length}/${totalCount})`;
+  info.textContent = `Показано ${allProxies.length} из ${totalCount}`;
 }
 
 function statusBadge(status, failedSince) {
@@ -238,8 +304,43 @@ function statusBadge(status, failedSince) {
   return status === 'failed' ? 'badge-orange' : 'badge-muted';
 }
 
+// last_test_at из API хранится в UTC (naive) — добавляем 'Z' и форматируем локально
+function fmtUtcTime(t) {
+  if (!t) return '';
+  const d = new Date(String(t).replace(' ', 'T') + 'Z');
+  return isNaN(d.getTime()) ? String(t) : d.toLocaleString();
+}
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function testTooltip(p) {
+  const parts = [];
+  if (p.last_error) parts.push('причина: ' + p.last_error);
+  if (p.last_test_at) parts.push('проверен: ' + fmtUtcTime(p.last_test_at));
+  return esc(parts.join('\n'));
+}
+
+function errorHint(p) {
+  if (p.status !== 'failed' || !p.last_error) return '';
+  const err = String(p.last_error);
+  const short = err.length > 60 ? err.slice(0, 60) + '…' : err;
+  return `<span class="cell-err" title="${esc(err)}">${esc(short)}</span>`;
+}
+
+const STATUS_RU = { working: 'работает', failed: 'не работает', pending: 'ожидает' };
+
+function statusText(s) {
+  return STATUS_RU[s] || s;
+}
+
 function securityBadge(sec) {
-  if (!sec || sec === 'none') return ' <span class="badge badge-warn" title="no transport encryption">no enc</span>';
+  if (!sec || sec === 'none') return ' <span class="badge badge-warn" title="без шифрования транспорта">без TLS</span>';
   return '';
 }
 
@@ -266,23 +367,24 @@ function updateBatchButtons() {
   $('#batchDeleteBtn').style.display = hasSel ? 'inline-flex' : 'none';
   $('#batchTestBtn').style.display = hasSel ? 'inline-flex' : 'none';
   $('#testAllBtn').style.display = hasSel ? 'none' : 'inline-flex';
+  $('#retestFailedBtn').style.display = hasSel ? 'none' : 'inline-flex';
   $('#cleanupBtn').style.display = hasSel ? 'none' : 'inline-flex';
   const bc = $('#batchCount');
-  if (hasSel) { bc.textContent = `${cnt} selected`; bc.style.display = ''; }
+  if (hasSel) { bc.textContent = `выбрано: ${cnt}`; bc.style.display = ''; }
   else { bc.textContent = ''; bc.style.display = 'none'; }
 }
 
 async function batchDelete() {
-  if (!confirm(`Delete ${selected.size} selected proxies?`)) return;
+  if (!confirm(`Удалить выбранные прокси (${selected.size})?`)) return;
   const ids = Array.from(selected);
   await api('POST', '/api/proxies/batch-delete', {ids});
-  toast(`deleted ${ids.length} proxies`, 'success');
+  toast(`удалено прокси: ${ids.length}`, 'success');
   loadData();
 }
 
 async function batchTest() {
   const ids = Array.from(selected);
-  toast(`testing ${ids.length} proxies...`);
+  toast(`тестируем ${ids.length} прокси…`);
   await api('POST', '/api/proxies/batch-test', {ids});
   setTimeout(loadData, 3000);
 }
@@ -291,7 +393,7 @@ function renderDesktop(proxies) {
   const tb = $('#tbodyDesktop');
   tb.innerHTML = '';
   if (!proxies.length) {
-    tb.innerHTML = '<tr><td colspan="9" class="empty">// no proxies</td></tr>';
+    tb.innerHTML = '<tr><td colspan="9" class="empty">// прокси не найдены</td></tr>';
     return;
   }
   for (const p of proxies) {
@@ -299,20 +401,20 @@ function renderDesktop(proxies) {
     const badgeCls = statusBadge(p.status, p.failed_since);
     const speedHtml = p.speed_kbps ? formatSpeed(p.speed_kbps) : '<span class="dim">—</span>';
     const vlessClass = p.latency_vless && p.latency_vless < 300 ? 'lat-good' : p.latency_vless >= 300 ? 'lat-bad' : 'dim';
-    const vlessHtml = p.latency_vless ? `<span class="${vlessClass}">${p.latency_vless}ms</span>` : '<span class="dim">—</span>';
+    const vlessHtml = p.latency_vless ? `<span class="${vlessClass}">${p.latency_vless}мс</span>` : '<span class="dim">—</span>';
     tr.innerHTML = `
       <td class="chk"><input type="checkbox" class="chk-custom" id="cb-${p.id}" ${selected.has(p.id)?'checked':''} onchange="toggleSelect(${p.id})"></td>
       <td class="id">${p.id}</td>
       <td class="host-cell" title="${p.host}">${p.host}</td>
       <td>${p.port}</td>
       <td>${p.country || '—'}${securityBadge(p.security)}</td>
-      <td><span class="badge ${badgeCls}">${p.status}</span></td>
+      <td class="status-cell"><span class="badge ${badgeCls}" title="${testTooltip(p)}">${statusText(p.status)}</span>${errorHint(p)}</td>
       <td class="speed-cell">${speedHtml}</td>
       <td class="lat-cell">${vlessHtml}</td>
       <td class="actions-cell">
-        <button class="btn btn-sm" onclick="copyLink(${p.id})">copy</button>
-        <button class="btn btn-sm" onclick="testOne(${p.id})">test</button>
-        <button class="btn btn-sm btn-danger" onclick="delOne(${p.id})">del</button>
+        <button class="btn btn-sm" onclick="copyLink(${p.id})">копия</button>
+        <button class="btn btn-sm" onclick="testOne(${p.id})">тест</button>
+        <button class="btn btn-sm btn-danger" onclick="delOne(${p.id})">удалить</button>
       </td>
     `;
     tb.appendChild(tr);
@@ -323,7 +425,7 @@ function renderMobile(proxies) {
   const list = $('#mobileList');
   list.innerHTML = '';
   if (!proxies.length) {
-    list.innerHTML = '<div class="empty" style="margin:0">// no proxies</div>';
+    list.innerHTML = '<div class="empty" style="margin:0">// прокси не найдены</div>';
     return;
   }
   for (const p of proxies) {
@@ -339,14 +441,15 @@ function renderMobile(proxies) {
         <span>#${p.id}</span><span>${p.port}</span><span>${p.country || '—'}${securityBadge(p.security)}</span>
       </div>
       <div class="mc-actions">
-        <button class="btn btn-sm" onclick="copyLink(${p.id})">copy</button>
-        <button class="btn btn-sm" onclick="testOne(${p.id})">test</button>
-        <button class="btn btn-sm btn-danger" onclick="delOne(${p.id})">del</button>
+        <button class="btn btn-sm" onclick="copyLink(${p.id})">копия</button>
+        <button class="btn btn-sm" onclick="testOne(${p.id})">тест</button>
+        <button class="btn btn-sm btn-danger" onclick="delOne(${p.id})">удалить</button>
       </div>
       <div class="mc-status">
-        <span class="badge ${badgeCls}">${p.status}</span>
-        <span class="${vlessClass}">VLESS: ${p.latency_vless ? p.latency_vless + 'ms' : '—'}</span>
-        <span>Speed: ${speedHtml}</span>
+        <span class="badge ${badgeCls}" title="${testTooltip(p)}">${statusText(p.status)}</span>
+        ${errorHint(p)}
+        <span class="${vlessClass}">VLESS: ${p.latency_vless ? p.latency_vless + 'мс' : '—'}</span>
+        <span>Скорость: ${speedHtml}</span>
       </div>
     `;
     list.appendChild(card);
@@ -358,14 +461,15 @@ function renderMobile(proxies) {
 $$('.stat-card').forEach(el => {
   el.addEventListener('click', () => setFilter(el.dataset.filter));
 });
+$('#reasonFilter')?.addEventListener('change', onReasonChange);
 
 async function testOne(id) {
   const r = await api('POST',`/api/test/${id}`);
   if (r.status === 'working') {
     const speedStr = r.speed ? ` · ${formatSpeed(r.speed)}` : '';
-    toast(`proxy #${id} working — ${r.latency}ms${speedStr}`, 'success');
+    toast(`прокси #${id} работает — ${r.latency}мс${speedStr}`, 'success');
   }
-  else toast(`proxy #${id} failed`);
+  else toast(`прокси #${id} не работает${r.error ? ' — ' + r.error : ''}`);
   loadData();
 }
 
@@ -381,36 +485,44 @@ function copyLink(id) {
   ta.select();
   try {
     document.execCommand('copy');
-    toast('copied');
+    toast('ссылка скопирована', 'success');
   } catch (e) {
-    toast('copy failed', 'error');
+    toast('не удалось скопировать', 'error');
   }
   ta.remove();
 }
 
 async function delOne(id) {
-  if (!confirm('Delete proxy #'+id+'?')) return;
+  if (!confirm(`Удалить прокси #${id}?`)) return;
   await api('DELETE',`/api/delete/${id}`);
-  toast(`proxy #${id} deleted`);
+  toast(`прокси #${id} удалён`);
   loadData();
 }
 
 async function testAll() {
-  toast('testing all proxies VLESS...');
+  toast('тестируем все прокси…');
   await api('POST','/api/test-all');
+  setTimeout(loadData, 3000);
+}
+
+async function retestFailed() {
+  const r = await api('POST','/api/test-failed');
+  if (r.error) return toast(r.error, 'error');
+  if (!r.queued) { toast('нет неработающих прокси для перетеста'); return; }
+  toast(`запущен перетест ${r.queued} неработающих прокси…`);
   setTimeout(loadData, 3000);
 }
 
 async function cancelTest() {
   await api('POST','/api/test-cancel');
-  toast('test cancelled');
+  toast('тест отменён');
 }
 
 async function cleanupFailed() {
-  if (!confirm('Delete ALL failed proxies? You can re-import from Sources to restore working ones.')) return;
+  if (!confirm('Удалить ВСЕ неработающие прокси? Рабочие можно восстановить повторным импортом из Источников.')) return;
   const r = await api('POST','/api/cleanup');
-  if (r.deleted > 0) toast(`cleaned up ${r.deleted} failed proxies`, 'success');
-  else toast('no failed proxies to clean up');
+  if (r.deleted > 0) toast(`удалено неработающих прокси: ${r.deleted}`, 'success');
+  else toast('неработающих прокси нет');
   loadData();
 }
 
@@ -420,6 +532,12 @@ window.addEventListener('resize', () => {
 });
 
 loadData();
+
+// Обновление счётчиков, когда фоновая проверка не идёт (во время теста их обновляет SSE)
+setInterval(() => {
+  if (_wasRunning) return;
+  updateStats();
+}, 15000);
 
 // ─── Last test row ───
 
@@ -433,6 +551,16 @@ function updateLastTestRow(text) {
 let _wasRunning = false;
 let _lastLoadDuringTest = 0;
 let _lastStatsRefresh = 0;
+
+const LABEL_RU = {
+  'all': 'Тест всех прокси',
+  'batch-test': 'Тест выбранных',
+  'retest-failed': 'Перетест неработающих',
+  'import+check': 'Импорт + проверка',
+  'db-check': 'Проверка из БД',
+};
+
+function labelRu(l) { return LABEL_RU[l] || l; }
 
 function fmtElapsed(secs) {
   const s = Math.floor(secs);
@@ -448,13 +576,14 @@ async function updateStats() {
     const status = await api('GET', '/api/status');
     $('#statTotal').textContent = status.total;
     $('#statWorking').textContent = status.working;
-    $('#statFailedRecent').textContent = status.failed_recent;
+    $('#statFailed').textContent = status.failed;
     $('#statTopSpeed').textContent = status.top_speed;
     const speedLabel = document.querySelector('.stat-card[data-filter="top_speed"] .label-s');
     if (speedLabel && status.top_speed_threshold) {
       const mbps = status.top_speed_threshold / 1000;
-      speedLabel.textContent = mbps >= 1 ? `top speed ≥${mbps}Mbps` : `top speed ≥${status.top_speed_threshold}Kbps`;
+      speedLabel.textContent = mbps >= 1 ? `топ-скорость ≥${mbps}Mbps` : `топ-скорость ≥${status.top_speed_threshold}Kbps`;
     }
+    renderReasonFilter(status.reasons || []);
   } catch (_) {}
 }
 
@@ -463,7 +592,7 @@ function setStatUpdating(on) {
 }
 
 function resetStatNumbers() {
-  ['statTotal','statWorking','statFailedRecent','statTopSpeed'].forEach(id => {
+  ['statTotal','statWorking','statFailed','statTopSpeed'].forEach(id => {
     $(`#${id}`).textContent = '—';
   });
 }
@@ -472,7 +601,7 @@ function onProgressEvent(p) {
   const bar = $('#testProgressBar');
   const fill = $('#testProgressFill');
   const label = $('#testProgressLabel');
-  const btns = ['testAllBtn', 'batchTestBtn'];
+  const btns = ['testAllBtn', 'batchTestBtn', 'retestFailedBtn'];
   const cancelBtn = $('#cancelTestBtn');
   if (p.running && p.total > 0) {
     if (!_wasRunning) {
@@ -487,7 +616,11 @@ function onProgressEvent(p) {
     fill.style.background = 'var(--green)';
     fill.style.height = '100%';
     const elapsed = p.started_at ? fmtElapsed((Date.now() / 1000) - p.started_at) : '';
-    label.textContent = `${p.label}: ${p.done}/${p.total} (${p.ok} ok) · ${elapsed}`;
+    const failed = Math.max(0, p.done - p.ok);
+    const rate = failed
+      ? `работает ${p.ok} из ${p.done}, нет ${failed}`
+      : `работает ${p.ok} из ${p.done}`;
+    label.textContent = `${labelRu(p.label)}: ${p.done}/${p.total} (${rate}) · ${elapsed}`;
     btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = true; });
     if (cancelBtn) cancelBtn.style.display = 'inline-flex';
     if (Date.now() - _lastLoadDuringTest > 5000) {
@@ -506,7 +639,7 @@ function onProgressEvent(p) {
     fill.style.background = 'var(--text-muted)';
     fill.style.height = '2px';
     if (p.last_completed) {
-      updateLastTestRow(`Last ${p.last_label}: ${p.last_ok}/${p.last_total} ok — ${p.last_completed}`);
+      updateLastTestRow(`Последний прогон «${labelRu(p.last_label)}»: работает ${p.last_ok} из ${p.last_total} — ${p.last_completed}`);
     }
     btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = false; });
     if (cancelBtn) cancelBtn.style.display = 'none';
@@ -542,154 +675,19 @@ function fallbackPoll() {
 
 let sseSource = connectSSE();
 
-// ─── Traffic & Connections Chart ───
-
-let _trafficData = [];
-let _connData = [];
-let _chartWidths = {};
-
-function cssVar(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
-function hexToRgba(hex, a) {
-  const h = hex.replace('#', '');
-  if (h.length === 6) {
-    const r = parseInt(h.substring(0,2), 16);
-    const g = parseInt(h.substring(2,4), 16);
-    const b = parseInt(h.substring(4,6), 16);
-    return `rgba(${r},${g},${b},${a})`;
-  }
-  return hex;
-}
-
-function drawMiniChart(canvasId, data, valueKey, hexColor, maxPoints=120) {
-  const canvas = document.getElementById(canvasId);
-  if (!canvas) return;
-  // cache width on first render to prevent layout shifts
-  if (!_chartWidths[canvasId]) {
-    const rect = canvas.parentElement.getBoundingClientRect();
-    _chartWidths[canvasId] = Math.max(200, Math.min(600, rect.width - 24));
-  }
-  const w = _chartWidths[canvasId];
-  const h = 80;
-  const dpr = window.devicePixelRatio || 1;
-  // skip canvas re-init if dimensions unchanged
-  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width = w + 'px';
-    canvas.style.height = h + 'px';
-  }
-  const ctx = canvas.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-
-  const muted = cssVar('--text-muted') || '#555';
-
-  if (!data || data.length < 2) {
-    return;
-  }
-
-  const slice = data.slice(-maxPoints);
-  const values = slice.map(p => p[valueKey] || 0);
-  const maxVal = Math.max(...values, 1);
-  const pad = 4;
-
-  ctx.strokeStyle = hexColor;
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  for (let i = 0; i < slice.length; i++) {
-    const x = pad + (i / (slice.length - 1)) * (w - pad * 2);
-    const y = h - pad - (values[i] / maxVal) * (h - pad * 2);
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-  }
-  ctx.stroke();
-
-  // fill
-  ctx.lineTo(w - pad, h - pad);
-  ctx.lineTo(pad, h - pad);
-  ctx.closePath();
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, hexToRgba(hexColor, 0.18));
-  grad.addColorStop(1, hexToRgba(hexColor, 0.03));
-  ctx.fillStyle = grad;
-  ctx.fill();
-}
-
-function formatBytes(b) {
-  if (!b) return '0 B';
-  if (b < 1024) return b + ' B';
-  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
-  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
-  return (b / 1073741824).toFixed(2) + ' GB';
-}
-
-function formatBytesPerSec(b, sec) {
-  if (!b || !sec) return '—';
-  const rate = b / sec;
-  return formatBytes(rate) + '/s';
-}
-
-let _lastTrafficFetch = 0;
-let _lastTrafficValues = { nft_down_raw: 0 };
-let _trafficTimer;
-
-async function updateTrafficCharts() {
-  try {
-    const [current, history] = await Promise.all([
-      api('GET', '/api/traffic/current'),
-      api('GET', '/api/traffic/history?limit=900'),
-    ]);
-
-    const points = history.points || [];
-    _trafficData = points;
-    _connData = points;
-
-    const colorDown = cssVar('--green') || '#4ade80';
-    const colorConn = cssVar('--orange') || '#fb923c';
-    drawMiniChart('trafficChart', _trafficData, 'down', colorDown, 900);
-    drawMiniChart('connChart', _connData, 'conn', colorConn, 900);
-
-    // live traffic rate (из nftables real-time counter)
-    const now = Date.now() / 1000;
-    const dt = now - _lastTrafficFetch;
-    const rateEl = $('#trafficLive');
-    if (rateEl) {
-      if (_lastTrafficFetch > 0 && dt > 0 && current.nft_down_raw != null) {
-        const dDown = current.nft_down_raw - _lastTrafficValues.nft_down_raw;
-        rateEl.textContent = '↓' + formatBytesPerSec(Math.max(0, dDown), dt);
-      } else {
-        rateEl.textContent = '↓ —';
-      }
-    }
-    _lastTrafficFetch = now;
-    _lastTrafficValues = { nft_down_raw: current.nft_down_raw || 0 };
-
-    // active connections
-    const connEl = $('#connLive');
-    if (connEl) {
-      connEl.textContent = (current.active_connections != null ? current.active_connections : '—') + ' conn';
-    }
-
-  } catch (_) {}
-}
-
-function startTrafficPolling() {
-  updateTrafficCharts();
-  _trafficTimer = setInterval(updateTrafficCharts, 2000);
-}
-
-document.addEventListener('DOMContentLoaded', startTrafficPolling);
-
 // ─── Connections Modal ───
 
 let _connRefreshTimer = null;
+
+function setBodyModalLock(lock) {
+  document.body.classList.toggle('modal-open', !!lock);
+}
 
 function toggleConnModal() {
   const m = $('#connModal');
   if (!m) return;
   const open = m.classList.toggle('open');
+  setBodyModalLock(open);
   if (open) {
     loadConnections();
     loadPerIPTraffic();
@@ -705,10 +703,21 @@ function toggleConnModal() {
 
 function closeConnModal() {
   const m = $('#connModal');
-  if (m) m.classList.remove('open');
+  if (m) {
+    m.classList.remove('open');
+    setBodyModalLock(false);
+  }
   if (_connRefreshTimer) clearInterval(_connRefreshTimer);
   _connRefreshTimer = null;
 }
+
+// Клик по подложке (вне окна) закрывает модалку
+document.addEventListener('click', (e) => {
+  const m = $('#connModal');
+  if (m && m.classList.contains('open') && e.target === m) {
+    closeConnModal();
+  }
+});
 
 function formatConnBytes(b) {
   if (b == null) return '0B';
@@ -727,7 +736,7 @@ async function loadPerIPTraffic() {
     const clients = data.clients || [];
     if (!clients.length) { el.innerHTML = ''; return; }
     const maxBytes = Math.max(...clients.map(c => c.bytes_down), 1);
-    let html = '<table><thead><tr><th>Client</th><th>Conn</th><th>↓ Down</th><th>↑ Up</th><th></th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>Клиент</th><th>Соед.</th><th>↓</th><th>↑</th><th></th></tr></thead><tbody>';
     for (const c of clients) {
       const pct = (c.bytes_down / maxBytes) * 100;
       html += `<tr>
@@ -760,11 +769,11 @@ async function loadConnections() {
     const data = await api('GET', '/api/connections/list');
     const conns = data.connections || [];
     if (!conns.length) {
-      wrap.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.8rem">// no active connections</div>';
+      wrap.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.8rem">// активных соединений нет</div>';
       return;
     }
     let html = `<table class="conn-table">
-      <thead><tr><th>Process</th><th>PID</th><th>Local</th><th>Remote</th><th>Status</th><th class="bytes">↓/↑</th><th></th></tr></thead>
+      <thead><tr><th>Процесс</th><th>PID</th><th>Локальный</th><th>Удалённый</th><th>Статус</th><th class="bytes">↓/↑</th><th></th></tr></thead>
       <tbody id="connTbody">`;
     for (const c of conns) {
       const remote = `${c.remote}:${c.remote_port}`;
@@ -776,8 +785,8 @@ async function loadConnections() {
         <td>${local}</td>
         <td>${remote}</td>
         <td><span class="badge badge-green">${c.status}</span></td>
-        <td class="bytes" title="down/up">${traffic}</td>
-        <td><button class="btn btn-sm btn-danger" onclick="closeConn('${c.remote}',${c.remote_port})">close</button></td>
+        <td class="bytes" title="вниз/вверх">${traffic}</td>
+        <td><button class="btn btn-sm btn-danger" onclick="closeConn('${c.remote}',${c.remote_port})">закрыть</button></td>
       </tr>`;
     }
     html += '</tbody></table>';
@@ -785,23 +794,23 @@ async function loadConnections() {
     // переприменяем активный фильтр
     filterConnTable();
   } catch (_) {
-    wrap.innerHTML = '<div style="padding:20px;text-align:center;color:var(--red)">failed to load</div>';
+    wrap.innerHTML = '<div style="padding:20px;text-align:center;color:var(--red)">не удалось загрузить</div>';
   }
 }
 
 async function closeConn(host, port) {
-  if (!confirm(`Close connection to ${host}:${port}?`)) return;
+  if (!confirm(`Закрыть соединение с ${host}:${port}?`)) return;
   const r = await api('POST', '/api/connections/close', {remote_host: host, remote_port: port});
-  if (r.success) toast(`closed ${host}:${port}`, 'success');
-  else toast(`failed to close ${host}:${port}`, 'error');
+  if (r.success) toast(`закрыто: ${host}:${port}`, 'success');
+  else toast(`не удалось закрыть ${host}:${port}`, 'error');
   loadConnections();
   loadPerIPTraffic();
 }
 
 async function flushConns() {
-  if (!confirm('Close ALL active connections? May disrupt active downloads.')) return;
+  if (!confirm('Закрыть ВСЕ активные соединения? Это может прервать активные загрузки.')) return;
   const r = await api('POST', '/api/connections/flush');
-  toast(`closed ${r.killed} connections`, 'success');
+  toast(`закрыто соединений: ${r.killed}`, 'success');
   loadConnections();
   loadPerIPTraffic();
 }

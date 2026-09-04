@@ -55,6 +55,8 @@ _SCHEMA = {
         ("latency_vless", "INTEGER DEFAULT 0"),
         ("speed_kbps", "INTEGER DEFAULT 0"),
         ("source_id", "INTEGER"),
+        ("last_test_at", "TIMESTAMP"),
+        ("last_error", "TEXT"),
     ],
     "sources": [
         ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -75,14 +77,6 @@ _SCHEMA = {
     "settings": [
         ("key", "TEXT PRIMARY KEY"),
         ("value", "TEXT"),
-    ],
-    "traffic_history": [
-        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
-        ("collected_at", "TEXT"),
-        ("total_downlink", "INTEGER DEFAULT 0"),
-        ("total_uplink", "INTEGER DEFAULT 0"),
-        ("active_outbounds", "INTEGER DEFAULT 0"),
-        ("active_connections", "INTEGER DEFAULT 0"),
     ],
 }
 
@@ -117,6 +111,14 @@ _MIGRATIONS = [
         "version": 2,
         "description": "allowed_countries → blocked_countries (смена allowlist на blocklist)",
         "sql": [],
+    },
+    {
+        "version": 3,
+        "description": "Удаление истории трафика и nft-счётчиков (графики убраны из UI)",
+        "sql": [
+            "DELETE FROM settings WHERE key IN ('traffic_collect_interval', 'traffic_history_hours')",
+            "DROP TABLE IF EXISTS traffic_history",
+        ],
     },
 ]
 
@@ -168,7 +170,6 @@ def init_db() -> None:
     c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_latency ON proxies(latency)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_source_id ON proxies(source_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_failed_since ON proxies(failed_since)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_traffic_history_collected_at ON traffic_history(collected_at)")
 
     # backfill security для старых строк
     from .vless import parse_vless
@@ -204,6 +205,7 @@ def init_db() -> None:
         "speed_test_enabled": "true",
         "speed_test_max": "15",
         "speed_test_url": "http://speedtest.selectel.ru/10MB",
+        "speed_test_min_sec": "10",
         "apply_after_test": "true",
         "balancer_strategy": "random",
         "handshake_timeout": "5",
@@ -217,9 +219,6 @@ def init_db() -> None:
         "max_workers": "15",
         "probe_timeout": "3",
         "xray_startup_retries": "15",
-        # Traffic monitoring
-        "traffic_collect_interval": "2",
-        "traffic_history_hours": "0.5",
         "db_check_auto_cleanup": "false",
         "import_proxy": "",
     }
@@ -332,6 +331,11 @@ class Settings:
         return max(1, int(cls.get("speed_test_adaptive_sec", "2")))
 
     @classmethod
+    def speed_test_min_sec(cls) -> int:
+        """Минимальная длительность замера скорости одного прокси, сек."""
+        return max(1, min(300, int(cls.get("speed_test_min_sec", "10"))))
+
+    @classmethod
     def max_workers(cls) -> int:
         """Количество параллельных воркеров для тестирования прокси."""
         return max(1, min(30, int(cls.get("max_workers", "10"))))
@@ -345,16 +349,6 @@ class Settings:
     def xray_startup_retries(cls) -> int:
         """Количество попыток дождаться старта Xray (каждая 0.1с)."""
         return max(5, min(50, int(cls.get("xray_startup_retries", "30"))))
-
-    @classmethod
-    def traffic_collect_interval(cls) -> int:
-        """Интервал сбора статистики трафика, секунд."""
-        return max(2, int(cls.get("traffic_collect_interval", "2")))
-
-    @classmethod
-    def traffic_history_hours(cls) -> float:
-        """Сколько часов хранить историю трафика."""
-        return max(0.5, float(cls.get("traffic_history_hours", "0.5")))
 
     @classmethod
     def import_proxy(cls) -> str:

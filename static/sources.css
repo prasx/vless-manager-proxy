@@ -7,6 +7,34 @@
 }
 .section-label::before { content:'// '; }
 
+/* Summary chips */
+.src-summary {
+  margin-left:auto;
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  align-items:center;
+  font-size:0.68rem;
+  color:var(--text-muted);
+}
+.src-summary span {
+  border:1px solid var(--border);
+  border-radius:3px;
+  padding:2px 8px;
+  white-space:nowrap;
+}
+.src-summary b { color:var(--text-primary); font-weight:600; }
+
+/* Card extra */
+.card .c-counts { font-size:0.72rem; color:var(--text-muted); }
+.card .c-counts .ok { color:var(--green); }
+.card .c-counts .bad { color:var(--red); }
+.modal-hint {
+  font-size:0.7rem;
+  color:var(--text-muted);
+  margin-top:8px;
+}
+
 .toolbar {
   display:flex;
   gap:8px;
@@ -144,15 +172,17 @@
 
 /* Modal dialog */
 .modal {
+  margin:auto;
   background:var(--bg-card);
   color:var(--text-primary);
   border:1px solid var(--border);
   border-radius:6px;
   padding:20px;
-  min-width:min(600px,90vw);
-  max-width:90vw;
+  width:min(640px, calc(100vw - 24px));
+  max-height:calc(100vh - 32px);
+  overflow:auto;
 }
-.modal::backdrop { background:rgba(0,0,0,0.6); }
+.modal::backdrop { background:rgba(0,0,0,0.55); }
 .modal-header {
   font-size:0.85rem;
   font-weight:600;

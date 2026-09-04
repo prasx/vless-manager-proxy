@@ -23,6 +23,7 @@
   --text-muted: #999999;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
+body.modal-open { overflow:hidden; }
 body {
   font-family: 'JetBrains Mono','Fira Code','Courier New',monospace;
   background: var(--bg);
@@ -168,6 +169,16 @@ input {
 }
 input:focus { outline:none; border-color:var(--border-hover); }
 input::placeholder { color:var(--text-muted); }
+input:disabled, select:disabled {
+  opacity:0.5;
+  cursor:not-allowed;
+}
+html[data-theme="dark"] input,
+html[data-theme="dark"] select,
+html[data-theme="dark"] input[type="range"] { color-scheme:dark; }
+input.input-invalid,
+select.input-invalid { border-color:var(--red); }
+input.input-invalid:focus { border-color:var(--red); }
 
 /* Table shared */
 .table-wrap {
@@ -295,19 +306,37 @@ td.id { color:var(--text-muted); }
   font-weight:400;
   margin-bottom:16px;
 }
+.settings-h2-sub {
+  font-size:0.68rem;
+  color:var(--text-muted);
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+  font-weight:400;
+}
 .form-row {
   display:flex;
   flex-direction:column;
   gap:4px;
   margin-bottom:12px;
+  flex-wrap:wrap;
 }
 .form-row label {
   color:var(--text-secondary);
   font-size:0.78rem;
 }
+.field-hint {
+  flex-basis:100%;
+  max-width:560px;
+  font-size:0.68rem;
+  color:var(--text-muted);
+  line-height:1.5;
+  margin:-2px 0 2px;
+}
+.field-hint code { color:var(--text-secondary); }
 @media(min-width:480px) {
   .form-row { flex-direction:row; align-items:center; gap:12px; }
   .form-row label { min-width:160px; font-size:0.82rem; }
+  .field-hint { margin-left:172px; margin-top:-6px; }
 }
 .input {
   background:var(--bg-secondary);
@@ -685,6 +714,18 @@ select.input { color-scheme:dark; }
   color:var(--orange);
   font-weight:600;
 }
+/* Validation errors (settings) */
+#validationPanel { margin-top:10px; }
+.validation-errors {
+  border:1px solid var(--red);
+  border-radius:4px;
+  background:rgba(248,113,113,0.07);
+  padding:10px 14px;
+  font-size:0.76rem;
+  color:var(--red);
+  line-height:1.5;
+}
+.validation-item { padding:1px 0; }
 /* API Reference */
 .api-ref {
   overflow-x:auto;

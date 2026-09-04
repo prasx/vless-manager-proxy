@@ -10,8 +10,8 @@ import time
 from flask import Blueprint, request, jsonify, Response
 
 from ..db import db_q, Settings
-from ..utils import add_log, moscow_str, now_utc, count_active_connections, list_active_connections, close_connection, flush_all_connections
-from config import SUBSCRIBE_FILE, SOCKS_PORT, HTTP_PORT
+from ..utils import add_log, moscow_str, now_utc, list_active_connections, close_connection, flush_all_connections
+from config import SUBSCRIBE_FILE
 from ..vless import parse_vless
 from ..proxy_manager import proxy_manager
 from ..importer import import_from_url, import_from_txt
@@ -76,12 +76,24 @@ def proxy_filter_clause(f):
         return "status='working'"
     elif f == "failed_recent":
         return "status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours'))"
+    elif f == "failed":
+        return "status='failed'"
     elif f == "top_speed":
         min_kbps = Settings.min_speed_kbps()
         if min_kbps > 0:
             return f"speed_kbps >= {min_kbps}"
         return "speed_kbps >= 5000"
     return ""
+
+
+def _reason_clause(reason):
+    """SQL-условие фильтра по причине отказа failed-прокси.
+    reason='none' — failed без сохранённой причины; иначе — last_error LIKE 'reason%'."""
+    if not reason:
+        return "", []
+    if reason == "none":
+        return "(status='failed' AND (last_error IS NULL OR last_error=''))", []
+    return "(status='failed' AND last_error LIKE ?)", [reason + "%"]
 
 
 def _blocked_countries_clause() -> tuple[str, list]:
@@ -94,12 +106,16 @@ def _blocked_countries_clause() -> tuple[str, list]:
     return "", []
 
 
-def _build_where(f, src, search) -> tuple[str, list]:
+def _build_where(f, src, search, reason="") -> tuple[str, list]:
     clauses = []
     params = []
     fc = proxy_filter_clause(f)
     if fc:
         clauses.append(fc)
+    rc, rparams = _reason_clause(reason)
+    if rc:
+        clauses.append(rc)
+        params.extend(rparams)
     bc_clause, bc_params = _blocked_countries_clause()
     if bc_clause:
         clauses.append(bc_clause)
@@ -119,13 +135,14 @@ def _build_where(f, src, search) -> tuple[str, list]:
 
 @api_bp.route("/proxies")
 def api_proxies():
-    """GET /api/proxies?filter=&source=&search=&limit=&offset= — список прокси с пагинацией."""
+    """GET /api/proxies?filter=&source=&search=&reason=&limit=&offset= — список прокси с пагинацией."""
     f = request.args.get("filter", "")
     src = request.args.get("source", "")
     search = request.args.get("search", "").strip()
+    reason = request.args.get("reason", "").strip()
     limit = request.args.get("limit", type=int)
     offset = request.args.get("offset", type=int, default=0)
-    where, params = _build_where(f, src, search)
+    where, params = _build_where(f, src, search, reason)
 
     total = db_q(f"SELECT COUNT(*) as c FROM proxies {where}", params)[0]["c"]
     limit_sql = ""
@@ -135,7 +152,7 @@ def api_proxies():
         limit_params = [limit, offset]
     order = "speed_kbps DESC" if f == "top_speed" else "status, latency"
     rows = db_q(
-        f"SELECT id, host, port, country, status, latency, latency_vless, speed_kbps, failed_since, security, link FROM proxies {where} ORDER BY {order}{limit_sql}",
+        f"SELECT id, host, port, country, status, latency, latency_vless, speed_kbps, failed_since, security, link, last_test_at, last_error FROM proxies {where} ORDER BY {order}{limit_sql}",
         params + limit_params,
     )
     if limit is not None:
@@ -153,21 +170,32 @@ def api_status():
     row = db_q(
         f"""SELECT
             COUNT(*) as total,
-            SUM(CASE WHEN status='working' THEN 1 ELSE 0 END) as working,
-            SUM(CASE WHEN status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours')) THEN 1 ELSE 0 END) as failed_recent,
-            SUM(CASE WHEN speed_kbps >= {top_threshold} THEN 1 ELSE 0 END) as top_speed,
-            SUM(CASE WHEN status='working' AND country='RU' THEN 1 ELSE 0 END) as ru,
-            SUM(CASE WHEN status='working' AND country != '' AND country != 'RU' THEN 1 ELSE 0 END) as world,
-            SUM(CASE WHEN source_id IS NULL THEN 1 ELSE 0 END) as unknown_count
+            COALESCE(SUM(CASE WHEN status='working' THEN 1 ELSE 0 END), 0) as working,
+            COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END), 0) as failed,
+            COALESCE(SUM(CASE WHEN status='failed' AND (failed_since IS NULL OR failed_since >= datetime('now', '-24 hours')) THEN 1 ELSE 0 END), 0) as failed_recent,
+            COALESCE(SUM(CASE WHEN speed_kbps >= {top_threshold} THEN 1 ELSE 0 END), 0) as top_speed,
+            COALESCE(SUM(CASE WHEN status='working' AND country='RU' THEN 1 ELSE 0 END), 0) as ru,
+            COALESCE(SUM(CASE WHEN status='working' AND country != '' AND country != 'RU' THEN 1 ELSE 0 END), 0) as world,
+            COALESCE(SUM(CASE WHEN source_id IS NULL THEN 1 ELSE 0 END), 0) as unknown_count
         FROM proxies {bc_where}""",
         bc_params if bc_clause else [],
     )[0]
     sources = db_q(
         "SELECT s.id, s.name, COUNT(p.id) cnt FROM sources s LEFT JOIN proxies p ON p.source_id = s.id GROUP BY s.id HAVING cnt > 0 ORDER BY s.name"
     )
+    # Причины отказов failed-прокси (для фильтра на дашборде)
+    reasons = db_q(
+        """SELECT
+             CASE WHEN last_error LIKE 'http %' THEN 'http' ELSE last_error END AS reason,
+             COUNT(*) AS cnt
+           FROM proxies
+           WHERE status='failed' AND last_error IS NOT NULL AND last_error != ''
+           GROUP BY reason ORDER BY cnt DESC, reason ASC LIMIT 10"""
+    )
     return jsonify(
         total=row["total"],
         working=row["working"],
+        failed=row["failed"],
         failed_recent=row["failed_recent"],
         top_speed=row["top_speed"],
         top_speed_threshold=top_threshold,
@@ -175,6 +203,7 @@ def api_status():
         world=row["world"],
         sources=[dict(r) for r in sources],
         unknown_count=row["unknown_count"],
+        reasons=[{"reason": r["reason"], "count": r["cnt"]} for r in reasons],
     )
 
 
@@ -218,16 +247,17 @@ def api_test(pid):
     rows = db_q("SELECT link FROM proxies WHERE id=?", (pid,))
     if not rows:
         return jsonify(error="Not found"), 404
-    ok, lat = proxy_manager.test_vless_real(rows[0]["link"])
-    proxy_manager._update_vless_status(pid, ok, lat if ok else 0)
+    ok, lat, err = proxy_manager.test_vless_real(rows[0]["link"])
+    proxy_manager._update_vless_status(pid, ok, lat if ok else 0, err if not ok else "")
     speed = 0
     if ok:
         speed = proxy_manager._test_speed_single(rows[0]["link"])
         if speed:
             db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (speed, pid))
     status = "working" if ok else "failed"
-    add_log("INFO", f"Tested proxy #{pid} → {status} ({lat}ms, {speed}kbps)")
-    return jsonify(status=status, latency=lat, speed=speed)
+    detail = f" ({lat}ms, {speed}kbps)" if ok else f" — {err}"
+    add_log("INFO", f"Tested proxy #{pid} → {status}{detail}")
+    return jsonify(status=status, latency=lat, speed=speed, error=err if not ok else None)
 
 
 @api_bp.route("/delete/<int:pid>", methods=["DELETE"])
@@ -280,13 +310,38 @@ def api_proxies_batch_test():
     return jsonify(success=True, queued=len(rows))
 
 
+@api_bp.route("/test-failed", methods=["POST"])
+def api_test_failed():
+    """POST /api/test-failed — перетест только failed-прокси (VLESS + speed test)."""
+    rows = db_q(
+        "SELECT id, link FROM proxies WHERE status='failed' ORDER BY id ASC"
+    )
+    if not rows:
+        return jsonify(success=True, queued=0)
+    threading.Thread(
+        target=proxy_manager.batch_test_vless,
+        args=(rows,),
+        kwargs={"label": "retest-failed"},
+        daemon=True,
+    ).start()
+    add_log("INFO", f"Retest failed queued: {len(rows)} proxies")
+    return jsonify(success=True, queued=len(rows))
+
+
 # ─── Источники ───
 
 
 @api_bp.route("/sources", methods=["GET"])
 def api_sources_list():
-    """GET /api/sources — список источников."""
-    rows = db_q("SELECT id, name, url, type, last_import, created_at FROM sources ORDER BY created_at DESC")
+    """GET /api/sources — список источников со счётчиками прокси."""
+    rows = db_q(
+        """SELECT
+             s.id, s.name, s.url, s.type, s.last_import, s.created_at,
+             (SELECT COUNT(*) FROM proxies p WHERE p.source_id = s.id) AS count,
+             (SELECT COUNT(*) FROM proxies p WHERE p.source_id = s.id AND p.status='working') AS working
+           FROM sources s
+           ORDER BY s.created_at DESC"""
+    )
     return jsonify([dict(r) for r in rows])
 
 
@@ -440,15 +495,15 @@ def api_settings_set():
     hint = None
     if d["systemd_active"]:
         if d["config_mismatch"]:
-            hint = f"Panel config ≠ systemd. Set path to: {d['systemd_config_path']}"
+            hint = f"Конфиг панели ≠ конфигу systemd. Укажите путь: {d['systemd_config_path']}"
         else:
-            hint = "sudo systemctl restart xray"
+            hint = "Требуется перезапуск: sudo systemctl restart xray"
     return jsonify(success=True, restart_hint=hint)
 
 
 _INT_KEYS = {
     "max_active_proxies", "vless_per_proxy_timeout", "log_trim_every", "log_keep",
-    "speed_test_max", "handshake_timeout", "conn_idle", "check_interval_db", "check_interval_import",
+    "speed_test_max", "speed_test_min_sec", "handshake_timeout", "conn_idle", "check_interval_db", "check_interval_import",
     "speed_test_adaptive_sec", "max_workers", "probe_timeout", "xray_startup_retries",
 }
 
@@ -843,61 +898,6 @@ def api_import():
     added = import_from_url(url)
     threading.Thread(target=proxy_manager.test_all_vless, daemon=True).start()
     return jsonify(success=True, added=added)
-
-
-# ─── Traffic history ───
-
-
-@api_bp.route("/traffic/current")
-def api_traffic_current():
-    """GET /api/traffic/current — трафик (nftables real-time + DB history) + активные соединения."""
-    from ..proxy_manager import proxy_manager
-
-    conns = count_active_connections([SOCKS_PORT, HTTP_PORT])
-    total_conn = conns.get(SOCKS_PORT, 0) + conns.get(HTTP_PORT, 0)
-    # nftables raw counters (real-time, для скорости)
-    nft_down, nft_up = proxy_manager.get_live_traffic()
-    # DB last row (график не дёргается)
-    last = db_q(
-        "SELECT collected_at, total_downlink, total_uplink FROM traffic_history ORDER BY id DESC LIMIT 1"
-    )
-    return jsonify(
-        downlink=last[0]["total_downlink"] if last else 0,
-        uplink=last[0]["total_uplink"] if last else 0,
-        nft_down_raw=nft_down,
-        nft_up_raw=nft_up,
-        active_outbounds=0,
-        active_connections=total_conn,
-        socls_conns=conns.get(SOCKS_PORT, 0),
-        http_conns=conns.get(HTTP_PORT, 0),
-    )
-
-
-@api_bp.route("/traffic/history")
-def api_traffic_history():
-    """GET /api/traffic/history?limit= — история трафика за последние N часов."""
-    limit = request.args.get("limit", type=int, default=900)
-    # усредняем до точек для графика — группируем по минутам
-    rows = db_q(
-        """SELECT
-            collected_at,
-            total_downlink,
-            total_uplink,
-            active_outbounds,
-            active_connections
-        FROM traffic_history
-        ORDER BY id DESC LIMIT ?""",
-        (limit,),
-    )
-    points = []
-    for r in reversed(rows):
-        points.append({
-            "t": r["collected_at"],
-            "down": r["total_downlink"],
-            "up": r["total_uplink"],
-            "conn": r["active_connections"],
-        })
-    return jsonify(points=points)
 
 
 # ─── Active connections ───

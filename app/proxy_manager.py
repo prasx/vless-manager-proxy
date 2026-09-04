@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 import signal
 import socket
 import subprocess
@@ -15,9 +14,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from config import SOCKS_PORT, HTTP_PORT
 from .db import db_q, Settings
-from .utils import add_log, now_utc, moscow_str, set_correlation_id, count_active_connections
+from .utils import add_log, now_utc, moscow_str, set_correlation_id
 from .importer import import_from_url, import_from_txt
 from .vless import parse_vless, stream_settings
 
@@ -79,38 +77,74 @@ class ProxyManager:
 
     # ─── VLESS test (single proxy) ───
 
-    def test_vless_real(self, link, timeout=3):
+    def test_vless_real(self, link, timeout=None):
         """Тестирует один VLESS-прокси через временный Xray-процесс.
-        Возвращает (ok, latency_ms).
+        timeout=None — берётся из настроек (vless_per_proxy_timeout),
+        чтобы одиночный тест из UI совпадал по таймауту с пакетным.
+        Возвращает (ok, latency_ms, error).
         """
-        xbin = Settings.xray_bin()
-        if not Path(xbin).is_file():
-            add_log("ERROR", f"VLESS test: xray binary not found at {xbin}")
-            return False, 0
-
+        if timeout is None:
+            timeout = Settings.vless_per_proxy_timeout()
         parsed = parse_vless(link)
         if not parsed:
-            return False, 0
-
+            return False, 0, "invalid link"
         return self._test_vless(parsed, timeout)
 
     @staticmethod
+    def _describe_probe_error(e) -> str:
+        """Превращает исключение HTTP-пробы в короткую человекочитаемую причину."""
+        if isinstance(e, urllib.error.HTTPError):
+            return f"http {e.code}"
+        reason = e.reason if isinstance(e, urllib.error.URLError) else e
+        msg = str(reason)
+        low = msg.lower()
+        if "timed out" in low or "timeout" in low:
+            return "timeout"
+        if "refused" in low:
+            return "connection refused"
+        if "reset" in low or "disconnected" in low or "aborted" in low:
+            return "connection reset"
+        if "getaddrinfo" in low or "name or service not known" in low:
+            return "dns lookup failed"
+        if "tls" in low or "ssl" in low or "certificate" in low:
+            return "tls error"
+        return (msg or type(e).__name__)[:100]
+
+    @staticmethod
     def _probe(http_port, timeout):
+        """HTTP-проба через локальный HTTP-прокси (Xray уже запущен).
+        Возвращает (ok, latency_ms, error).
+        Даёт второй шанс, если первый отказ был подозрительно быстрым —
+        такие отказы чаще всего транзиентные (blip сети, переиспользование соединения).
+        """
         probe_url = Settings.probe_url()
         proxy_url = f"http://127.0.0.1:{http_port}"
         proxy_handler = urllib.request.ProxyHandler(
             {"http": proxy_url, "https": proxy_url}
         )
         opener = urllib.request.build_opener(proxy_handler)
-        req_start = time.time()
-        try:
-            resp = opener.open(probe_url, timeout=max(2, timeout - 1))
-            ok = resp.status < 400
-            lat = int((time.time() - req_start) * 1000)
-            return ok, lat
-        except Exception as e:
-            add_log("DEBUG", f"Probe failed: {e}")
-            return False, 0
+        req_timeout = max(2, timeout - 1)
+        retry_cutoff = max(0.9, req_timeout * 0.5)
+        err = ""
+        for attempt in (1, 2):
+            req_start = time.time()
+            try:
+                resp = opener.open(probe_url, timeout=req_timeout)
+                ok = resp.status < 400
+                lat = int((time.time() - req_start) * 1000)
+                return ok, lat, ""
+            except Exception as e:
+                err = ProxyManager._describe_probe_error(e)
+                elapsed = time.time() - req_start
+                if attempt == 1 and elapsed < retry_cutoff:
+                    add_log(
+                        "DEBUG",
+                        f"Probe transient fail ({elapsed*1000:.0f}ms) — retrying: {err}",
+                    )
+                    continue
+                add_log("DEBUG", f"Probe failed after {elapsed*1000:.0f}ms: {err}")
+                return False, 0, err
+        return False, 0, err
 
     # ─── Xray proxy helpers ───
 
@@ -169,10 +203,11 @@ class ProxyManager:
 
     @staticmethod
     def _start_xray(parsed):
-        """Запускает Xray для одного прокси. Возвращает (proc, tmp_path, http_port) или (None, None, None)."""
+        """Запускает Xray для одного прокси.
+        Возвращает (proc, tmp_path, http_port, error) или (None, None, None, error)."""
         xbin = Settings.xray_bin()
         if not Path(xbin).is_file():
-            return None, None, None
+            return None, None, None, f"xray binary not found: {xbin}"
         http_port = ProxyManager._free_port()
         socks_port = ProxyManager._free_port()
         config = ProxyManager._xray_config(parsed, http_port, socks_port)
@@ -194,13 +229,13 @@ class ProxyManager:
                 try:
                     s = socket.create_connection(("127.0.0.1", http_port), timeout=0.3)
                     s.close()
-                    return proc, tmp_path, http_port
+                    return proc, tmp_path, http_port, ""
                 except (OSError, ConnectionRefusedError):
                     time.sleep(0.05)
         except Exception:
             pass
         ProxyManager._stop_xray(proc, tmp_path)
-        return None, None, None
+        return None, None, None, "xray start failed"
 
     @staticmethod
     def _stop_xray(proc, tmp_path):
@@ -235,15 +270,16 @@ class ProxyManager:
 
     @staticmethod
     def _test_vless(parsed, timeout):
-        """Запускает Xray с конфигом для одного прокси, тестирует, убивает."""
-        proc, tmp_path, http_port = ProxyManager._start_xray(parsed)
+        """Запускает Xray с конфигом для одного прокси, тестирует, убивает.
+        Возвращает (ok, latency_ms, error)."""
+        proc, tmp_path, http_port, err = ProxyManager._start_xray(parsed)
         if not proc:
-            return False, 0
+            return False, 0, err or "xray start failed"
         try:
             return ProxyManager._probe(http_port, timeout)
         except Exception as e:
             add_log("ERROR", f"VLESS test failed: {e}")
-            return False, 0
+            return False, 0, "internal test error"
         finally:
             ProxyManager._stop_xray(proc, tmp_path)
 
@@ -269,7 +305,13 @@ class ProxyManager:
     @staticmethod
     def _measure_url_kbps(http_port, url, timeout=15):
         """Скачивает URL через HTTP-прокси, возвращает kbps.
-        Adaptive: ранний выход если скорость явно выше min_speed."""
+
+        Окно замера длится минимум speed_test_min_sec (по умолчанию 10 с):
+        если файл кончился раньше, повторно открываем его, пока не наберём
+        минимальное время, либо не упрёмся в таймаут.
+        Adaptive: ранний выход только после минимального окна, если скорость
+        уже явно выше min_speed.
+        """
         proxy_url = f"http://127.0.0.1:{http_port}"
         proxy_handler = urllib.request.ProxyHandler(
             {"http": proxy_url, "https": proxy_url}
@@ -287,16 +329,27 @@ class ProxyManager:
             total = 0
             min_kbps = Settings.min_speed_kbps()
             adaptive_sec = Settings.speed_test_adaptive_sec()
+            min_sec = Settings.speed_test_min_sec()
             while True:
                 buf = resp.read(131072)
-                if not buf:
-                    break
-                total += len(buf)
                 elapsed = time.time() - req_start
+                if buf:
+                    total += len(buf)
+                if not buf:
+                    # Файл исчерпан. Если окно замера ещё не набрано — качаем ещё раз.
+                    if total > 0 and elapsed < min_sec and elapsed < timeout - 1:
+                        try:
+                            resp = opener.open(
+                                req, timeout=max(3, int(timeout - elapsed) + 1)
+                            )
+                            continue
+                        except Exception:
+                            break
+                    break
                 if elapsed >= timeout:
                     break
-                # Adaptive: если скорость уже явно выше порога — хватит
-                if min_kbps > 0 and elapsed >= adaptive_sec and total > 0:
+                # Adaptive: ранний выход только после минимального окна замера
+                if min_kbps > 0 and elapsed >= max(adaptive_sec, min_sec) and total > 0:
                     cur = int((total * 8) / (elapsed * 1000))
                     if cur >= min_kbps * 1.3:
                         return cur
@@ -311,7 +364,7 @@ class ProxyManager:
         parsed = parse_vless(link)
         if not parsed:
             return 0
-        proc, tmp_path, http_port = ProxyManager._start_xray(parsed)
+        proc, tmp_path, http_port, _err = ProxyManager._start_xray(parsed)
         if not proc:
             return 0
         try:
@@ -325,17 +378,18 @@ class ProxyManager:
     # ─── Status update ───
 
     @staticmethod
-    def _update_vless_status(pid, ok, lat_vless):
+    def _update_vless_status(pid, ok, lat_vless, error=""):
         now = now_utc()
+        err = (error or "").strip()[:200] or None
         if ok:
             db_q(
-                "UPDATE proxies SET status='working', latency=?, latency_vless=?, failed_since=NULL WHERE id=?",
-                (lat_vless, lat_vless, pid),
+                "UPDATE proxies SET status='working', latency=?, latency_vless=?, failed_since=NULL, last_test_at=?, last_error=NULL WHERE id=?",
+                (lat_vless, lat_vless, now, pid),
             )
         else:
             db_q(
-                "UPDATE proxies SET status='failed', latency=0, latency_vless=0, speed_kbps=0, failed_since=COALESCE(failed_since, ?) WHERE id=?",
-                (now, pid),
+                "UPDATE proxies SET status='failed', latency=0, latency_vless=0, speed_kbps=0, failed_since=COALESCE(failed_since, ?), last_test_at=?, last_error=? WHERE id=?",
+                (now, now, err, pid),
             )
 
     def _record_completion(self, label):
@@ -352,34 +406,49 @@ class ProxyManager:
     # ─── Single test entry point (from API) ───
 
     def test_and_update_vless(self, link):
-        ok, lat = self.test_vless_real(link)
+        ok, lat, err = self.test_vless_real(link)
         row = db_q("SELECT id FROM proxies WHERE link=?", (link,))
         if row:
-            self._update_vless_status(row[0]["id"], ok, lat if ok else 0)
-            add_log(
-                "INFO",
-                f"VLESS test {link[:50]} -> {'working' if ok else 'failed'} ({lat}ms)",
-            )
+            pid = row[0]["id"]
+            self._update_vless_status(pid, ok, lat if ok else 0, err if not ok else "")
+            detail = f" ({lat}ms)" if ok else f" — {err}"
+            add_log("INFO", f"VLESS test #{pid} -> {'working' if ok else 'failed'}{detail}")
 
     # ─── Parallel batch testing (spawn/kill + inline speed) ───
 
     def _test_one_spawn(self, r, timeout):
         """VLESS-тест одного прокси (без speed test — вынесен в отдельный проход)."""
+        if self._cancel.is_set():
+            # Отмена: не трогаем статус в БД, но прогресс держим консистентным
+            with self._progress_lock:
+                self.progress["done"] += 1
+            return r["id"], None
+
         parsed = parse_vless(r["link"])
         ok = False
         lat = 0
-        proc, tmp_path, http_port = ProxyManager._start_xray(parsed) if parsed else (None, None, None)
-        if proc:
-            ok, lat = ProxyManager._probe(http_port, timeout)
-            ProxyManager._stop_xray(proc, tmp_path)
-        self._update_vless_status(r["id"], ok, lat if ok else 0)
+        err = ""
+        if not parsed:
+            err = "invalid link"
+        else:
+            proc, tmp_path, http_port, start_err = ProxyManager._start_xray(parsed)
+            if proc:
+                ok, lat, err = ProxyManager._probe(http_port, timeout)
+                ProxyManager._stop_xray(proc, tmp_path)
+            else:
+                err = start_err or "xray start failed"
+        self._update_vless_status(r["id"], ok, lat if ok else 0, err if not ok else "")
         with self._progress_lock:
             self.progress["done"] += 1
             if ok:
                 self.progress["ok"] += 1
+                self._run_ok += 1
+            else:
+                key = ProxyManager._reason_bucket(err)
+                self._run_reasons[key] = self._run_reasons.get(key, 0) + 1
         add_log(
-            "INFO",
-            f"Test proxy #{r['id']} -> {'working' if ok else 'failed'} ({lat}ms)",
+            "DEBUG",
+            f"Test proxy #{r['id']} -> {'working (' + str(lat) + 'ms)' if ok else 'failed (' + err + ')'}",
         )
         return r["id"], ok
 
@@ -393,10 +462,15 @@ class ProxyManager:
         if speed_max <= 0:
             return
 
-        # Берём top-N рабочих прокси (отсортированы по latency)
+        # Берём top-N рабочих прокси из ТЕКУЩЕГО прогона (проверенных только что),
+        # отсортированных по latency — не тратим время на прокси из прошлых циклов.
+        row_ids = [r["id"] for r in rows if r.get("id")]
+        if not row_ids:
+            return
+        placeholders = ",".join("?" * len(row_ids))
         working = db_q(
-            "SELECT id, link FROM proxies WHERE status='working' ORDER BY latency_vless ASC LIMIT ?",
-            (speed_max,),
+            f"SELECT id, link FROM proxies WHERE id IN ({placeholders}) AND status='working' ORDER BY latency_vless ASC LIMIT ?",
+            row_ids + [speed_max],
         )
         if not working:
             return
@@ -409,7 +483,7 @@ class ProxyManager:
             parsed = parse_vless(r["link"])
             if not parsed:
                 continue
-            proc, tmp_path, http_port = ProxyManager._start_xray(parsed)
+            proc, tmp_path, http_port, _err = ProxyManager._start_xray(parsed)
             if not proc:
                 continue
             try:
@@ -423,6 +497,16 @@ class ProxyManager:
                 ProxyManager._stop_xray(proc, tmp_path)
         add_log("INFO", f"Speed test pass done: {tested}/{len(working)} measured ({label})")
 
+    @staticmethod
+    def _reason_bucket(err) -> str:
+        """Нормализует причину отказа для сводной статистики прогона."""
+        err = (err or "").strip()
+        if not err:
+            return "unknown"
+        if err.startswith("xray binary not found"):
+            return "xray binary not found"
+        return err[:60]
+
     def _run_batch(self, rows, label, timeout):
         if not rows:
             return
@@ -430,6 +514,8 @@ class ProxyManager:
         set_correlation_id(cid)
         with self._progress_lock:
             self.progress.update(running=True, total=len(rows), done=0, ok=0, label=label, started_at=time.time())
+            self._run_reasons = {}
+            self._run_ok = 0
         self._cancel.clear()
         try:
             add_log("INFO", f"Testing {label}: {len(rows)} proxies")
@@ -442,8 +528,6 @@ class ProxyManager:
                         for ff in futures:
                             ff.cancel()
                         break
-            vless_ok = self.progress["ok"]
-            vless_total = self.progress["total"]
             from .utils import enrich_all_unknown_countries
 
             enrich_all_unknown_countries()
@@ -451,10 +535,17 @@ class ProxyManager:
             # Speed test отдельным проходом (не блокирует VLESS-тест)
             self._run_speed_test_pass(rows, label)
 
-            add_log(
-                "INFO",
-                f"{label}: {vless_ok}/{vless_total} ok — {moscow_str()}",
-            )
+            with self._progress_lock:
+                ok_cnt = self.progress["ok"]
+                done_cnt = self.progress["done"]
+                reasons = sorted(self._run_reasons.items(), key=lambda kv: (-kv[1], kv[0]))
+            parts = [f"{k}: {v}" for k, v in reasons[:6]]
+            if len(reasons) > 6:
+                parts.append(f"прочие: {sum(v for _, v in reasons[6:])}")
+            summary = f"{label}: ok {ok_cnt}/{done_cnt}"
+            if parts:
+                summary += " · не работают: " + ", ".join(parts)
+            add_log("INFO", f"{summary} · {moscow_str()}")
         finally:
             self._record_completion(label)
 
@@ -474,12 +565,12 @@ class ProxyManager:
         xray_configurator.apply_all(blocking=True)
         return True
 
-    def batch_test_vless(self, rows):
+    def batch_test_vless(self, rows, label="batch-test"):
         """Возвращает True если тест запущен, False если пропущен."""
         if self._vless_busy:
             add_log("WARN", "Test already in progress, ignoring batch_test_vless")
             return False
-        self._bg_vless_batch(rows, "batch-test")
+        self._bg_vless_batch(rows, label)
         from .xray_configurator import xray_configurator
 
         xray_configurator.apply_all(blocking=True)
@@ -534,6 +625,12 @@ class ProxyManager:
                 from .xray_configurator import xray_configurator
 
                 if not xray_configurator.api_ok():
+                    continue
+
+                # Пока идёт тест, статусы в БД ещё меняются: если пересобирать
+                # конфиг в этот момент, получим ложный рассинхрон (напр. 4/23)
+                # и лишние рестарты Xray каждые 30 сек.
+                if self._vless_busy:
                     continue
 
                 max_active = Settings.max_active_proxies()
@@ -617,136 +714,6 @@ class ProxyManager:
             add_log("ERROR", f"DB check cycle crashed: {e}")
         finally:
             self._vless_busy = False
-
-
-    _nft_inited = False
-
-    def _nft_init(self):
-        """Удаляет старые iptables-compat правила, добавляет nftables счётчики на прокси-порты."""
-        if self._nft_inited:
-            return True
-        try:
-            # 1. Создаём таблицу + базовые цепочки, если их нет (на чистой Ubuntu их нет)
-            subprocess.run(["nft", "add", "table", "ip", "filter"],
-                           capture_output=True, timeout=5)
-            for name, hook in (
-                ("INPUT",  "type filter hook input priority 0;"),
-                ("OUTPUT", "type filter hook output priority 0;"),
-            ):
-                subprocess.run(
-                    ["nft", "add", "chain", "ip", "filter", name, "{" + hook + "}"],
-                    capture_output=True, timeout=5,
-                )
-            # 2. удаляем старые правила с jump VLESS_MGR (от iptables-compat) — у них handle в nft
-            for chain in ("INPUT", "OUTPUT"):
-                # получаем хендлы правил
-                r = subprocess.run(
-                    ["nft", "-a", "list", "chain", "ip", "filter", chain],
-                    capture_output=True, text=True, timeout=5,
-                )
-                for line in r.stdout.splitlines():
-                    if "jump VLESS_MGR" not in line:
-                        continue
-                    # match: ... # handle N
-                    m = re.search(r'# handle (\d+)', line)
-                    if m:
-                        h = m.group(1)
-                        subprocess.run(
-                            ["nft", "delete", "rule", "ip", "filter", chain, f"handle {h}"],
-                            capture_output=True, timeout=5,
-                        )
-            # удаляем старую цепочку VLESS_MGR (если осталась без правил)
-            subprocess.run(
-                ["nft", "delete", "chain", "ip", "filter", "VLESS_MGR"],
-                capture_output=True, timeout=5,
-            )
-            # добавляем свои правила-счётчики (в начало цепочки: insert = position 0)
-            for cmd in (
-                ["nft", "insert", "rule", "ip", "filter", "INPUT", "tcp", "dport", str(SOCKS_PORT), "counter", "accept"],
-                ["nft", "insert", "rule", "ip", "filter", "INPUT", "tcp", "dport", str(HTTP_PORT), "counter", "accept"],
-                ["nft", "insert", "rule", "ip", "filter", "OUTPUT", "tcp", "sport", str(SOCKS_PORT), "counter", "accept"],
-                ["nft", "insert", "rule", "ip", "filter", "OUTPUT", "tcp", "sport", str(HTTP_PORT), "counter", "accept"],
-            ):
-                subprocess.run(cmd, capture_output=True, timeout=5)
-            self._nft_inited = True
-            add_log("INFO", "nftables proxy counters added")
-            return True
-        except Exception as e:
-            add_log("WARN", f"nft init failed: {e}")
-            return False
-
-    def _nft_read(self):
-        """Читает кумулятивные байты из nftables (текстовый парсинг).
-        Возвращает (downlink_bytes=OUTPUT, uplink_bytes=INPUT)."""
-        down = 0; up = 0
-        socks = str(SOCKS_PORT); http = str(HTTP_PORT)
-        for chain, direction in (("OUTPUT", "down"), ("INPUT", "up")):
-            try:
-                r = subprocess.run(
-                    ["nft", "list", "chain", "ip", "filter", chain],
-                    capture_output=True, text=True, timeout=5,
-                )
-            except Exception as e:
-                add_log("DEBUG", f"nft read {chain}: {e}")
-                continue
-            for line in r.stdout.splitlines():
-                if socks not in line and http not in line:
-                    continue
-                m = re.search(r'bytes\s+(\d+)', line)
-                if m:
-                    val = int(m.group(1))
-                    if direction == "down":
-                        down += val
-                    else:
-                        up += val
-        return down, up
-
-    def _collect_traffic(self):
-        """Один цикл сбора: соединения через ss, трафик через nftables."""
-        try:
-            if not self._nft_inited:
-                self._nft_init()
-            raw_down, raw_up = self._nft_read()
-
-            conns = count_active_connections([SOCKS_PORT, HTTP_PORT])
-            total_conn = conns.get(SOCKS_PORT, 0) + conns.get(HTTP_PORT, 0)
-
-            db_q(
-                "INSERT INTO traffic_history (collected_at, total_downlink, total_uplink, active_outbounds, active_connections) VALUES (?, ?, ?, ?, ?)",
-                (now_utc(), raw_down, raw_up, 0, total_conn),
-            )
-
-            trim_hours = Settings.traffic_history_hours()
-            db_q(
-                f"DELETE FROM traffic_history WHERE collected_at < datetime('now', '-{trim_hours} hours')"
-            )
-        except Exception as e:
-            add_log("DEBUG", f"Traffic collector: {e}")
-
-    def traffic_collector_loop(self):
-        """Фоновый сборщик статистики трафика и активных соединений."""
-        add_log("INFO", "Traffic collector loop started")
-        # Первый сбор сразу
-        self._collect_traffic()
-        while not self._shutdown.is_set():
-            if self._shutdown.wait(timeout=Settings.traffic_collect_interval()):
-                break
-            self._collect_traffic()
-
-    def get_live_traffic(self):
-        """Возвращает (raw_down_bytes, raw_up_bytes) напрямую из nftables (real-time)."""
-        try:
-            if not self._nft_inited:
-                self._nft_init()
-            return self._nft_read()
-        except Exception as e:
-            add_log("DEBUG", f"get_live_traffic: {e}")
-            return 0, 0
-
-    def start_traffic_collector(self):
-        """Запускает фоновый поток сбора статистики трафика."""
-        t = threading.Thread(target=self.traffic_collector_loop, daemon=True)
-        t.start()
 
 
 proxy_manager = ProxyManager()

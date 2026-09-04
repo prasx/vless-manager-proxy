@@ -164,20 +164,6 @@ def enrich_country(pid, host):
 
 _enrich_lock = threading.Lock()
 
-def count_active_connections(ports: list[int]) -> dict[int, int]:
-    """Подсчитывает активные TCP-соединения на указанных портах (через netstat/ss)."""
-    result = {p: 0 for p in ports}
-    try:
-        conns = list_active_connections(ports)
-        for c in conns:
-            lp = c.get("local_port")
-            if lp in ports:
-                result[lp] = result.get(lp, 0) + 1
-    except Exception:
-        pass
-    return result
-
-
 def _get_conntrack_map():
     """Парсит conntrack, возвращает {(client_ip, client_port): (bytes_to_client, bytes_from_client)}.
     Тихий возврат {} если conntrack недоступен."""

@@ -31,9 +31,11 @@
 - **Тест с отменой** — Фоновый тест можно отменить через UI.
 - **SSE streaming** — Real-time прогресс тестов через Server-Sent Events.
 - **Массовые операции** — Чекбоксы, выбор всех, удалить/протестировать выбранные.
+- **Понятные причины отказов** — Для каждого failed-прокси хранится причина (timeout, connection refused, TLS и т.д.) и время последнего теста; отображаются прямо в списке.
+- **Фильтр по причине отказа** — На дашборде можно отфильтровать failed-прокси по причине (включая «без причины») и карточки failed/failed<24h.
+- **Перетест failed** — Кнопка «Перетест failed» запускает VLESS-тест только для нерабочих прокси (без перепроверки рабочих).
 - **Backup** — Экспорт/импорт настроек и источников в JSON.
-- **Traffic stats** — Активные outbound и узлы с трафиком.
-- **Live traffic graph** — Real-time график скорости (↓/↑) через nftables счётчики.
+- **Traffic stats** — Активные outbound и узлы с трафиком (без графиков).
 - **Connections monitor** — Модалка со списком активных TCP-соединений через прокси (кто, куда, сколько байт, закрытие по одному или всех).
 - **Анализатор соединений** — Per-IP группировка трафика, conntrack для per-connection байтов.
 - **Прогресс тестов** — Прогресс-бар в реальном времени.
@@ -97,6 +99,7 @@
 | speed_test_enabled | true | Замер скорости после VLESS |
 | speed_test_max | 15 | Сколько прокси тестировать |
 | speed_test_url | `http://speedtest.selectel.ru/10MB` | Файл для скачивания |
+| speed_test_min_sec | 10 | Мин. длительность замера скорости (сек) |
 | speed_test_adaptive_sec | 2 | Через сколько сек проверять порог (early exit) |
 
 ### Balancer
@@ -135,11 +138,11 @@
 
 ```bash
 sudo apt update
-sudo apt install -y unzip wget git python3 python3-pip python3-venv nftables conntrack
+sudo apt install -y unzip wget git python3 python3-pip python3-venv conntrack
 ```
 
-> **`nftables`** — требуется для счётчиков трафика (live speed graph, real-time bandwidth).
 > **`conntrack`** (conntrack-tools) — требуется для per-connection байтов (колонка ↓/↑ в модалке Connections).
+> Всё остальное работает и без conntrack.
 
 ### 2. Установка Xray
 
@@ -282,8 +285,8 @@ vless-manager/
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/proxies?filter=&source=&search=&limit=&offset=` | Список прокси с пагинацией и фильтрами |
-| GET | `/api/status` | Статистика (total, working, failed, top_speed, sources) |
+| GET | `/api/proxies?filter=&source=&search=&reason=&limit=&offset=` | Список прокси с пагинацией и фильтрами (`reason` — причина отказа failed) |
+| GET | `/api/status` | Статистика (total, working, failed, top_speed, sources, reasons) |
 | GET | `/api/countries` | Список стран с количеством, верификацией и blocked-статусом |
 | GET | `/api/test-progress` | Статус фонового теста |
 | GET | `/api/test-progress/stream` | SSE-поток обновлений test-progress |
@@ -295,7 +298,8 @@ vless-manager/
 | POST | `/api/cleanup` | Удалить все failed |
 | POST | `/api/proxies/batch-delete` | Удалить выбранные `{"ids": [1,2,3]}` |
 | POST | `/api/proxies/batch-test` | Тест выбранных |
-| GET | `/api/sources` | Список источников |
+| POST | `/api/test-failed` | Перетест только failed-прокси (VLESS + speed test) |
+| GET | `/api/sources` | Список источников (со счётчиками прокси и рабочих) |
 | POST | `/api/sources` | Добавить URL-источник `{"name":"...","url":"..."}` |
 | POST | `/api/sources/txt` | Добавить TXT-источник `{"name":"...","content":"vless://..."}` |
 | DELETE | `/api/sources/<id>` | Удалить источник |
@@ -319,8 +323,6 @@ vless-manager/
 | GET | `/api/subscribe.txt` | Subscription URL для клиентов |
 | GET | `/api/logs?limit=&offset=&level=` | Логи с фильтрацией |
 | POST | `/api/logs/clear` | Очистить логи |
-| GET | `/api/traffic/current` | Текущий трафик (nftables + connections) |
-| GET | `/api/traffic/history?limit=` | История трафика для графика |
 | GET | `/api/connections/list` | Активные TCP-соединения через прокси |
 | GET | `/api/connections/traffic` | Трафик сгруппированный по IP клиента |
 | POST | `/api/connections/close` | Закрыть соединение `{"remote_host","remote_port"}` |
