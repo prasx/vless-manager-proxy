@@ -3,20 +3,21 @@
 {% block page_title %}Настройки{% endblock %}
 {% block content %}
 
-<nav class="settings-nav">
+<nav class="settings-nav" id="settingsNav">
   <a href="#sec-xray">Xray</a>
   <a href="#sec-sniffing">Сниффинг</a>
-  <a href="#sec-filter">Конфиг и фильтры</a>
+  <a href="#sec-filter">Фильтры и страны</a>
   <a href="#sec-balancer">Балансировщик</a>
-  <a href="#sec-check">Проверка прокси</a>
-  <a href="#sec-speed">Тест скорости</a>
+  <a href="#sec-check">Проверка</a>
+  <a href="#sec-speed">Скорость</a>
   <a href="#sec-perf">Производительность</a>
   <a href="#sec-geo">GeoSite</a>
   <a href="#sec-network">Сеть</a>
-  <a href="#sec-system">Логи и бэкап</a>
+  <a href="#sec-system">Система</a>
+  <a href="#api-ref">API</a>
 </nav>
 
-<!-- ─── 1. Xray ─── -->
+<!-- ─── 1. Xray: пути + демон ─── -->
 <div class="settings-section" id="sec-xray">
   <div class="settings-cols">
     <div class="settings-col">
@@ -24,106 +25,26 @@
       <div class="form-row">
         <label>Бинарник Xray</label>
         <input type="text" id="xrayBin" class="input" placeholder="xray или /usr/local/bin/xray" spellcheck="false">
-        <span class="field-hint">Путь к исполняемому файлу Xray. Нужен для тестов прокси и применения конфига.</span>
+        <span class="field-hint">Исполняемый файл Xray — нужен для тестов прокси и применения конфига.</span>
       </div>
       <div class="form-row">
         <label>Файл конфига</label>
         <input type="text" id="xrayConfigPath" class="input" placeholder="/etc/xray/config.json" spellcheck="false">
-        <span class="field-hint">Куда панель пишет сгенерированный конфиг. Обычно <code>/etc/xray/config.json</code>.</span>
+        <span class="field-hint">Куда панель пишет сгенерированный конфиг.</span>
       </div>
       <div class="form-row">
         <label>Адрес прослушивания</label>
         <input type="text" id="proxyListen" class="input" placeholder="0.0.0.0 или 127.0.0.1" spellcheck="false">
-        <span class="field-hint">Для SOCKS/HTTP inbounds: <code>0.0.0.0</code> — доступ с LAN, <code>127.0.0.1</code> — только локально.</span>
+        <span class="field-hint"><code>0.0.0.0</code> — доступ с LAN, <code>127.0.0.1</code> — только локально.</span>
       </div>
     </div>
     <div class="settings-col settings-col-narrow">
       <h2>Демон <span class="settings-h2-sub">systemd</span></h2>
       <div id="xrayStatus" class="label label-daemon">// checking...</div>
       <div class="form-actions form-actions-wrap">
-        <button class="btn" id="btnXrayStart" onclick="if(confirm('Запустить Xray?'))startXrayDaemon()">Запустить</button>
-        <button class="btn btn-danger" id="btnXrayStop" onclick="if(confirm('Остановить Xray?'))stopXrayDaemon()">Остановить</button>
-        <button class="btn btn-apply" onclick="if(confirm('Перезапустить Xray?'))restartXray()">Перезапустить</button>
-      </div>
-      <p class="daemon-hint">Управление через systemd. Изменение адреса прослушивания требует перезапуска.</p>
-    </div>
-  </div>
-</div>
-
-<!-- ─── 2. Sniffing ─── -->
-<div class="settings-section" id="sec-sniffing">
-  <h2 class="settings-h2-row">
-    Сниффинг
-    <label class="settings-h2-toggle">
-      <input type="checkbox" id="sniffingEnabled">
-      Включено
-    </label>
-  </h2>
-  <p class="settings-desc">
-    Определение протокола трафика (HTTP, TLS, QUIC) прямо в Xray: нужно для корректной маршрутизации
-    и работы DNS/UDP через прокси. Обычно менять не требуется.
-  </p>
-  <div class="tuning-grid">
-    <div class="tuning-group">
-      <div class="tuning-item">
-        <span class="tuning-label">Только маршрутизация</span>
-        <input type="checkbox" id="sniffingRouteOnly" class="chk-inline" checked>
-        <span class="tuning-comment">не менять адрес назначения, только использовать для маршрутизации</span>
-      </div>
-    </div>
-    <div class="tuning-group">
-      <div class="tuning-item tuning-item-wrap">
-        <span class="tuning-label">Протоколы</span>
-        <div class="chk-group">
-          <label class="chk-label"><input type="checkbox" id="sniffHttp" class="chk-inline sniff-dest" checked> HTTP</label>
-          <label class="chk-label"><input type="checkbox" id="sniffTls" class="chk-inline sniff-dest" checked> TLS</label>
-          <label class="chk-label"><input type="checkbox" id="sniffQuic" class="chk-inline sniff-dest"> QUIC</label>
-          <label class="chk-label"><input type="checkbox" id="sniffFtp" class="chk-inline sniff-dest"> FTP</label>
-        </div>
-        <span class="tuning-comment">какие протоколы распознавать (destOverride)</span>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ─── 3. Config & Filter ─── -->
-<div class="settings-section" id="sec-filter">
-  <div class="settings-cols">
-    <div class="settings-col">
-      <h2>Конфиг и фильтры</h2>
-      <div class="form-row">
-        <label>Макс. активных</label>
-        <input type="number" id="maxActiveProxies" class="input input-narrow" placeholder="30" min="1" max="500">
-        <span class="field-hint">Сколько рабочих прокси попадает в конфиг и подписку (самые быстрые).</span>
-      </div>
-      <div class="form-row">
-        <label>URL проверки</label>
-        <div class="input-row">
-          <input type="text" id="probeUrl" class="input" placeholder="https://www.gstatic.com/generate_204" spellcheck="false">
-          <button class="btn btn-icon" onclick="resetProbeUrl()" title="Вернуть значение по умолчанию">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 2v6h-6M3 12a9 9 0 0 1 15.36-6.36L21 8M3 22v-6h6M21 12a9 9 0 0 1-15.36 6.36L3 16"/>
-            </svg>
-          </button>
-        </div>
-        <span class="field-hint">По нему проверяется работоспособность прокси (ожидается HTTP 2xx/3xx).</span>
-      </div>
-      <div class="form-row">
-        <label>Мин. скорость</label>
-        <div class="input-row">
-          <input type="number" id="minSpeedMbps" class="input input-tight" min="0" max="1000" step="0.1" placeholder="0">
-          <span class="tuning-suffix">Mbps</span>
-          <span class="tuning-comment">0 = без фильтра</span>
-        </div>
-        <span class="field-hint">Прокси медленнее этого порога не попадут в конфиг. <code>0</code> — учитывать всех.</span>
-      </div>
-      <div class="form-row">
-        <label>Только защищённые</label>
-        <div class="input-row">
-          <input type="checkbox" id="safeOnlyImport" class="chk-inline">
-          <span class="tuning-comment">импортировать только TLS/Reality</span>
-        </div>
-        <span class="field-hint">При импорте подписок пропускать прокси без шифрования (security=none).</span>
+        <button class="btn btn-sm" id="btnXrayStart" onclick="if(confirm('Запустить Xray?'))startXrayDaemon()">Запустить</button>
+        <button class="btn btn-sm btn-danger" id="btnXrayStop" onclick="if(confirm('Остановить Xray?'))stopXrayDaemon()">Остановить</button>
+        <button class="btn btn-sm btn-apply" onclick="if(confirm('Перезапустить Xray?'))restartXray()">Перезапустить</button>
       </div>
       <div class="settings-sep">
         <div class="settings-config-row">
@@ -131,14 +52,88 @@
           <button class="btn btn-sm btn-apply" onclick="if(confirm('Пересобрать конфиг сейчас?'))rebuildConfig()">Пересобрать</button>
         </div>
       </div>
+      <p class="daemon-hint">Управление через systemd. Смена адреса прослушивания требует перезапуска Xray.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ─── 2. Sniffing ─── -->
+<div class="settings-section tuning-section" id="sec-sniffing">
+  <div class="settings-cols">
+    <div class="settings-col">
+      <h2 class="settings-h2-row">
+        Сниффинг
+        <label class="settings-h2-toggle">
+          <input type="checkbox" id="sniffingEnabled">
+          Включён
+        </label>
+      </h2>
+      <p class="settings-desc">Определение протокола трафика (HTTP, TLS, QUIC) в Xray для корректной маршрутизации и DNS/UDP через прокси.</p>
+    </div>
+    <div class="settings-col">
+      <div class="tuning-group" style="margin-top:6px">
+        <div class="tuning-item tuning-item-wrap">
+          <span class="tuning-label">Протоколы</span>
+          <div class="chk-group">
+            <label class="chk-label"><input type="checkbox" id="sniffHttp" class="chk-inline sniff-dest" checked> HTTP</label>
+            <label class="chk-label"><input type="checkbox" id="sniffTls" class="chk-inline sniff-dest" checked> TLS</label>
+            <label class="chk-label"><input type="checkbox" id="sniffQuic" class="chk-inline sniff-dest"> QUIC</label>
+            <label class="chk-label"><input type="checkbox" id="sniffFtp" class="chk-inline sniff-dest"> FTP</label>
+          </div>
+          <span class="tuning-comment">какие протоколы распознавать (destOverride)</span>
+        </div>
+        <div class="tuning-item">
+          <span class="tuning-label">Только маршрутизация</span>
+          <input type="checkbox" id="sniffingRouteOnly" class="chk-inline" checked>
+          <span class="tuning-comment">не менять адрес назначения</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── 3. Config + Country filter ─── -->
+<div class="settings-section tuning-section" id="sec-filter">
+  <div class="settings-cols">
+    <div class="settings-col">
+      <h2>Конфиг и фильтры</h2>
+      <div class="tuning-group">
+        <div class="tuning-item">
+          <span class="tuning-label">Макс. активных</span>
+          <input type="number" id="maxActiveProxies" class="input input-narrow" placeholder="30" min="1" max="500">
+          <span class="tuning-suffix">прокси</span>
+          <span class="tuning-comment">сколько самых быстрых попадает в конфиг и подписку</span>
+        </div>
+        <div class="tuning-item">
+          <span class="tuning-label">URL проверки</span>
+          <div class="input-row">
+            <input type="text" id="probeUrl" class="input" placeholder="https://www.gstatic.com/generate_204" spellcheck="false">
+            <button class="btn btn-icon" onclick="resetProbeUrl()" title="Сбросить к значению по умолчанию">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15.36-6.36L21 8M3 22v-6h6M21 12a9 9 0 0 1-15.36 6.36L3 16"/></svg>
+            </button>
+          </div>
+          <span class="tuning-comment">ожидается HTTP 2xx/3xx</span>
+        </div>
+        <div class="tuning-item">
+          <span class="tuning-label">Мин. скорость</span>
+          <div class="input-row">
+            <input type="number" id="minSpeedMbps" class="input input-tight" min="0" max="1000" step="0.1" placeholder="0">
+            <span class="tuning-suffix">Mbps</span>
+            <span class="tuning-comment">0 = без фильтра; ниже порога — не в конфиг</span>
+          </div>
+        </div>
+        <div class="tuning-item">
+          <span class="tuning-label">Только TLS/Reality</span>
+          <input type="checkbox" id="safeOnlyImport" class="chk-inline">
+          <span class="tuning-comment">пропускать security=none при импорте</span>
+        </div>
+      </div>
     </div>
     <div class="settings-col settings-col-narrow">
       <h2>Фильтр стран</h2>
       <p class="settings-muted-label">Отмеченные страны исключаются из конфига и подписки</p>
-      <div id="countryVerifyBadge" style="font-size:0.72rem;color:var(--text-muted);margin-bottom:6px"></div>
-      <div class="country-filter-search">
-        <input type="text" id="countryFilterSearch" class="input" placeholder="Поиск по коду страны..." style="width:100%;box-sizing:border-box" spellcheck="false">
-      </div>
+      <div id="countryVerifyBadge" class="settings-muted-label" style="margin-bottom:6px"></div>
+      <input type="text" id="countryFilterSearch" class="input country-filter-search" placeholder="Поиск по коду страны…" spellcheck="false">
       <div class="country-filter-list">
         <table class="country-filter-table">
           <tbody id="countryFilterBody"></tbody>
@@ -157,15 +152,12 @@
 <!-- ─── 4. Balancer ─── -->
 <div class="settings-section tuning-section" id="sec-balancer">
   <h2>Балансировщик</h2>
-  <p class="settings-desc">
-    Xray Observatory следит за состоянием узлов и распределяет трафик. Эти параметры попадают
-    в observatory-секцию конфига; обычно хватает значений по умолчанию.
-  </p>
+  <p class="settings-desc">Xray Observatory следит за узлами и распределяет трафик. Обычно хватает значений по умолчанию.</p>
   <div class="tuning-grid">
     <div class="tuning-group">
       <div class="tuning-item">
         <span class="tuning-label">Стратегия</span>
-        <select id="balancerStrategy" class="input" style="width:auto;min-width:150px">
+        <select id="balancerStrategy" class="input" style="width:auto;min-width:170px">
           <option value="leastLoad">leastLoad — минимальная нагрузка</option>
           <option value="leastPing">leastPing — минимальный пинг</option>
           <option value="random">random — случайный</option>
@@ -191,10 +183,10 @@
         <span class="tuning-suffix">сек</span>
         <span class="tuning-comment">закрывать соединение после простоя</span>
       </div>
+      <div class="form-actions">
+        <button class="btn btn-sm" onclick="resetTuning()">Сбросить к заводским</button>
+      </div>
     </div>
-  </div>
-  <div class="form-actions">
-    <button class="btn" onclick="resetTuning()">Сбросить тюнинг к значениям по умолчанию</button>
   </div>
 </div>
 
@@ -202,8 +194,9 @@
 <div class="settings-section tuning-section" id="sec-check">
   <h2>Проверка прокси</h2>
   <div class="tuning-notice">
-    <strong>⚠️</strong> Import+Check имеет приоритет — два режима никогда не запускаются одновременно.
-    При ~2500 профилях полный прогон занимает ~10–15 мин (таймаут на прокси 3–5 сек).
+    <strong>⚠️</strong> Любой прогон строго поэтапный: <b>проверка работоспособности всех профилей → пинг рабочих
+    (медиана 3 проб) → замер скорости топ-N рабочих (по одному профилю, окно из настроек ниже)</b>. Замеры скорости
+    идут в самую последнюю очередь и только по рабочим профилям; Import+Check и DB-проверка не запускаются одновременно.
   </div>
   <div class="tuning-cards">
     <div class="tuning-card">
@@ -212,21 +205,15 @@
         <span class="tuning-card-title">Проверка из БД</span>
         <span class="tuning-card-badge badge badge-green">каждые <span id="checkIntervalDbLabel">30 мин</span></span>
       </div>
-      <p class="tuning-card-desc">VLESS-тест прокси из базы + сборка конфига. Без импорта подписок.</p>
       <div class="tuning-card-control">
         <label>Интервал</label>
         <input type="range" id="checkIntervalDb" class="tuning-range" min="0.25" max="5" step="0.25" value="0.25">
-        <div class="tuning-range-labels">
-          <span>15 мин</span>
-          <span>1 ч</span>
-          <span>3 ч</span>
-          <span>5 ч</span>
-        </div>
+        <div class="tuning-range-labels"><span>15 мин</span><span>1 ч</span><span>3 ч</span><span>5 ч</span></div>
       </div>
-      <div class="tuning-item" style="margin-top:10px">
+      <div class="tuning-item" style="border-bottom:none;padding-top:10px">
         <span class="tuning-label">Авто-очистка</span>
         <input type="checkbox" id="dbCheckAutoCleanup" class="chk-inline">
-        <span class="tuning-comment">удалять нерабочие прокси после проверки</span>
+        <span class="tuning-comment">удалять нерабочие после проверки</span>
       </div>
     </div>
     <div class="tuning-card">
@@ -235,27 +222,22 @@
         <span class="tuning-card-title">Импорт + проверка</span>
         <span class="tuning-card-badge badge badge-orange">каждые <span id="checkIntervalImportLabel">3 ч</span></span>
       </div>
-      <p class="tuning-card-desc">Импорт из всех источников → определение стран → VLESS-тест → сборка конфига.</p>
       <div class="tuning-card-control">
         <label>Интервал</label>
         <input type="range" id="checkIntervalImport" class="tuning-range" min="1" max="24" step="0.5" value="3">
-        <div class="tuning-range-labels">
-          <span>1 ч</span>
-          <span>8 ч</span>
-          <span>16 ч</span>
-          <span>24 ч</span>
-        </div>
+        <div class="tuning-range-labels"><span>1 ч</span><span>8 ч</span><span>16 ч</span><span>24 ч</span></div>
       </div>
+      <p class="tuning-card-desc" style="margin-bottom:0;padding-top:8px;border-top:1px solid var(--border)">Импорт источников → проверка → пинг → скорость → конфиг. Ручной импорт тест не запускает.</p>
     </div>
   </div>
-  <div class="tuning-grid">
+  <div class="tuning-grid" style="margin-top:14px">
     <div class="tuning-group">
-      <h3>Таймаут теста одного прокси</h3>
+      <h3>Таймаут одной пробы</h3>
       <div class="tuning-item">
-        <span class="tuning-label">VLESS-тест</span>
+        <span class="tuning-label">Проба (проверка/пинг)</span>
         <input type="number" id="vlessPerProxyTimeout" class="input" min="2" max="30" style="width:80px">
         <span class="tuning-suffix">сек</span>
-        <span class="tuning-comment">3–5 сек при 2500 прокси ≈ 15 мин</span>
+        <span class="tuning-comment">3–5 сек при 2500 профилей ≈ 15 мин на стадию проверки</span>
       </div>
     </div>
     <div class="tuning-group">
@@ -263,7 +245,7 @@
       <div class="tuning-item">
         <span class="tuning-label">Применять конфиг</span>
         <input type="checkbox" id="applyAfterTest" class="chk-inline" checked>
-        <span class="tuning-comment">пересобрать конфиг Xray после теста</span>
+        <span class="tuning-comment">пересобрать конфиг Xray после прогона</span>
       </div>
     </div>
   </div>
@@ -272,43 +254,39 @@
 <!-- ─── 6. Speed Test ─── -->
 <div class="settings-section tuning-section" id="sec-speed">
   <h2>Тест скорости</h2>
-  <p class="settings-desc">
-    Замер пропускной способности после VLESS-теста. Скорость — главный фактор ранжирования
-    в конфиге: чем быстрее прокси, тем выше приоритет.
-  </p>
   <div id="speedTestBody">
     <div class="tuning-grid">
       <div class="tuning-group">
         <div class="tuning-item">
           <span class="tuning-label">Включён</span>
-          <input type="checkbox" id="speedTestEnabled" class="input" style="width:auto;height:auto;margin:0" checked>
+          <input type="checkbox" id="speedTestEnabled" class="chk-inline" checked>
         </div>
         <div class="tuning-item">
           <span class="tuning-label">Топ-N</span>
           <input type="number" id="speedTestMax" class="input" min="1" max="100" style="width:80px">
           <span class="tuning-suffix">прокси</span>
-          <span class="tuning-comment">сколько лучших замерять на скорость</span>
+          <span class="tuning-comment">сколько лучших по пингу замерять на скорость</span>
         </div>
       </div>
       <div class="tuning-group">
-        <div class="tuning-item" style="flex-wrap:wrap">
+        <div class="tuning-item tuning-item-wrap">
           <span class="tuning-label">Файл замера</span>
-          <input type="text" id="speedTestUrl" class="input" placeholder="http://..." style="flex:1;min-width:200px" spellcheck="false">
-          <span class="tuning-comment">если недоступен — используются запасные URL</span>
+          <input type="text" id="speedTestUrl" class="input" placeholder="http://…" style="flex:1;min-width:200px" spellcheck="false">
+          <span class="tuning-comment">если недоступен — крупные запасные файлы</span>
+        </div>
+        <div class="tuning-item">
+          <span class="tuning-label">Длительность одного профиля</span>
+          <input type="number" id="speedTestMinSec" class="input" min="1" max="300" style="width:80px">
+          <span class="tuning-suffix">сек</span>
+          <span class="tuning-comment">фиксированное окно (рекомендуется 10)</span>
         </div>
         <div class="tuning-item">
           <span class="tuning-label">Адаптивная проверка</span>
           <input type="number" id="speedTestAdaptiveSec" class="input" min="1" max="10" style="width:70px">
           <span class="tuning-suffix">сек</span>
-          <span class="tuning-comment">когда проверять, что скорость выше порога (ранний выход)</span>
+          <span class="tuning-comment">ранний выход только при заданном пороге «Мин. скорость»</span>
         </div>
       </div>
-    </div>
-    <div class="tuning-item tuning-item-wrap" style="margin-top:8px;border-top:1px solid var(--border);padding-top:12px">
-      <span class="tuning-label">Мин. длительность замера</span>
-      <input type="number" id="speedTestMinSec" class="input" min="1" max="300" style="width:80px">
-      <span class="tuning-suffix">сек</span>
-      <span class="tuning-comment">не завершать замер раньше N секунд — стабильная средняя скорость (рекомендуется 10)</span>
     </div>
   </div>
 </div>
@@ -316,17 +294,14 @@
 <!-- ─── 7. Performance ─── -->
 <div class="settings-section tuning-section" id="sec-perf">
   <h2>Производительность</h2>
-  <p class="settings-desc">
-    Параллельность тестирования и таймауты. Больше воркеров — быстрее прогон, но выше нагрузка
-    на CPU и число одновременных Xray-процессов.
-  </p>
+  <p class="settings-desc">Параллельность стадий проверки и пинга. Замер скорости всегда последовательный — по одному профилю.</p>
   <div class="tuning-grid">
     <div class="tuning-group">
       <div class="tuning-item">
         <span class="tuning-label">Воркеров</span>
         <input type="number" id="maxWorkers" class="input" min="1" max="30" style="width:80px">
         <span class="tuning-suffix">шт</span>
-        <span class="tuning-comment">сколько прокси тестировать одновременно</span>
+        <span class="tuning-comment">одновременных Xray-процессов в проверке/пинге</span>
       </div>
       <div class="tuning-item">
         <span class="tuning-label">Проба (таймаут)</span>
@@ -334,15 +309,14 @@
         <span class="tuning-suffix">сек</span>
         <span class="tuning-comment">2–5 сек оптимально</span>
       </div>
+      <div class="tuning-item">
+        <span class="tuning-label">Ожидание старта Xray</span>
+        <input type="number" id="xrayStartupRetries" class="input" min="5" max="50" style="width:80px">
+        <span class="tuning-suffix">×0.05с</span>
+      </div>
     </div>
     <div class="tuning-group">
       <div class="tuning-item">
-        <span class="tuning-label">Ожидание старта</span>
-        <input type="number" id="xrayStartupRetries" class="input" min="5" max="50" style="width:80px">
-        <span class="tuning-suffix">×0.05с</span>
-        <span class="tuning-comment">максимум ожидания подъёма Xray для одного теста</span>
-      </div>
-      <div class="tuning-item" id="perfEstimate" style="margin-top:8px">
         <span class="tuning-label">Оценка прогона</span>
         <span id="perfEstValue" style="font-size:0.9rem;font-weight:600;color:var(--green)">—</span>
         <span class="tuning-comment" id="perfEstDetail"></span>
@@ -352,18 +326,17 @@
 </div>
 
 <!-- ─── 8. GeoSite Rules ─── -->
-<div class="settings-section" id="sec-geo">
+<div class="settings-section tuning-section" id="sec-geo">
   <h2 class="settings-h2-row">
     Правила GeoSite
     <label class="settings-h2-toggle">
       <input type="checkbox" id="geoEnabled">
       Использовать GeoIP/GeoSite
     </label>
+    <button class="btn btn-sm" style="margin-left:auto" onclick="addGeositeRule()">+ Добавить правило</button>
   </h2>
   <details class="tuning-notice geosite-cheatsheet">
-    <summary style="cursor:pointer;font-weight:bold;color:var(--text-primary)">
-      🧭 Шпаргалка по категориям
-    </summary>
+    <summary style="cursor:pointer;font-weight:bold;color:var(--text-primary)">🧭 Шпаргалка по категориям</summary>
     <p style="margin:8px 0 4px;color:var(--text-muted)">
       <a href="https://github.com/runetfreedom/russia-v2ray-rules-dat" target="_blank" style="color:var(--green)">runetfreedom</a> ·
       <strong>direct</strong> — напрямую, <strong>proxy</strong> — через балансер
@@ -371,64 +344,39 @@
     <table style="width:100%;border-collapse:collapse;margin-top:6px">
       <tr style="border-bottom:1px solid var(--border)">
         <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🎯 Стандартные</td>
-        <td style="padding:3px 6px">
-          <code>google</code> <code>youtube</code> <code>netflix</code> <code>telegram</code>
-          <code>twitter</code> <code>instagram</code> <code>discord</code> <code>meta</code>
-          <code>openai</code> <code>category-ads</code>
-        </td>
+        <td style="padding:3px 6px"><code>google</code> <code>youtube</code> <code>netflix</code> <code>telegram</code> <code>twitter</code> <code>instagram</code> <code>discord</code> <code>meta</code> <code>openai</code> <code>category-ads</code></td>
       </tr>
       <tr style="border-bottom:1px solid var(--border)">
         <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🇷🇺 Россия</td>
-        <td style="padding:3px 6px">
-          <code>geosite:ru-blocked</code> → <strong style="color:#ed8936">proxy</strong>
-          <code>geosite:ru-blocked-all</code> → <strong style="color:#ed8936">proxy</strong><br>
-          <code>geosite:ru-available-only-inside</code> → <strong style="color:var(--green)">direct</strong>
-          <code>geosite:antifilter-download</code> <code>geosite:refilter</code>
-        </td>
+        <td style="padding:3px 6px"><code>geosite:ru-blocked</code> → <strong style="color:#ed8936">proxy</strong> <code>geosite:ru-blocked-all</code> → <strong style="color:#ed8936">proxy</strong><br><code>geosite:ru-available-only-inside</code> → <strong style="color:var(--green)">direct</strong> <code>geosite:antifilter-download</code> <code>geosite:refilter</code></td>
       </tr>
       <tr style="border-bottom:1px solid var(--border)">
         <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🪟 Windows</td>
-        <td style="padding:3px 6px">
-          <code>geosite:win-spy</code> <code>geosite:win-update</code> <code>geosite:win-extra</code>
-        </td>
+        <td style="padding:3px 6px"><code>geosite:win-spy</code> <code>geosite:win-update</code> <code>geosite:win-extra</code></td>
       </tr>
       <tr>
         <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">🌍 IP (geoip)</td>
-        <td style="padding:3px 6px">
-          <code>geoip:ru</code> <code>geoip:private</code> — всегда <strong style="color:var(--green)">direct</strong><br>
-          <span style="color:var(--text-muted);font-size:0.72rem">⚡ geoip: правила работают только с полем <code>ip</code>, не <code>domain</code></span>
-        </td>
+        <td style="padding:3px 6px"><code>geoip:ru</code> <code>geoip:private</code> — всегда <strong style="color:var(--green)">direct</strong><br><span style="color:var(--text-muted);font-size:0.72rem">⚡ geoip работает с полем <code>ip</code>, не <code>domain</code></span></td>
       </tr>
     </table>
   </details>
   <div id="geositeRulesWrap"></div>
-  <p class="settings-muted-label" style="margin:10px 0 0">Изменения правил сохраняются кнопкой «Сохранить настройки» внизу страницы и применяются к конфигу автоматически.</p>
-  <div class="form-actions">
-    <button class="btn" onclick="addGeositeRule()">+ Добавить правило</button>
-  </div>
+  <p class="settings-muted-label">Правила применяются кнопкой «Сохранить настройки» внизу и пересобирают конфиг автоматически.</p>
 </div>
 
 <!-- ─── 9. Network ─── -->
-<div class="settings-section" id="sec-network">
+<div class="settings-section tuning-section" id="sec-network">
   <h2>Сеть</h2>
-  <p class="settings-desc">
-    Настройки сети для импорта подписок. Если сервер находится в России и не может подключиться к источникам (raw.githack.com и др.), задайте прокси для обхода блокировок.
-  </p>
-  <div class="tuning-grid">
-    <div class="tuning-group">
-      <div class="tuning-item">
-        <span class="tuning-label">Прокси для импорта</span>
-        <input type="text" id="importProxy" class="input" placeholder="socks5://127.0.0.1:1080 или http://proxy:8080" style="flex:1;min-width:250px" spellcheck="false">
-      </div>
-      <div class="tuning-item" style="border-bottom:none">
-        <span class="tuning-comment" style="display:block;margin:4px 0 0 0;font-style:normal">Формат: <code>socks5://…</code> или <code>http://…</code>. Пусто — напрямую. Поддерживается и env <code>IMPORT_PROXY</code>.</span>
-      </div>
-    </div>
+  <p class="settings-desc">Прокси для загрузки подписок, если сервер не достаёт источники напрямую (DPI/блокировки).</p>
+  <div class="tuning-item tuning-item-wrap" style="border-bottom:none">
+    <span class="tuning-label">Прокси для импорта</span>
+    <input type="text" id="importProxy" class="input" placeholder="socks5://127.0.0.1:1080 или http://proxy:8080" style="flex:1;min-width:260px" spellcheck="false">
+    <span class="tuning-comment">формат <code>socks5://…</code>/<code>http://…</code>; пусто — напрямую; поддерживается env <code>IMPORT_PROXY</code></span>
   </div>
 </div>
 
 <!-- ─── 10. Logging + Backup ─── -->
-<div class="settings-section" id="sec-system">
+<div class="settings-section tuning-section" id="sec-system">
   <div class="settings-cols">
     <div class="settings-col">
       <h2>Логи</h2>
@@ -436,13 +384,13 @@
         <span class="tuning-label">Чистить каждые</span>
         <input type="number" id="logTrimEvery" class="input" min="10" max="99999" style="width:90px">
         <span class="tuning-suffix">записей</span>
-        <span class="tuning-comment">после скольких новых записей запускать чистку</span>
+        <span class="tuning-comment">после скольких новых записей чистить</span>
       </div>
       <div class="tuning-item">
         <span class="tuning-label">Хранить</span>
         <input type="number" id="logKeep" class="input" min="100" max="99999" style="width:90px">
         <span class="tuning-suffix">записей</span>
-        <span class="tuning-comment">сколько последних записей оставлять</span>
+        <span class="tuning-comment">сколько последних оставлять</span>
       </div>
     </div>
     <div class="settings-col settings-col-narrow">
@@ -457,49 +405,40 @@
   </div>
 </div>
 
-<details class="settings-section api-ref">
+<details class="settings-section api-ref" id="api-ref">
   <summary class="api-ref-summary">API-справочник <span class="api-ref-arrow">▸</span></summary>
   <table class="api-ref-table">
-    <thead>
-      <tr>
-        <th>Метод</th>
-        <th>Путь</th>
-        <th>Описание</th>
-      </tr>
-    </thead>
+    <thead><tr><th>Метод</th><th>Путь</th><th>Описание</th></tr></thead>
     <tbody>
-      <tr><td class="api-method-get">GET</td><td><code>/api/proxies?filter=&amp;reason=&amp;source=&amp;limit=&amp;offset=</code></td><td>Список прокси с пагинацией (reason — причина отказа)</td></tr>
-      <tr><td class="api-method-get">GET</td><td><code>/api/status</code></td><td>Статистика (total, working, failed, top_speed, reasons, sources)</td></tr>
-      <tr><td class="api-method-get">GET</td><td><code>/api/countries</code></td><td>Список стран с enabled-статусом</td></tr>
-      <tr><td class="api-method-get">GET</td><td><code>/api/test-progress</code></td><td>Прогресс фонового VLESS-теста</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/test-progress</code></td><td>Статус поэтапного прогона (stages, phase, счётчики)</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/proxies?filter=&amp;reason=&amp;source=&amp;limit=&amp;offset=</code></td><td>Список прокси с пагинацией и фильтрами</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/status</code></td><td>Статистика (total, working, failed, top_speed, reasons)</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/countries</code></td><td>Страны с blocked-статусом</td></tr>
       <tr><td class="api-method-get">GET</td><td><code>/api/settings</code></td><td>Все настройки</td></tr>
       <tr><td class="api-method-get">GET</td><td><code>/api/sources</code></td><td>Список источников</td></tr>
-      <tr><td class="api-method-get">GET</td><td><code>/api/xray/status</code></td><td>Статус Xray (running, API, systemd, outbounds)</td></tr>
-      <tr><td class="api-method-get">GET</td><td><code>/api/xray/outbounds</code></td><td>Список узлов и трафик</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/xray/status</code></td><td>Статус Xray</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/xray/outbounds</code></td><td>Узлы и трафик</td></tr>
       <tr><td class="api-method-get">GET</td><td><code>/api/geosite-rules</code></td><td>Список geosite-правил</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/geosite-rules</code></td><td>Сохранить geosite-правила <code>{"rules":[...]}</code></td></tr>
-      <tr><td class="api-method-get">GET</td><td><code>/api/logs?limit=&amp;offset=&amp;level=</code></td><td>Логи с пагинацией и фильтром</td></tr>
-      <tr><td class="api-method-get">GET</td><td><code>/api/subscribe.txt</code></td><td>Подписка (только VLESS-верифицированные) — <a href="/api/subscribe.txt" target="_blank" class="api-link">open</a></td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/add</code></td><td>Добавить прокси + тест + определение страны</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/test/&lt;id&gt;</code></td><td>VLESS-тест одного прокси</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/test-all</code></td><td>VLESS-тест всех прокси (параллельно)</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/test-failed</code></td><td>Перетест только неработающих прокси</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/geosite-rules</code></td><td>Сохранить geosite-правила</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/logs?limit=&amp;offset=&amp;level=</code></td><td>Логи с пагинацией</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/subscribe.txt</code></td><td>Подписка — <a href="/api/subscribe.txt" target="_blank" class="api-link">open</a></td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/add</code></td><td>Добавить прокси; тест стартует, если нет другого замера</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/test/&lt;id&gt;</code></td><td>Поэтапный тест одного прокси (409 при занятости)</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/test-all</code></td><td>Поэтапный конвейер всех прокси (409 при занятости)</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/test-failed</code></td><td>Перетест неработающих, полный конвейер</td></tr>
       <tr><td class="api-method-delete">DELETE</td><td><code>/api/delete/&lt;id&gt;</code></td><td>Удалить прокси</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/cleanup</code></td><td>Удалить все failed-прокси</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/proxies/batch-delete</code></td><td>Удалить выбранные <code>{"ids":[1,2,3]}</code></td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/proxies/batch-test</code></td><td>VLESS-тест выбранных</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/sources</code></td><td>Добавить источник <code>{"name":"...","url":"..."}</code></td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/cleanup</code></td><td>Удалить все failed</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/proxies/batch-delete</code></td><td>Удалить выбранные</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/proxies/batch-test</code></td><td>Поэтапный конвейер выбранных</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/sources</code></td><td>Добавить источник</td></tr>
       <tr><td class="api-method-delete">DELETE</td><td><code>/api/sources/&lt;id&gt;</code></td><td>Удалить источник</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/sources/&lt;id&gt;/import</code></td><td>Импорт из источника + тест + страны</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/sources/import-all</code></td><td>Импорт из всех + тест + страны</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/import</code></td><td>Импорт по URL + тест + страны</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/sources/&lt;id&gt;/import</code></td><td>Только импорт (без авто-теста)</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/sources/import-all</code></td><td>Только импорт всех источников</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/import</code></td><td>Импорт по URL</td></tr>
       <tr><td class="api-method-post">POST</td><td><code>/api/settings</code></td><td>Сохранить настройки</td></tr>
-      <tr><td class="api-method-get">GET</td><td><code>/api/backup</code></td><td>Экспорт настроек + источников в JSON</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/backup/import</code></td><td>Импорт настроек + источников из JSON</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/logs/clear</code></td><td>Очистить логи</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/xray/start</code></td><td>systemctl start xray</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/xray/stop</code></td><td>systemctl stop xray</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/xray-restart</code></td><td>systemctl restart xray</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/backup</code></td><td>Экспорт настроек + источников</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/backup/import</code></td><td>Импорт из JSON</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/xray/start</code> · <code>/stop</code> · <code>/xray-restart</code></td><td>Управление демоном Xray</td></tr>
       <tr><td class="api-method-post">POST</td><td><code>/api/xray/rebuild</code></td><td>Пересобрать конфиг без перезапуска</td></tr>
     </tbody>
   </table>

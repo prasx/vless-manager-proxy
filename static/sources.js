@@ -98,7 +98,7 @@ async function addProxy() {
   const res = await api('POST', '/api/add', { link });
   if (res.error) return toast(res.error, 'error');
   $('#inpProxy').value = '';
-  toast('прокси добавлен, запущен тест', 'success');
+  toast('прокси добавлен — тест стартует, если нет другого замера', 'success');
 }
 
 async function addSource() {
@@ -173,7 +173,7 @@ async function saveTxtContent(withImport) {
     if (imp.error) {
       toast(`импорт не удался: ${imp.error}`, 'error');
     } else {
-      toast(`добавлено прокси: ${imp.added}`, 'success');
+      toast(`импортировано прокси: ${imp.added} — замеры запускаются отдельно`, 'success');
     }
   } else {
     toast('контент сохранён', 'success');
@@ -195,7 +195,7 @@ async function importOne(id) {
   await busyButton(btn, 'Импорт…', async () => {
     const res = await api('POST', `/api/sources/${id}/import`);
     if (res.error) return toast(`импорт не удался: ${res.error}`, 'error');
-    toast(`добавлено прокси: ${res.added}`, 'success');
+    toast(`импортировано прокси: ${res.added} — замеры запускаются отдельно («Тест всех» на дашборде)`, 'success');
   });
   load();
 }
@@ -206,9 +206,9 @@ async function importAll() {
     const res = await api('POST', '/api/sources/import-all');
     if (res.error) return toast(`импорт не удался: ${res.error}`, 'error');
     if (res.errors && res.errors.length) {
-      toast(`добавлено ${res.added} прокси — ${res.errors.length} источник(ов) с ошибками`, 'error');
+      toast(`импортировано ${res.added} прокси — ${res.errors.length} источник(ов) с ошибками`, 'error');
     } else {
-      toast(`добавлено ${res.added} прокси`, 'success');
+      toast(`импортировано ${res.added} прокси — замеры запускаются отдельно`, 'success');
     }
   });
   load();

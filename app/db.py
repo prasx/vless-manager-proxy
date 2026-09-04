@@ -331,8 +331,13 @@ class Settings:
         return max(1, int(cls.get("speed_test_adaptive_sec", "2")))
 
     @classmethod
-    def speed_test_min_sec(cls) -> int:
-        """Минимальная длительность замера скорости одного прокси, сек."""
+    def speed_test_duration_sec(cls) -> int:
+        """Длительность замера скорости ОДНОГО профиля, сек.
+
+        Фиксированное окно: каждый профиль в стадии speed тестируется ровно
+        столько секунд (файл при необходимости докачивается повторно).
+        Ранний выход возможен только при включённом пороге min_speed_mbps.
+        """
         return max(1, min(300, int(cls.get("speed_test_min_sec", "10"))))
 
     @classmethod

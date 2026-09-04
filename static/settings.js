@@ -379,7 +379,7 @@ const FIELD_LABELS = {
   handshakeTimeout: 'Таймаут handshake',
   connIdle: 'Таймаут простоя',
   speedTestMax: 'Топ-N для speed test',
-  speedTestMinSec: 'Мин. длительность замера',
+  speedTestMinSec: 'Длительность замера одного профиля',
   speedTestAdaptiveSec: 'Adaptive check',
   logTrimEvery: 'Чистка логов',
   logKeep: 'Хранение логов',
@@ -645,6 +645,28 @@ async function importBackup(event) {
 _rangeDb = setupRange('checkIntervalDb', 'checkIntervalDbLabel');
 _rangeImport = setupRange('checkIntervalImport', 'checkIntervalImportLabel');
 $('speedTestEnabled').addEventListener('change', updateSpeedTestDependants);
+
+// ─── Sticky settings nav: подсветка активного раздела ───
+(function initSettingsNav() {
+  const nav = $('settingsNav');
+  if (!nav) return;
+  const links = Array.from(nav.querySelectorAll('a[href^="#"]'));
+  const targets = links
+    .map(a => document.querySelector(a.getAttribute('href')))
+    .filter(Boolean);
+  const offset = 88;
+  function update() {
+    const pos = window.scrollY + offset;
+    let cur = '';
+    for (const s of targets) {
+      if (s.offsetTop <= pos) cur = '#' + s.id;
+    }
+    links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === cur));
+  }
+  window.addEventListener('scroll', update, { passive: true });
+  window.addEventListener('resize', update);
+  update();
+})();
 
 function updatePerfEstimate() {
   const estVal = $('perfEstValue');

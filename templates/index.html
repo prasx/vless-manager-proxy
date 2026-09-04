@@ -38,6 +38,15 @@
 .conn-perip td { padding:4px; border-bottom:1px solid var(--border); }
 .conn-perip .ip { font-family:monospace; font-size:.7rem; }
 .conn-perip .bar { display:inline-block; height:8px; border-radius:2px; background:var(--green); vertical-align:middle; margin-right:4px; }
+.stage-chip { display:inline-flex; align-items:center; gap:5px; font-size:.66rem; padding:2px 9px; border-radius:10px; border:1px solid var(--border); color:var(--text-muted); white-space:nowrap; }
+.stage-chip .st-ico { font-style:normal; }
+.stage-chip.st-pending { opacity:.55; }
+.stage-chip.st-active { border-color:var(--green); color:var(--text); background:rgba(0,200,120,.08); }
+.stage-chip.st-active .st-ico { color:var(--green); }
+.stage-chip.st-done { border-color:var(--border); color:var(--text); }
+.stage-chip.st-done .st-ico { color:var(--green); }
+.stage-chip.st-skipped { opacity:.45; }
+.stage-chip.st-canceled { border-color:var(--red); color:var(--red); }
 </style>
 {% endblock %}
 {% block content %}
@@ -67,10 +76,12 @@
     <span id="healthIndicator"></span>
     <div id="lastTestRow" style="font-size:0.72rem;color:var(--text-muted)"></div>
   </div>
+  <div id="stageSteps" style="display:none;margin-top:8px;gap:6px;flex-wrap:wrap;align-items:center"></div>
   <div id="testProgressBar" style="display:none;margin-top:6px;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
     <div id="testProgressFill" style="height:100%;width:0%;background:var(--green);transition:width .5s"></div>
   </div>
   <div id="testProgressLabel" style="font-size:0.7rem;color:var(--text-muted);margin-top:2px"></div>
+  <div id="testProgressDetail" style="font-size:0.68rem;color:var(--text-muted);margin-top:2px;display:none"></div>
 </div>
 
 <div class="toolbar">

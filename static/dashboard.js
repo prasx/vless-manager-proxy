@@ -384,8 +384,9 @@ async function batchDelete() {
 
 async function batchTest() {
   const ids = Array.from(selected);
+  const r = await api('POST', '/api/proxies/batch-test', {ids});
+  if (r.error) return toast(r.error, 'error');
   toast(`тестируем ${ids.length} прокси…`);
-  await api('POST', '/api/proxies/batch-test', {ids});
   setTimeout(loadData, 3000);
 }
 
@@ -465,6 +466,7 @@ $('#reasonFilter')?.addEventListener('change', onReasonChange);
 
 async function testOne(id) {
   const r = await api('POST',`/api/test/${id}`);
+  if (r.error) return toast(r.error, 'error');
   if (r.status === 'working') {
     const speedStr = r.speed ? ` · ${formatSpeed(r.speed)}` : '';
     toast(`прокси #${id} работает — ${r.latency}мс${speedStr}`, 'success');
@@ -500,8 +502,9 @@ async function delOne(id) {
 }
 
 async function testAll() {
-  toast('тестируем все прокси…');
-  await api('POST','/api/test-all');
+  const r = await api('POST','/api/test-all');
+  if (r.error) return toast(r.error, 'error');
+  toast('запущен полный тест: проверка → пинг → скорость');
   setTimeout(loadData, 3000);
 }
 
@@ -558,7 +561,38 @@ const LABEL_RU = {
   'retest-failed': 'Перетест неработающих',
   'import+check': 'Импорт + проверка',
   'db-check': 'Проверка из БД',
+  'single': 'Тест прокси',
 };
+
+const STAGE_ICO = { 'check': '✓', 'ping': '↕', 'speed': '↓', 'import': '⇩' };
+
+function stageStatusText(st) {
+  if (!st) return '';
+  switch (st.key) {
+    case 'check': return `${st.done}/${st.total} · работает ${st.ok}`;
+    case 'ping':  return `${st.done}/${st.total} · измерено ${st.ok}`;
+    case 'speed': return `${st.done}/${st.total} профилей`;
+    case 'import': return `${st.done}/${st.total} источников`;
+    default: return `${st.done}/${st.total}`;
+  }
+}
+
+function renderStageSteps(stages) {
+  const box = $('#stageSteps');
+  if (!box) return;
+  if (!stages || !stages.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const order = { 'import': 0, 'check': 1, 'ping': 2, 'speed': 3 };
+  const sorted = stages.slice().sort((a, b) => (order[a.key] ?? 9) - (order[b.key] ?? 9));
+  box.innerHTML = sorted.map(st => {
+    const status = st.status || 'pending';
+    const cls = status === 'active' ? 'st-active' : `st-${status}`;
+    const ico = status === 'done' ? '✓'
+      : status === 'active' ? (STAGE_ICO[st.key] || '●')
+      : status === 'canceled' ? '✕' : (STAGE_ICO[st.key] || '·');
+    return `<span class="stage-chip ${cls}"><span class="st-ico">${ico}</span>${esc(st.title)}${status === 'active' && st.total ? ' <b>· ' + stageStatusText(st) + '</b>' : ''}</span>`;
+  }).join('');
+  box.style.display = 'flex';
+}
 
 function labelRu(l) { return LABEL_RU[l] || l; }
 
@@ -601,26 +635,51 @@ function onProgressEvent(p) {
   const bar = $('#testProgressBar');
   const fill = $('#testProgressFill');
   const label = $('#testProgressLabel');
+  const detail = $('#testProgressDetail');
+  const steps = $('#stageSteps');
   const btns = ['testAllBtn', 'batchTestBtn', 'retestFailedBtn'];
   const cancelBtn = $('#cancelTestBtn');
-  if (p.running && p.total > 0) {
+
+  if (p.running) {
     if (!_wasRunning) {
       if (_initialMetaLoaded) resetStatNumbers();
       setStatUpdating(true);
     }
     _wasRunning = true;
+
+    const stages = p.stages || [];
+    renderStageSteps(stages);
+    if (steps) steps.style.display = 'flex';
     bar.style.display = 'block';
     bar.style.height = '4px';
     bar.style.background = 'var(--border)';
-    fill.style.width = (p.done / p.total * 100) + '%';
     fill.style.background = 'var(--green)';
     fill.style.height = '100%';
+
+    const active = stages.find(s => s.status === 'active');
+    const frac = (active && active.total > 0) ? (active.done / active.total) : 0;
+    fill.style.width = Math.max(2, Math.min(100, frac * 100)) + '%';
+
     const elapsed = p.started_at ? fmtElapsed((Date.now() / 1000) - p.started_at) : '';
-    const failed = Math.max(0, p.done - p.ok);
-    const rate = failed
-      ? `работает ${p.ok} из ${p.done}, нет ${failed}`
-      : `работает ${p.ok} из ${p.done}`;
-    label.textContent = `${labelRu(p.label)}: ${p.done}/${p.total} (${rate}) · ${elapsed}`;
+    const stTitle = active ? active.title : '';
+    const phaseText = active
+      ? (active.key === 'check'
+          ? `${active.done}/${active.total} · работает ${active.ok}, нет ${Math.max(0, active.done - active.ok)}`
+          : stageStatusText(active))
+      : `${p.done}/${p.total}`;
+    label.textContent = p.cancel_requested
+      ? `«${labelRu(p.label)}» — отмена… · ${elapsed}`
+      : `«${labelRu(p.label)}» → ${stTitle}: ${phaseText} · ${elapsed}`;
+
+    if (detail) {
+      if (p.current) {
+        detail.textContent = 'сейчас: ' + p.current;
+        detail.style.display = '';
+      } else {
+        detail.style.display = 'none';
+      }
+    }
+
     btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = true; });
     if (cancelBtn) cancelBtn.style.display = 'inline-flex';
     if (Date.now() - _lastLoadDuringTest > 5000) {
@@ -632,6 +691,8 @@ function onProgressEvent(p) {
       updateStats();
     }
   } else {
+    if (steps) { steps.style.display = 'none'; steps.innerHTML = ''; }
+    if (detail) detail.style.display = 'none';
     bar.style.display = p.last_completed ? 'block' : 'none';
     bar.style.height = 'auto';
     bar.style.background = 'none';

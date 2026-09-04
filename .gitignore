@@ -1,6 +1,11 @@
 # Database
 proxies.db
+proxies.db-shm
+proxies.db-wal
 subscribe.txt
+
+# Импорт: кеш ETag источников
+.import_cache/
 
 # Python
 __pycache__/

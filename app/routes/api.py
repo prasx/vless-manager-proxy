@@ -243,21 +243,24 @@ def api_add():
 
 @api_bp.route("/test/<int:pid>", methods=["POST"])
 def api_test(pid):
-    """POST /api/test/<id> — тестирует один прокси (VLESS + скорость)."""
-    rows = db_q("SELECT link FROM proxies WHERE id=?", (pid,))
+    """POST /api/test/<id> — полный поэтапный тест одного прокси
+    (работоспособность → пинг → скорость). Эксклюзивный: если уже идёт
+    другой замер — вернёт busy."""
+    rows = db_q("SELECT id FROM proxies WHERE id=?", (pid,))
     if not rows:
         return jsonify(error="Not found"), 404
-    ok, lat, err = proxy_manager.test_vless_real(rows[0]["link"])
-    proxy_manager._update_vless_status(pid, ok, lat if ok else 0, err if not ok else "")
-    speed = 0
-    if ok:
-        speed = proxy_manager._test_speed_single(rows[0]["link"])
-        if speed:
-            db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (speed, pid))
-    status = "working" if ok else "failed"
-    detail = f" ({lat}ms, {speed}kbps)" if ok else f" — {err}"
+    res = proxy_manager.measure_single(pid)
+    if res.get("busy"):
+        return jsonify(error="Идёт другой тест — замеры не запускаются параллельно"), 409
+    if res.get("error") and res.get("status") != "working":
+        status = "failed"
+        detail = f" — {res['error']}"
+    else:
+        status = "working"
+        detail = f" ({res.get('latency')}ms, {res.get('speed')}kbps)" if res.get('speed') else f" ({res.get('latency')}ms)"
     add_log("INFO", f"Tested proxy #{pid} → {status}{detail}")
-    return jsonify(status=status, latency=lat, speed=speed, error=err if not ok else None)
+    return jsonify(status=res.get("status", "failed"), latency=res.get("latency", 0),
+                   speed=res.get("speed", 0), error=None if res.get("status") == "working" else res.get("error"))
 
 
 @api_bp.route("/delete/<int:pid>", methods=["DELETE"])
@@ -270,9 +273,11 @@ def api_delete(pid):
 
 @api_bp.route("/test-all", methods=["POST"])
 def api_test_all():
-    """POST /api/test-all — запускает VLESS-тестирование всех прокси в фоне."""
-    threading.Thread(target=proxy_manager.test_all_vless, daemon=True).start()
-    return jsonify(success=True)
+    """POST /api/test-all — запускает поэтапный конвейер для всех прокси в фоне."""
+    started = proxy_manager.start_test_all()
+    if not started:
+        return jsonify(success=False, started=False, error="Уже идёт другой тест или нет прокси"), 409
+    return jsonify(success=True, started=True)
 
 
 @api_bp.route("/cleanup", methods=["POST"])
@@ -298,34 +303,31 @@ def api_proxies_batch_delete():
 
 @api_bp.route("/proxies/batch-test", methods=["POST"])
 def api_proxies_batch_test():
-    """POST /api/proxies/batch-test — тестирует несколько прокси по IDs (VLESS)."""
+    """POST /api/proxies/batch-test — поэтапный конвейер для выбранных прокси."""
     ids = (request.get_json(silent=True) or {}).get("ids", [])
     if not ids:
         return jsonify(error="No ids provided"), 400
     placeholders = ",".join("?" * len(ids))
-    rows = db_q(f"SELECT id, link FROM proxies WHERE id IN ({placeholders})", ids)
-    threading.Thread(
-        target=proxy_manager.batch_test_vless, args=(rows,), daemon=True
-    ).start()
-    return jsonify(success=True, queued=len(rows))
+    rows = db_q(f"SELECT id, link, host FROM proxies WHERE id IN ({placeholders})", ids)
+    if not rows:
+        return jsonify(error="Proxies not found"), 404
+    started = proxy_manager.start_batch_test(rows)
+    if not started:
+        return jsonify(success=False, started=False, error="Уже идёт другой тест"), 409
+    return jsonify(success=True, started=True, queued=len(rows))
 
 
 @api_bp.route("/test-failed", methods=["POST"])
 def api_test_failed():
-    """POST /api/test-failed — перетест только failed-прокси (VLESS + speed test)."""
-    rows = db_q(
-        "SELECT id, link FROM proxies WHERE status='failed' ORDER BY id ASC"
-    )
-    if not rows:
+    """POST /api/test-failed — перетест только failed-прокси (полный конвейер)."""
+    count = db_q("SELECT COUNT(*) c FROM proxies WHERE status='failed'")[0]["c"]
+    if not count:
         return jsonify(success=True, queued=0)
-    threading.Thread(
-        target=proxy_manager.batch_test_vless,
-        args=(rows,),
-        kwargs={"label": "retest-failed"},
-        daemon=True,
-    ).start()
-    add_log("INFO", f"Retest failed queued: {len(rows)} proxies")
-    return jsonify(success=True, queued=len(rows))
+    started = proxy_manager.start_retest_failed()
+    if not started:
+        return jsonify(success=False, started=False, error="Уже идёт другой тест"), 409
+    add_log("INFO", f"Retest failed queued: {count} proxies")
+    return jsonify(success=True, started=True, queued=count)
 
 
 # ─── Источники ───
@@ -415,7 +417,11 @@ def api_sources_content_update(sid):
 
 @api_bp.route("/sources/<int:sid>/import", methods=["POST"])
 def api_sources_import_one(sid):
-    """POST /api/sources/<id>/import — импортирует из одного источника."""
+    """POST /api/sources/<id>/import — только импорт из одного источника.
+
+    Замеры запускаются отдельно (кнопки «Тест всех»/«Перетест failed» или
+    фоновая Import+Check): импорт и замер скорости — независимые операции.
+    """
     rows = db_q("SELECT url, type FROM sources WHERE id=?", (sid,))
     if not rows:
         return jsonify(error="Not found"), 404
@@ -428,13 +434,15 @@ def api_sources_import_one(sid):
         add_log("ERROR", f"Import source #{sid} failed: {e}")
         return jsonify(error=str(e)), 502
     db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), sid))
-    test_started = proxy_manager.test_all_vless()
-    return jsonify(success=True, added=added, test_queued=test_started)
+    return jsonify(success=True, added=added)
 
 
 @api_bp.route("/sources/import-all", methods=["POST"])
 def api_sources_import_all():
-    """POST /api/sources/import-all — импортирует из всех источников."""
+    """POST /api/sources/import-all — только импорт из всех источников.
+
+    Замеры запускаются отдельно (см. api_sources_import_one).
+    """
     rows = db_q("SELECT id, url, type FROM sources")
     total = 0
     errors = []
@@ -449,11 +457,10 @@ def api_sources_import_all():
         except RuntimeError as e:
             errors.append(f"#{r['id']}: {e}")
             add_log("ERROR", f"Import source #{r['id']} failed: {e}")
-    test_started = proxy_manager.test_all_vless()
     if errors:
         add_log("WARN", f"Import completed with errors: {'; '.join(errors)}")
     add_log("INFO", f"Imported {total} proxies from all sources")
-    return jsonify(success=True, added=total, errors=errors, test_queued=test_started)
+    return jsonify(success=True, added=total, errors=errors)
 
 
 # ─── Настройки ───
@@ -771,52 +778,59 @@ def api_countries():
 @api_bp.route("/test-cancel", methods=["POST"])
 def api_test_cancel():
     """POST /api/test-cancel — отменяет текущий фоновый тест."""
-    proxy_manager._cancel.set()
+    proxy_manager.request_cancel()
     return jsonify(success=True)
 
 
 @api_bp.route("/test-progress")
 def api_test_progress():
-    """GET /api/test-progress — текущий статус фонового VLESS-теста."""
-    p = proxy_manager.progress
-    return jsonify(
-        running=p["running"],
-        total=p["total"],
-        done=p["done"],
-        ok=p["ok"],
-        label=p["label"],
-        last_completed=p["last_completed"],
-        last_label=p["last_label"],
-        last_ok=p["last_ok"],
-        last_total=p["last_total"],
-        started_at=p["started_at"],
-    )
+    """GET /api/test-progress — текущий статус поэтапного прогона.
+
+    total/done/ok — счётчики ТЕКУЩЕЙ стадии; stages — список всех стадий
+    прогона (для степпера в UI), phase — ключ активной стадии.
+    """
+    return jsonify(proxy_manager.progress_snapshot())
 
 
 @api_bp.route("/test-progress/stream")
 def api_test_progress_stream():
-    """SSE: поток обновлений test-progress. Альтернатива polling."""
+    """SSE: поток обновлений test-progress. Альтернатива polling.
+
+    Соединение держится постоянно (heartbeat каждые 15 с), чтобы смена
+    стадий и новые прогоны приходили без переподключения страницы.
+    """
     def generate():
-        last_done = -1
+        last_payload = None
+        last_beat = time.time()
         while True:
-            p = proxy_manager.progress
+            p = proxy_manager.progress_snapshot()
             d = dict(
                 running=p["running"],
                 total=p["total"],
                 done=p["done"],
                 ok=p["ok"],
                 label=p["label"],
+                phase=p["phase"],
+                stages=p["stages"],
+                current=p["current"],
+                cancel_requested=p["cancel_requested"],
                 last_completed=p["last_completed"],
                 last_label=p["last_label"],
                 last_ok=p["last_ok"],
                 last_total=p["last_total"],
                 started_at=p["started_at"],
             )
-            if d["done"] != last_done or not d["running"]:
-                yield f"data: {json.dumps(d)}\n\n"
-                last_done = d["done"]
-                if not d["running"] and d["done"] == d["total"]:
-                    return
+            # Отдаём только изменения (текущая строка/фаза/счётчики)
+            key = (d["running"], d["phase"], d["total"], d["done"], d["ok"],
+                   d["current"], d["cancel_requested"], d["started_at"])
+            now = time.time()
+            if key != last_payload:
+                yield f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
+                last_payload = key
+                last_beat = now
+            elif now - last_beat >= 15:
+                yield ": keepalive\n\n"
+                last_beat = now
             time.sleep(0.5)
     return Response(generate(), mimetype="text/event-stream")
 
@@ -893,10 +907,10 @@ def api_geosite_rules_set():
 
 @api_bp.route("/import", methods=["POST"])
 def api_import():
-    """POST /api/import — импорт прокси по URL подписки."""
+    """POST /api/import — только импорт прокси по URL подписки
+    (тест запускается отдельной кнопкой/фоновой Import+Check)."""
     url = (request.get_json(silent=True) or {}).get("url", "")
     added = import_from_url(url)
-    threading.Thread(target=proxy_manager.test_all_vless, daemon=True).start()
     return jsonify(success=True, added=added)
 
 
