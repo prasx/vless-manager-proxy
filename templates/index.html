@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}VLESS Manager — Дашборд{% endblock %}
+{% block title %}VLESS Manager · Дашборд{% endblock %}
 {% block page_title %}Прокси{% endblock %}
-{% block nav_extra %}{% endblock %}
+{% block nav_extra %}<button class="btn" onclick="toggleConnModal()">Соединения</button>{% endblock %}
 {% block extra_css %}
 <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
 <style>
@@ -20,7 +20,11 @@
 }
 .modal-head { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--border); }
 .modal-head h3 { margin:0; font-size:.85rem; font-weight:600; }
-.modal-close { cursor:pointer; opacity:.5; font-size:1.1rem; padding:0 2px; }
+.modal-close {
+  background:transparent; border:0; color:var(--text-primary);
+  font:inherit; line-height:1; cursor:pointer; opacity:.6;
+  font-size:1.1rem; padding:4px 6px;
+}
 .modal-close:hover { opacity:1; }
 .modal-body { overflow:auto; padding:8px 16px 16px; flex:1 1 auto; min-height:0; }
 .conn-table { width:100%; border-collapse:collapse; font-size:.72rem; }
@@ -29,9 +33,9 @@
 .conn-table .proc { max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .conn-table .bytes { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .conn-table .btn-sm { font-size:.65rem; padding:3px 8px; height:auto; }
-.conn-table .btn-sm-green { font-size:.65rem; padding:3px 8px; height:auto; background:var(--green); color:#000; }
 .conn-flush { margin:8px 16px 12px; }
-.conn-filter { width:100%; padding:6px 10px; font-size:.78rem; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); outline:none; margin-bottom:8px; box-sizing:border-box; }
+.conn-empty { padding:20px; text-align:center; color:var(--text-muted); font-size:.8rem; }
+.conn-filter { width:100%; padding:6px 10px; font-size:.78rem; border:1px solid var(--border-field); border-radius:4px; background:var(--bg); color:var(--text-primary); margin-bottom:8px; box-sizing:border-box; }
 .conn-perip { margin-bottom:8px; }
 .conn-perip table { width:100%; border-collapse:collapse; font-size:.72rem; }
 .conn-perip th { text-align:left; padding:4px; color:var(--text-muted); border-bottom:1px solid var(--border); font-weight:500; }
@@ -41,9 +45,9 @@
 .stage-chip { display:inline-flex; align-items:center; gap:5px; font-size:.66rem; padding:2px 9px; border-radius:10px; border:1px solid var(--border); color:var(--text-muted); white-space:nowrap; }
 .stage-chip .st-ico { font-style:normal; }
 .stage-chip.st-pending { opacity:.55; }
-.stage-chip.st-active { border-color:var(--green); color:var(--text); background:rgba(0,200,120,.08); }
+.stage-chip.st-active { border-color:var(--green); color:var(--text-primary); background:rgba(0,200,120,.08); }
 .stage-chip.st-active .st-ico { color:var(--green); }
-.stage-chip.st-done { border-color:var(--border); color:var(--text); }
+.stage-chip.st-done { border-color:var(--border); color:var(--text-primary); }
 .stage-chip.st-done .st-ico { color:var(--green); }
 .stage-chip.st-skipped { opacity:.45; }
 .stage-chip.st-canceled { border-color:var(--red); color:var(--red); }
@@ -52,28 +56,28 @@
 {% block content %}
 
 <div class="stats" id="statGrid">
-  <div class="stat-card active" data-filter="">
-    <div class="num" id="statTotal"><span class="skeleton skeleton-num"></span></div>
-    <div class="label-s">все</div>
-  </div>
-  <div class="stat-card" data-filter="working">
-    <div class="num" id="statWorking"><span class="skeleton skeleton-num"></span></div>
-    <div class="label-s">рабочие</div>
-  </div>
-  <div class="stat-card" data-filter="top_speed">
-    <div class="num" id="statTopSpeed"><span class="skeleton skeleton-num"></span></div>
-    <div class="label-s">топ-скорость</div>
-  </div>
-  <div class="stat-card" data-filter="failed">
-    <div class="num" id="statFailed"><span class="skeleton skeleton-num"></span></div>
-    <div class="label-s">не работает</div>
-  </div>
+  <button type="button" class="stat-card active" data-filter="" aria-pressed="true">
+    <span class="num" id="statTotal"><span class="skeleton skeleton-num"></span></span>
+    <span class="label-s">все</span>
+  </button>
+  <button type="button" class="stat-card" data-filter="working" aria-pressed="false">
+    <span class="num" id="statWorking"><span class="skeleton skeleton-num"></span></span>
+    <span class="label-s">рабочие</span>
+  </button>
+  <button type="button" class="stat-card" data-filter="top_speed" aria-pressed="false">
+    <span class="num" id="statTopSpeed"><span class="skeleton skeleton-num"></span></span>
+    <span class="label-s">топ-скорость</span>
+  </button>
+  <button type="button" class="stat-card" data-filter="failed" aria-pressed="false">
+    <span class="num" id="statFailed"><span class="skeleton skeleton-num"></span></span>
+    <span class="label-s">не работает</span>
+  </button>
 </div>
 
 <div id="activeNode">
   <div id="activeNodeTop">
-    <div id="activeInfo">// outbounds: —</div>
-    <span id="healthIndicator"></span>
+    <div id="activeInfo">// outbounds: загрузка…</div>
+    <span id="healthIndicator"><span class="badge badge-muted">проверка…</span></span>
     <div id="lastTestRow" style="font-size:0.72rem;color:var(--text-muted)"></div>
   </div>
   <div id="stageSteps" style="display:none;margin-top:8px;gap:6px;flex-wrap:wrap;align-items:center"></div>
@@ -82,6 +86,11 @@
   </div>
   <div id="testProgressLabel" style="font-size:0.7rem;color:var(--text-muted);margin-top:2px"></div>
   <div id="testProgressDetail" style="font-size:0.68rem;color:var(--text-muted);margin-top:2px;display:none"></div>
+</div>
+
+<div class="data-error" id="dataError" role="status" hidden>
+  <span id="dataErrorText"></span>
+  <button type="button" class="btn btn-sm" onclick="loadData()">повторить</button>
 </div>
 
 <div class="toolbar">
@@ -95,6 +104,10 @@
       <button class="btn btn-danger" id="batchDeleteBtn" style="display:none" onclick="batchDelete()">Удалить выбранные</button>
       <span id="batchCount" style="font-size:0.72rem;color:var(--text-muted);display:none"></span>
     </div>
+    <label class="chk-all">
+      <input type="checkbox" class="chk-custom" id="selectAllMobile" onchange="toggleSelectAllFrom(this.checked)">
+      <span>выбрать все</span>
+    </label>
   </div>
   <div class="toolbar-row toolbar-row-2">
     <input type="search" id="searchInput" class="input" placeholder="Поиск по хосту или id…" style="font-size:0.78rem">
@@ -117,7 +130,7 @@
   </table>
   <div class="mobile-list" id="mobileList"></div>
   <div class="pagination-bar" id="paginationBar" style="display:none">
-    <button class="btn" id="showMoreBtn" onclick="loadMore()">Show next 50</button>
+    <button class="btn" id="showMoreBtn" onclick="loadMore()">Показать ещё 50</button>
     <span class="pagination-info" id="paginationInfo"></span>
   </div>
 </div>
@@ -127,12 +140,15 @@
   <div class="modal-box">
     <div class="modal-head">
       <h3>Активные соединения</h3>
-      <span class="modal-close" onclick="toggleConnModal()">&times;</span>
+      <button type="button" class="modal-close" onclick="toggleConnModal()" aria-label="Закрыть">&times;</button>
     </div>
     <div class="modal-body">
       <input type="text" class="conn-filter" id="connFilter" placeholder="Фильтр по IP…" oninput="filterConnTable()" spellcheck="false">
       <div id="connPerIP" class="conn-perip"></div>
       <div id="connTableWrap"></div>
+    </div>
+    <div class="conn-flush">
+      <button type="button" class="btn btn-sm btn-danger" onclick="flushConns()">Закрыть все соединения</button>
     </div>
   </div>
 </div>

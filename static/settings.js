@@ -3,7 +3,9 @@ async function api(method, url, body) {
   if (body !== undefined) opts.body = JSON.stringify(body);
   try {
     const r = await fetch(url, opts);
-    return r.json();
+    const data = await r.json();
+    if (!r.ok && !data.error) data.error = `HTTP ${r.status}`;
+    return data;
   } catch (e) {
     toast('Сетевая ошибка: ' + e.message, 'error');
     return {error: e.message};
@@ -11,6 +13,32 @@ async function api(method, url, body) {
 }
 
 const $ = id => document.getElementById(id);
+
+// ─── Ошибки загрузки ───
+const _loadErrors = {};
+
+// Номер последнего запроса по каждому источнику. Долгий запрос может завершиться
+// после более нового, и тогда устаревший ответ затирал актуальное состояние, в том
+// числе снимал баннер ошибки, который поставил свежий запрос.
+const _loadSeq = {};
+
+function nextSeq(source) {
+  _loadSeq[source] = (_loadSeq[source] || 0) + 1;
+  return _loadSeq[source];
+}
+
+function isStale(source, seq) {
+  return _loadSeq[source] !== seq;
+}
+
+function setLoadError(source, msg) {
+  if (msg) _loadErrors[source] = msg; else delete _loadErrors[source];
+  const box = $('settingsError');
+  if (!box) return;
+  const text = $('settingsErrorText');
+  if (text) text.textContent = Object.values(_loadErrors).join(' · ');
+  box.hidden = Object.keys(_loadErrors).length === 0;
+}
 
 function fmtHours(v) {
   const h = Math.floor(v);
@@ -71,7 +99,7 @@ function updateDirtyUI() {
   const el = $('dirtyIndicator');
   if (!el) return;
   if (_dirty) {
-    el.textContent = '⚠ есть несохранённые изменения';
+    el.textContent = 'есть несохранённые изменения';
     el.className = 'settings-dirty-indicator dirty';
   } else {
     el.textContent = '';
@@ -120,8 +148,11 @@ window.addEventListener('beforeunload', e => {
 let geositeRules = [];
 
 async function loadGeositeRules() {
+  const seq = nextSeq('geosite');
   const r = await api('GET', '/api/geosite-rules');
-  if (r.error) return;
+  if (isStale('geosite', seq)) return;
+  if (r.error) { setLoadError('geosite', 'не удалось загрузить правила GeoSite: ' + r.error); return; }
+  setLoadError('geosite', '');
   geositeRules = r.rules || [];
   renderGeositeRules();
 }
@@ -131,7 +162,7 @@ function renderGeositeRules() {
   if (!wrap) return;
   wrap.innerHTML = '';
   if (!geositeRules.length) {
-    wrap.innerHTML = '<div class="tuning-item" style="justify-content:center;color:var(--text-muted);font-size:0.82rem;padding:12px 0">правил нет — весь трафик идёт через балансер</div>';
+    wrap.innerHTML = '<div class="tuning-item" style="justify-content:center;color:var(--text-muted);font-size:0.82rem;padding:12px 0">правил нет: весь трафик идёт через балансер</div>';
     return;
   }
   geositeRules.forEach((rule, i) => {
@@ -140,10 +171,10 @@ function renderGeositeRules() {
     item.innerHTML = `
       <input type="text" class="input geosite-domain" value="${rule.domain}" style="flex:1;font-family:monospace;max-width:360px" placeholder="geosite:google">
       <select class="input geosite-outbound" style="width:auto;min-width:150px">
-        <option value="direct" ${rule.outboundTag === 'direct' ? 'selected' : ''}>direct — напрямую</option>
-        <option value="proxy" ${rule.outboundTag === 'proxy' ? 'selected' : ''}>proxy — через балансер</option>
+        <option value="direct" ${rule.outboundTag === 'direct' ? 'selected' : ''}>direct: напрямую</option>
+        <option value="proxy" ${rule.outboundTag === 'proxy' ? 'selected' : ''}>proxy: через балансер</option>
       </select>
-      <button class="btn btn-danger" onclick="removeGeositeRule(${i})" style="padding:2px 10px;font-size:12px;line-height:1.6">✕</button>
+      <button class="btn btn-danger" onclick="removeGeositeRule(${i})" aria-label="Удалить правило" title="Удалить правило" style="padding:2px 10px;font-size:12px;line-height:1.6">✕</button>
     `;
     item.querySelector('input, select').addEventListener('change', markDirty);
     wrap.appendChild(item);
@@ -182,8 +213,11 @@ let countrySearchValue = '';
 let _blockedRaw = '';
 
 async function loadCountries() {
+  const seq = nextSeq('countries');
   const data = await api('GET', '/api/countries');
-  if (data.error) return;
+  if (isStale('countries', seq)) return;
+  if (data.error) { setLoadError('countries', 'не удалось загрузить страны: ' + data.error); return; }
+  setLoadError('countries', '');
   countryData = data.countries || [];
   _blockedRaw = data.blocked || '';
   const badge = $('countryVerifyBadge');
@@ -200,7 +234,7 @@ function renderCountryFilter() {
   if (!tb) return;
   tb.innerHTML = '';
   if (!countryData.length) {
-    tb.innerHTML = '<tr><td colspan="4" class="empty">стран пока нет — импортируйте прокси</td></tr>';
+    tb.innerHTML = '<tr><td colspan="4" class="empty">стран пока нет: импортируйте прокси</td></tr>';
     const cnt = $('countryFilterCount');
     if (cnt) cnt.textContent = '';
     return;
@@ -241,6 +275,7 @@ function renderCountryFilter() {
 }
 
 function selectAllCountries(blocked) {
+  if (!blocked && !confirm('Снять отметки со всех стран? После сохранения ни одна страна не будет исключена из конфига и подписки.')) return;
   const boxes = document.querySelectorAll('#countryFilterBody input[type="checkbox"]');
   boxes.forEach(cb => { cb.checked = blocked; });
   markDirty();
@@ -272,11 +307,14 @@ function collectBlockedCountries() {
 
 // ─── Load ───
 async function loadSettings() {
+  const seq = nextSeq('settings');
   const [s, status] = await Promise.all([
     api('GET', '/api/settings'),
     api('GET', '/api/xray/status'),
   ]);
-  if (s.error) return;
+  if (isStale('settings', seq)) return;
+  if (s.error) { setLoadError('settings', 'не удалось загрузить настройки: ' + s.error); return; }
+  setLoadError('settings', '');
   $('xrayBin').value = s.xray_bin || 'xray';
   $('xrayConfigPath').value = s.xray_config_path || '';
   $('proxyListen').value = s.proxy_listen || '0.0.0.0';
@@ -315,6 +353,7 @@ async function loadSettings() {
   $('maxWorkers').value = s.max_workers || '15';
   $('probeTimeout').value = s.probe_timeout || '3';
   $('xrayStartupRetries').value = s.xray_startup_retries || '15';
+  setLoadError('xray', status.error ? `не удалось получить статус Xray: ${status.error}` : '');
   updateConfigStatus(status);
   updateSpeedTestDependants();
   loadPerfEstimate();
@@ -325,7 +364,7 @@ async function loadSettings() {
 function updateConfigStatus(status) {
   const el = $('configStatus');
   if (!el) return;
-  if (status.error) { el.textContent = '—'; return; }
+  if (status.error) { el.textContent = '…'; return; }
   const active = status.nodes_in_config || 0;
   const candidates = status.config_candidates || 0;
   const api = status.api_accessible;
@@ -448,6 +487,19 @@ function validateSettings() {
       markInvalid(f.id);
     }
   }
+  const requiredFields = [
+    { id: 'xrayBin', msg: 'Путь к бинарнику Xray не может быть пустым' },
+    { id: 'xrayConfigPath', msg: 'Путь к файлу конфига не может быть пустым' },
+    { id: 'proxyListen', msg: 'Адрес прослушивания не может быть пустым' },
+  ];
+  for (const f of requiredFields) {
+    const el = $(f.id);
+    if (!el) continue;
+    if (!el.value.trim()) {
+      errors.push(f.msg);
+      markInvalid(f.id);
+    }
+  }
   const probeUrl = $('probeUrl').value.trim();
   if (probeUrl && !/^https?:\/\//i.test(probeUrl)) {
     errors.push('URL проверки: должен начинаться с http:// или https://');
@@ -563,7 +615,7 @@ function resetTuning() {
   $('probeTimeout').value = '3';
   $('xrayStartupRetries').value = '15';
   markDirty();
-  toast('Значения сброшены к заводским — нажмите «Сохранить настройки»');
+  toast('Значения сброшены к заводским, нажмите «Сохранить настройки»');
 }
 
 async function restartXray() {
@@ -676,7 +728,7 @@ function updatePerfEstimate() {
   const retries = Math.max(1, parseInt($('xrayStartupRetries').value) || 15);
   const vlessT = Math.max(2, parseInt($('vlessPerProxyTimeout').value) || 10);
   if (_profileCount <= 0) {
-    estVal.textContent = '—';
+    estVal.textContent = '…';
     estDetail.textContent = 'загрузка данных…';
     return;
   }
@@ -692,7 +744,6 @@ function updatePerfEstimate() {
 }
 $('maxWorkers').addEventListener('input', updatePerfEstimate);
 $('vlessPerProxyTimeout').addEventListener('input', updatePerfEstimate);
-$('probeTimeout').addEventListener('input', updatePerfEstimate);
 $('xrayStartupRetries').addEventListener('input', updatePerfEstimate);
 
 loadSettings();

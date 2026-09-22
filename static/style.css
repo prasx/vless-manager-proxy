@@ -3,10 +3,13 @@
   --bg-secondary: #111;
   --bg-card: #141414;
   --border: #222;
-  --border-hover: #444;
+  --border-hover: #6b6b6b;
+  --border-field: #3a3a3a;
+  /* Текст поднят до WCAG AA: 8.6:1 и 5.4:1 на карточке #141414.
+     Прежние #888 и #555 давали 2.5:1 и ниже порога 4.5:1. */
   --text-primary: #e8e8e8;
-  --text-secondary: #888;
-  --text-muted: #555;
+  --text-secondary: #b0b0b0;
+  --text-muted: #8a8a8a;
   --green: #4ade80;
   --red: #f87171;
   --orange: #fb923c;
@@ -14,13 +17,19 @@
 }
 [data-theme="light"] {
   --bg: #f2f2f2;
-  --bg-secondary: #e4e4e4;
+  --bg-secondary: #e6e6e6;
   --bg-card: #ffffff;
-  --border: #cccccc;
-  --border-hover: #999999;
+  --border: #c8c8c8;
+  --border-hover: #5c5c5c;
+  --border-field: #9a9a9a;
   --text-primary: #1a1a1a;
-  --text-secondary: #555555;
-  --text-muted: #999999;
+  --text-secondary: #3f3f3f;
+  --text-muted: #636363;
+  /* Акцент и состояния в светлой теме темнее: #4ade80 на белом даёт 1.7:1
+     и как текст не читается вообще. */
+  --green: #146c34;
+  --red: #b91c1c;
+  --orange: #a34a06;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 body.modal-open { overflow:hidden; }
@@ -52,7 +61,7 @@ body {
   font-size:0.7rem;
   color:var(--text-muted);
   text-transform:uppercase;
-  letter-spacing:0.12em;
+  letter-spacing:0.06em;
 }
 .header .label::before { content:'// '; }
 
@@ -120,8 +129,8 @@ body {
 .badge-green { color:var(--green); border-color:var(--green); }
 .badge-muted { color:var(--text-muted); border-color:var(--border); }
 .badge-red { color:var(--red); border-color:var(--red); }
-.badge-orange { color:#ed8936; border-color:#ed8936; }
-.badge-warn { color:#eab308; border-color:#eab308; }
+/* Один цвет предупреждения вместо двух почти одинаковых тёплых оттенков */
+.badge-orange { color:var(--orange); border-color:var(--orange); }
 
 /* Latency */
 .lat-good { color:var(--green); }
@@ -159,7 +168,7 @@ body {
 /* Input shared */
 input {
   background:var(--bg-secondary);
-  border:1px solid var(--border);
+  border:1px solid var(--border-field);
   border-radius:4px;
   padding:9px 12px;
   font:inherit;
@@ -167,15 +176,15 @@ input {
   color:var(--text-primary);
   transition:border-color var(--transition);
 }
-input:focus { outline:none; border-color:var(--border-hover); }
+input:focus { border-color:var(--border-hover); }
 input::placeholder { color:var(--text-muted); }
 input:disabled, select:disabled {
   opacity:0.5;
   cursor:not-allowed;
 }
-html[data-theme="dark"] input,
-html[data-theme="dark"] select,
-html[data-theme="dark"] input[type="range"] { color-scheme:dark; }
+/* color-scheme на корне, чтобы нативные контролы в светлой теме не оставались тёмными */
+html { color-scheme:dark; }
+html[data-theme="light"] { color-scheme:light; }
 input.input-invalid,
 select.input-invalid { border-color:var(--red); }
 input.input-invalid:focus { border-color:var(--red); }
@@ -220,7 +229,7 @@ td.id { color:var(--text-muted); }
 }
 @media(min-width:769px) { .btn-nav-toggle { display:none; } }
 
-/* Nav — horizontal on desktop, dropdown on mobile */
+/* Nav: horizontal on desktop, dropdown on mobile */
 .nav {
   display:none;
   flex-direction:column;
@@ -229,6 +238,10 @@ td.id { color:var(--text-muted); }
   margin-top:10px;
   padding-top:10px;
   border-top:1px solid var(--border);
+}
+.nav .btn[aria-current="page"] {
+  border-color:var(--text-primary);
+  color:var(--text-primary);
 }
 .nav .btn { width:100%; justify-content:flex-start; height:38px; font-size:0.85rem; }
 .nav .btn-theme { width:100%; }
@@ -309,8 +322,6 @@ td.id { color:var(--text-muted); }
 .settings-h2-sub {
   font-size:0.68rem;
   color:var(--text-muted);
-  text-transform:uppercase;
-  letter-spacing:0.08em;
   font-weight:400;
 }
 .form-row {
@@ -340,7 +351,7 @@ td.id { color:var(--text-muted); }
 }
 .input {
   background:var(--bg-secondary);
-  border:1px solid var(--border);
+  border:1px solid var(--border-field);
   border-radius:4px;
   padding:7px 12px;
   font:inherit;
@@ -349,8 +360,7 @@ td.id { color:var(--text-muted); }
   height:34px;
   transition:border-color var(--transition);
 }
-.input:focus { outline:none; border-color:var(--border-hover); }
-select.input { color-scheme:dark; }
+.input:focus { border-color:var(--border-hover); }
 .form-row .input {
   flex:1;
   max-width:480px;
@@ -374,12 +384,10 @@ select.input { color-scheme:dark; }
   margin-bottom:0;
 }
 .tuning-group h3 {
-  font-size:0.72rem;
+  font-size:0.74rem;
   color:var(--text-muted);
-  text-transform:uppercase;
-  letter-spacing:0.1em;
   margin-bottom:8px;
-  font-weight:400;
+  font-weight:500;
 }
 .tuning-item {
   display:flex;
@@ -433,10 +441,8 @@ select.input { color-scheme:dark; }
 }
 .tuning-card-control label {
   display:block;
-  font-size:0.7rem;
+  font-size:0.72rem;
   color:var(--text-muted);
-  text-transform:uppercase;
-  letter-spacing:0.05em;
   margin-bottom:4px;
 }
 .tuning-range {
@@ -446,7 +452,6 @@ select.input { color-scheme:dark; }
   appearance:none;
   background:var(--border);
   border-radius:3px;
-  outline:none;
   cursor:pointer;
 }
 .tuning-range::-webkit-slider-thumb {
@@ -729,7 +734,6 @@ select.input { color-scheme:dark; }
 /* API Reference */
 .api-ref {
   overflow-x:auto;
-  cursor:pointer;
 }
 .api-ref-summary {
   font-size:0.9rem;
@@ -851,16 +855,56 @@ html { scroll-behavior:smooth; }
 
 /* Состояния */
 .btn:active { transform:translateY(1px); }
-.btn:focus-visible,
-.input:focus-visible,
-select:focus-visible,
-input[type="checkbox"]:focus-visible,
-input[type="range"]:focus-visible {
-  outline:2px solid var(--border-hover);
-  outline-offset:1px;
+/* Одно правило на все элементы: прежний список селекторов не покрывал textarea и поля
+   без класса .input, и там кольцо фокуса пропадало полностью. */
+:focus-visible {
+  outline:2px solid var(--text-primary);
+  outline-offset:2px;
 }
 @media(prefers-reduced-motion:reduce) {
   html { scroll-behavior:auto; }
-  * { transition-duration:0.01ms !important; }
+  *, *::before, *::after {
+    transition-duration:0.01ms !important;
+    animation-duration:0.01ms !important;
+    animation-iteration-count:1 !important;
+  }
+}
+
+/* Баннер ошибки загрузки: причина и действие, вместо пустого экрана (R-27) */
+.data-error {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+  padding:10px 14px;
+  margin-bottom:12px;
+  border:1px solid var(--red);
+  border-radius:4px;
+  background:rgba(248,113,113,0.07);
+  color:var(--red);
+  font-size:0.78rem;
+  line-height:1.5;
+}
+.data-error[hidden] { display:none; }
+
+/* Пальцевые цели: на тач-устройствах контролы меньше 44px не попадаются */
+@media(pointer:coarse) {
+  .btn,
+  .btn-sm,
+  .nav .btn,
+  .settings-nav a,
+  .tab,
+  .select-filter,
+  .conn-filter { min-height:44px; }
+  .settings-nav a { display:inline-flex; align-items:center; }
+  input:not([type="checkbox"]):not([type="range"]) { min-height:44px; }
+  select { min-height:44px; }
+  .chk-custom,
+  .chk-safe input { width:20px; height:20px; }
+  .chk-label,
+  .chk-safe { padding:8px 0; }
+  .tuning-range { height:8px; }
+  .tuning-range::-webkit-slider-thumb { width:26px; height:26px; }
+  .tuning-range::-moz-range-thumb { width:26px; height:26px; }
 }
 

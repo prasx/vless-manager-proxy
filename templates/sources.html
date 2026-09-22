@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}VLESS Manager — Источники{% endblock %}
+{% block title %}VLESS Manager · Источники{% endblock %}
 {% block page_title %}Источники{% endblock %}
 {% block extra_css %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sources.css') }}">
@@ -39,6 +39,8 @@
   <textarea class="inp-txt" id="inpTxtContent" placeholder="vless://... (по одной на строку)" rows="6" spellcheck="false"></textarea>
   <button class="btn btn-primary" id="btnAddTxtSource" onclick="addTxtSource()">+ Добавить TXT-источник</button>
 </div>
+
+<div class="data-error" id="srcError" role="status" hidden></div>
 
 <div class="card-list" id="list"></div>
 

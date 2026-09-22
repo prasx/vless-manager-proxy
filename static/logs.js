@@ -16,8 +16,34 @@ async function loadData() {
   isLoading = true;
   allLogs = [];
   totalLogs = 0;
+  setLoadingRow();
   await fetchPage(true);
   isLoading = false;
+}
+
+function setLoadingRow() {
+  const tb = $('#logBody');
+  if (tb) tb.innerHTML = '<tr><td colspan="4" class="empty">// загрузка логов…</td></tr>';
+}
+
+function renderLoadError() {
+  const tb = $('#logBody');
+  if (tb) tb.innerHTML = '<tr><td colspan="4" class="empty">// данные не загружены</td></tr>';
+}
+
+function showLoadError(cause) {
+  const el = $('#logError');
+  if (!el) return;
+  el.hidden = false;
+  el.innerHTML = `<span>Не удалось загрузить логи: ${escHtml(cause)}</span>
+    <button class="btn btn-sm" onclick="loadData()">повторить</button>`;
+}
+
+function hideLoadError() {
+  const el = $('#logError');
+  if (!el) return;
+  el.hidden = true;
+  el.innerHTML = '';
 }
 
 async function loadMore() {
@@ -32,6 +58,15 @@ async function fetchPage(reset) {
   let url = `/api/logs?limit=${PAGE_SIZE}&offset=${offset}`;
   if (currentLevel) url += `&level=${currentLevel}`;
   const data = await api('GET', url);
+  if (data.error) {
+    showLoadError(data.error);
+    if (reset) {
+      renderLoadError();
+      updatePagination();
+    }
+    return;
+  }
+  hideLoadError();
   const logs = data.logs || [];
   totalLogs = data.total || logs.length;
 
@@ -78,15 +113,21 @@ function renderRow(row) {
 }
 
 async function pollNew() {
-  if (isLoading || !allLogs.length) return;
-  const newest = allLogs[0];
+  if (isLoading) return;
   let url = `/api/logs?limit=20&offset=0`;
   if (currentLevel) url += `&level=${currentLevel}`;
   const data = await api('GET', url);
+  if (data.error) return;
+  const hadError = $('#logError') ? !$('#logError').hidden : false;
+  hideLoadError();
   const logs = data.logs || [];
-  if (!logs.length) return;
-  const existingTs = new Set(allLogs.map(r => r.timestamp));
-  const fresh = logs.filter(r => !existingTs.has(r.timestamp));
+  if (!logs.length) {
+    if (!allLogs.length && hadError) render();
+    return;
+  }
+  // timestamp имеет точность до секунды, id уникален
+  const existingIds = new Set(allLogs.map(r => r.id));
+  const fresh = logs.filter(r => !existingIds.has(r.id));
   if (!fresh.length) return;
   const tb = $('#logBody');
   const empty = tb.querySelector('.empty');
@@ -125,7 +166,8 @@ function updatePagination() {
 
 async function clearLogs() {
   if (!confirm('Очистить все логи?')) return;
-  await api('POST', '/api/logs/clear');
+  const res = await api('POST', '/api/logs/clear');
+  if (res.error) return toast(res.error, 'error');
   toast('логи очищены', 'success');
   loadData();
 }

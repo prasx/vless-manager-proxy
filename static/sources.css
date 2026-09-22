@@ -42,7 +42,7 @@
   align-items:center;
 }
 
-/* Add form — stacked on mobile, row on larger */
+/* Add form: stacked on mobile, row on larger */
 .add-form {
   display:flex;
   flex-direction:column;
@@ -126,12 +126,14 @@
   vertical-align:middle;
 }
 .type-url {
-  background:var(--border);
-  color:var(--text-muted);
+  background:var(--bg-secondary);
+  color:var(--text-secondary);
+  border:1px solid var(--border);
 }
 .type-txt {
-  background:var(--accent) !important;
-  color:var(--bg-primary);
+  background:var(--green);
+  color:var(--bg);
+  border:1px solid var(--green);
 }
 
 /* Tabs */
@@ -159,8 +161,8 @@
 .inp-txt {
   width:100%;
   box-sizing:border-box;
-  background:var(--bg-primary);
-  border:1px solid var(--border);
+  background:var(--bg-secondary);
+  border:1px solid var(--border-field);
   color:var(--text-primary);
   padding:10px;
   font-size:0.78rem;
@@ -168,7 +170,7 @@
   border-radius:4px;
   resize:vertical;
 }
-.inp-txt:focus { outline:none; border-color:var(--text-muted); }
+.inp-txt:focus { border-color:var(--text-muted); }
 
 /* Modal dialog */
 .modal {
@@ -189,8 +191,8 @@
   margin-bottom:12px;
 }
 .modal textarea {
-  background:var(--bg-primary);
-  border:1px solid var(--border);
+  background:var(--bg-secondary);
+  border:1px solid var(--border-field);
   color:var(--text-primary);
   padding:10px;
   font-size:0.78rem;
@@ -198,7 +200,7 @@
   border-radius:4px;
   resize:vertical;
 }
-.modal textarea:focus { outline:none; border-color:var(--text-muted); }
+.modal textarea:focus { border-color:var(--text-muted); }
 .modal-actions {
   display:flex;
   gap:8px;

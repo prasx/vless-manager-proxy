@@ -24,7 +24,7 @@ table { min-width:100%; }
   cursor:pointer;
   height:34px;
 }
-.select-filter:focus { outline:none; border-color:var(--border-hover); }
+.select-filter:focus { border-color:var(--border-hover); }
 .pagination-bar {
   display:flex;
   align-items:center;

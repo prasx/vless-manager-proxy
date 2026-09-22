@@ -20,15 +20,16 @@
       <div class="label">VLESS Manager</div>
       <h1>{% block page_title %}Dashboard{% endblock %}</h1>
     </div>
-    <button class="btn btn-nav-toggle" id="navToggle" onclick="toggleNav()" aria-label="Menu">&#9776;</button>
+    <button class="btn btn-nav-toggle" id="navToggle" onclick="toggleNav()" aria-label="Меню" aria-expanded="false" aria-controls="mainNav">&#9776;</button>
     <nav class="nav" id="mainNav">
-      <a href="/" class="btn">Дашборд</a>
-      <a href="/sources" class="btn">Источники</a>
-      <a href="/settings" class="btn">Настройки</a>
-      <a href="/logs" class="btn">Логи</a>
-      <a href="/api/subscribe.txt" class="btn" target="_blank">Подписка</a>
-      <button class="btn" onclick="if(typeof toggleConnModal==='function'){toggleConnModal()}else{location.href='/'}">Соединения</button>
-      <button class="btn btn-theme" onclick="toggleTheme()" title="Переключить тему">&#9681;</button>
+      {% set here = request.path %}
+      {% set items = [('/', 'Дашборд'), ('/sources', 'Источники'), ('/settings', 'Настройки'), ('/logs', 'Логи')] %}
+      {% for href, title in items %}
+      <a href="{{ href }}" class="btn"{% if here == href %} aria-current="page"{% endif %}>{{ title }}</a>
+      {% endfor %}
+      <a href="/api/subscribe.txt" class="btn" target="_blank" rel="noopener">Подписка</a>
+      {% block nav_extra %}{% endblock %}
+      <button class="btn btn-theme" onclick="toggleTheme()" aria-label="Переключить тему" title="Переключить тему">&#9681;</button>
     </nav>
   </div>
 </div>
@@ -39,7 +40,7 @@
 {% block footer %}
 <div class="footer">
   <span>v3.0</span>
-  <a href="https://github.com/prasx" target="_blank">🖤 GitHub</a>
+  <a href="https://github.com/prasx" target="_blank" rel="noopener">GitHub</a>
 </div>
 {% endblock %}
 

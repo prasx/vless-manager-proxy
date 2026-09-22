@@ -22,5 +22,8 @@
 
 function toggleNav() {
   const nav = document.getElementById('mainNav');
-  if (nav) nav.classList.toggle('nav-open');
+  const toggle = document.getElementById('navToggle');
+  if (!nav) return;
+  const open = nav.classList.toggle('nav-open');
+  if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
 }

@@ -10,16 +10,21 @@
 .stat-card {
   background:var(--bg-card);
   padding:14px 12px;
+  border:0;
   border-right:1px solid var(--border);
   border-bottom:1px solid var(--border);
+  font:inherit;
+  color:inherit;
+  text-align:left;
+  width:100%;
   transition:background var(--transition);
   cursor:pointer;
   user-select:none;
 }
 .stat-card:hover { background:var(--bg-secondary); }
 .stat-card.active { background:var(--bg-secondary); border-left:2px solid var(--text-primary); }
-.stat-card .num { font-size:1.2rem; color:var(--text-primary); line-height:1.2; }
-.stat-card .label-s { font-size:0.65rem; color:var(--text-muted); margin-top:2px; text-transform:uppercase; letter-spacing:0.1em; }
+.stat-card .num { display:block; font-size:1.2rem; color:var(--text-primary); line-height:1.2; }
+.stat-card .label-s { display:block; font-size:0.65rem; color:var(--text-muted); margin-top:2px; text-transform:uppercase; letter-spacing:0.06em; }
 .stat-card .label-s::before { content:'// '; }
 .stat-card.updating { position:relative; }
 .stat-card.updating .num { opacity:0.45; transition:opacity .3s; }
@@ -40,7 +45,7 @@
   .stat-card .num { font-size:1.6rem; }
 }
 
-/* Toolbar — stacked rows on mobile, single row on desktop */
+/* Toolbar: stacked rows on mobile, single row on desktop */
 .toolbar {
   display:flex;
   flex-direction:column;
@@ -55,7 +60,20 @@
   flex-wrap:wrap;
   align-items:center;
 }
+.toolbar-row-2 { flex-wrap:wrap; }
 .toolbar-row-2 input { flex:1; min-width:0; }
+/* Выбор всех прокси: в мобильной вёрстке таблицы с шапкой нет, поэтому чекбокс живёт в тулбаре */
+.chk-all {
+  display:none;
+  align-items:center;
+  gap:6px;
+  font-size:0.78rem;
+  color:var(--text-secondary);
+  cursor:pointer;
+  user-select:none;
+  padding:4px 0;
+}
+@media(max-width:768px) { .chk-all { display:inline-flex; } }
 @media(min-width:769px) {
   .toolbar { flex-direction:row; align-items:center; gap:8px; }
   .toolbar-row { display:flex; align-items:center; gap:6px; }
@@ -107,7 +125,7 @@
 
 
 /* Toast */
-.toast { bottom:16px; left:16px; right:16px; transform:translateY(20px); max-width:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.toast { bottom:16px; left:16px; right:16px; transform:translateY(20px); max-width:none; overflow-wrap:anywhere; }
 .toast-in { transform:translateY(0); }
 @media(min-width:480px) {
   .toast { left:50%; right:auto; transform:translateX(-50%) translateY(20px); max-width:90vw; }
@@ -180,6 +198,7 @@
   align-items:center;
   justify-content:center;
   gap:12px;
+  flex-wrap:wrap;
   padding:16px;
   border-top:1px solid var(--border);
 }

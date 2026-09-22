@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}VLESS Manager — Логи{% endblock %}
+{% block title %}VLESS Manager · Логи{% endblock %}
 {% block page_title %}Логи{% endblock %}
 {% block extra_css %}
 <link rel="stylesheet" href="{{ url_for('static', filename='logs.css') }}">
@@ -16,6 +16,8 @@
   </select>
   <button class="btn" onclick="clearLogs()">Очистить</button>
 </div>
+
+<div class="data-error" id="logError" role="status" hidden></div>
 
 <div class="table-wrap">
   <table>

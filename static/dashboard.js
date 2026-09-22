@@ -12,9 +12,44 @@ const linkMap = {};
 const selected = new Set();
 
 function formatSpeed(kbps) {
-  if (!kbps) return '<span class="dim">—</span>';
+  if (!kbps) return '<span class="dim">нет</span>';
   if (kbps >= 1000) return `${(kbps / 1000).toFixed(1)} Mbps`;
   return `${kbps} Kbps`;
+}
+
+// ─── Состояния данных: загрузка, ошибка, отсутствующее значение ───
+
+function showDataError(text) {
+  const box = $('#dataError');
+  const label = $('#dataErrorText');
+  if (!box || !label) return;
+  label.textContent = '// ' + text;
+  box.hidden = false;
+}
+
+function hideDataError() {
+  const box = $('#dataError');
+  if (box) box.hidden = true;
+}
+
+// Заглушка на время первой загрузки: пустая таблица читалась как «прокси нет».
+function listPlaceholder(text) {
+  return `<tr><td colspan="9" class="empty">${esc(text)}</td></tr>`;
+}
+
+function renderListLoading() {
+  const tb = $('#tbodyDesktop');
+  const list = $('#mobileList');
+  if (tb) tb.innerHTML = listPlaceholder('// загрузка списка…');
+  if (list) list.innerHTML = '<div class="empty" style="margin:0">// загрузка списка…</div>';
+}
+
+function renderListError(reason) {
+  const msg = '// не удалось загрузить список: ' + (reason || 'нет ответа') + '. Нажмите «повторить» выше.';
+  const tb = $('#tbodyDesktop');
+  const list = $('#mobileList');
+  if (tb) tb.innerHTML = listPlaceholder(msg);
+  if (list) list.innerHTML = `<div class="empty" style="margin:0">${esc(msg)}</div>`;
 }
 
 let currentSearch = '';
@@ -44,6 +79,14 @@ $('#searchInput')?.addEventListener('input', () => {
   }, 300);
 });
 
+function setActiveFilter(f) {
+  $$('.stat-card').forEach(el => {
+    const on = el.dataset.filter === f;
+    el.classList.toggle('active', on);
+    el.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
 function setFilter(f) {
   currentFilter = f;
   // reason-фильтр имеет смысл только в представлении «не работает»
@@ -52,7 +95,7 @@ function setFilter(f) {
     const sel = $('#reasonFilter');
     if (sel) sel.value = '';
   }
-  $$('.stat-card').forEach(el => el.classList.toggle('active', el.dataset.filter === f));
+  setActiveFilter(f);
   loadData();
 }
 
@@ -98,7 +141,7 @@ function renderReasonFilter(reasons) {
   sel.innerHTML = opts;
   sel.style.display = list.length || currentReason === 'none' ? '' : 'none';
   if (currentReason && !list.some(x => x.reason === currentReason) && currentReason !== 'none') {
-    // причина исчезла (например, после перетеста) — сбрасываем фильтр
+    // причина исчезла (например, после перетеста): сбрасываем фильтр
     currentReason = '';
     loadData();
   } else {
@@ -112,7 +155,7 @@ function onReasonChange() {
   // выбор причины автоматически показывает раздел «failed»
   if (v && currentFilter !== 'failed') {
     currentFilter = 'failed';
-    $$('.stat-card').forEach(el => el.classList.toggle('active', el.dataset.filter === 'failed'));
+    setActiveFilter('failed');
   }
   currentReason = v;
   loadData();
@@ -127,29 +170,53 @@ function updateSourceButtons() {
 }
 
 async function loadData() {
+  if (isLoading) return;
   isLoading = true;
   allProxies = [];
   totalCount = 0;
   selected.clear();
+  resetSelectAll();
   updateBatchButtons();
-  await fetchPage(true);
-  isLoading = false;
+  try {
+    await fetchPage(true);
+  } catch (e) {
+    const msg = e && e.message ? e.message : String(e);
+    showDataError('не удалось обновить список: ' + msg);
+    renderListError(msg);
+  } finally {
+    isLoading = false;
+  }
 }
 
 async function loadMore() {
   if (isLoading) return;
   isLoading = true;
-  await fetchPage(false);
-  isLoading = false;
+  try {
+    await fetchPage(false);
+  } catch (e) {
+    showDataError('не удалось догрузить список: ' + (e && e.message ? e.message : e));
+  } finally {
+    isLoading = false;
+  }
 }
 
 async function fetchPage(reset) {
   const offset = reset ? 0 : allProxies.length;
 
+  if (reset) renderListLoading();
+
   const data = await api('GET', makeProxiesUrl(PAGE_SIZE, offset));
 
-  const proxies = data.proxies || data;
-  totalCount = data.total != null ? data.total : proxies.length;
+  // api() не отдаёт reject: ошибка приходит телом {error}, и раньше она попадала в список как данные
+  if (data && data.error) {
+    showDataError('не удалось получить список прокси: ' + data.error);
+    renderListError(data.error);
+    return;
+  }
+
+  const proxies = Array.isArray(data) ? data : (Array.isArray(data.proxies) ? data.proxies : []);
+  totalCount = data && data.total != null ? data.total : proxies.length;
+  hideDataError();
 
   if (reset) {
     allProxies = proxies;
@@ -158,79 +225,123 @@ async function fetchPage(reset) {
   }
 
   if (reset) {
-    if (!_initialMetaLoaded) {
-      _initialMetaLoaded = true;
-      const [status, ob, xr, health] = await Promise.all([
-        api('GET', '/api/status'),
-        api('GET', '/api/xray/outbounds').catch(() => ({nodes:[], traffic:{}})),
-        api('GET', '/api/xray/status').catch(() => ({running:false})),
-        api('GET', '/api/health').catch(() => null),
-      ]);
-      const healthEl = $('#healthIndicator');
-      if (healthEl) {
-        const ok = health?.status === 'ok';
-        healthEl.innerHTML = ok
-          ? '<span class="badge badge-green" style="margin-left:8px;font-size:0.62rem">исправен</span>'
-          : '<span class="badge badge-red" style="margin-left:8px;font-size:0.62rem">проблемы</span>';
-      }
-      $('#statTotal').textContent = status.total;
-      $('#statWorking').textContent = status.working;
-      $('#statFailed').textContent = status.failed;
-      $('#statTopSpeed').textContent = status.top_speed;
-      const speedLabel = document.querySelector('.stat-card[data-filter="top_speed"] .label-s');
-      if (speedLabel && status.top_speed_threshold) {
-        const mbps = status.top_speed_threshold / 1000;
-        speedLabel.textContent = mbps >= 1 ? `топ-скорость ≥${mbps}Mbps` : `топ-скорость ≥${status.top_speed_threshold}Kbps`;
-      }
-      renderSourceButtons(status.sources, status.unknown_count, status.total);
-      renderReasonFilter(status.reasons || []);
-      renderTraffic(ob, xr);
-    }
     proxies.forEach(p => linkMap[p.id] = p.link);
   } else {
     proxies.forEach(p => { if (!linkMap[p.id]) linkMap[p.id] = p.link; });
   }
 
+  // Список рисуется до метаданных: /api/xray/status и /api/health отвечают около двух секунд,
+  // и раньше таблица всё это время оставалась заглушкой загрузки.
   renderMobile(allProxies);
   renderDesktop(allProxies);
-
   updatePagination();
+  isLoading = false;
+
+  if (reset && !_initialMetaLoaded) {
+    _initialMetaLoaded = true;
+    const [status, ob, xr, health] = await Promise.all([
+      api('GET', '/api/status'),
+      api('GET', '/api/xray/outbounds'),
+      api('GET', '/api/xray/status'),
+      api('GET', '/api/health'),
+    ]);
+    renderHealth(health);
+    renderStats(status);
+    if (status && !status.error) {
+      renderSourceButtons(status.sources, status.unknown_count, status.total);
+      renderReasonFilter(status.reasons || []);
+    } else {
+      // метаданные не загрузились: пробуем снова на следующем обновлении
+      _initialMetaLoaded = false;
+    }
+    renderTraffic(ob, xr);
+  }
+}
+
+function renderStats(status) {
+  const ids = ['statTotal', 'statWorking', 'statFailed', 'statTopSpeed'];
+  if (!status || status.error) {
+    const why = status && status.error ? status.error : 'нет ответа';
+    ids.forEach(id => {
+      const el = $(`#${id}`);
+      if (!el) return;
+      el.textContent = '-';
+      el.title = 'не удалось получить /api/status: ' + why;
+    });
+    return;
+  }
+  $('#statTotal').textContent = status.total;
+  $('#statWorking').textContent = status.working;
+  $('#statFailed').textContent = status.failed;
+  $('#statTopSpeed').textContent = status.top_speed;
+  const speedLabel = document.querySelector('.stat-card[data-filter="top_speed"] .label-s');
+  if (speedLabel && status.top_speed_threshold) {
+    const mbps = status.top_speed_threshold / 1000;
+    speedLabel.textContent = mbps >= 1 ? `топ-скорость ≥${mbps}Mbps` : `топ-скорость ≥${status.top_speed_threshold}Kbps`;
+  }
+}
+
+function renderHealth(health) {
+  const el = $('#healthIndicator');
+  if (!el) return;
+  // Недоступный API и неисправный Xray это разные вещи, и раньше они выглядели одинаково
+  if (!health || health.error) {
+    const why = health && health.error ? health.error : 'нет ответа /api/health';
+    el.innerHTML = `<span class="badge badge-muted" title="${esc(why)}">нет связи с API</span>`;
+    return;
+  }
+  el.innerHTML = health.status === 'ok'
+    ? '<span class="badge badge-green">исправен</span>'
+    : '<span class="badge badge-red">проблемы</span>';
 }
 
 function renderTraffic(ob, xr) {
   const el = $('#activeInfo');
   if (!el) return;
-  const nodes = ob.nodes || [];
-  const run = xr.running;
-  const traffic = ob.traffic || {};
-  const withTraffic = nodes.filter(t => traffic[t]?.downlink);
+  const outboundFailed = !ob || !!ob.error;
+  const nodes = outboundFailed ? null : (ob.nodes || []);
+  const traffic = outboundFailed ? {} : (ob.traffic || {});
   let html = '// outbounds: ';
-  if (nodes.length) {
+  if (nodes === null) {
+    html += 'нет данных';
+  } else if (nodes.length) {
+    const withTraffic = nodes.filter(t => traffic[t]?.downlink);
     html += `<b>${nodes.length}</b> (с трафиком: ${withTraffic.length})`;
   } else {
-    html += '—';
+    html += 'нет';
   }
-  html += run
-    ? ' <span class="badge badge-green" style="font-size:0.62rem">работает</span>'
-    : ' <span class="badge badge-red" style="font-size:0.62rem">остановлен</span>';
+  if (xr && xr.error) {
+    html += ` <span class="badge badge-muted" title="${esc(xr.error)}">нет связи с API</span>`;
+  } else {
+    html += xr && xr.running
+      ? ' <span class="badge badge-green">работает</span>'
+      : ' <span class="badge badge-red">остановлен</span>';
+  }
   el.innerHTML = html;
 }
 
 function renderSourceButtons(sources, unknownCount, totalCount) {
   const bar = $('#sourceBar');
   if (!bar) return;
+  const list = sources || [];
+  // Пересборка на каждом обновлении (раз в 5 с во время теста) сбрасывала фокус,
+  // поэтому кнопки перерисовываются только когда набор источников изменился.
+  const signature = JSON.stringify([list.map(s => [s.id, s.name, s.cnt]), unknownCount]);
+  if (bar.dataset.signature === signature) { updateSourceButtons(); return; }
+  bar.dataset.signature = signature;
   $$('.source-btn-src, .source-select').forEach(el => el.remove());
 
-  const totalSrc = (sources || []).length + (unknownCount > 0 ? 1 : 0);
+  const totalSrc = list.length + (unknownCount > 0 ? 1 : 0);
   const allBtn = $('#sourceAll');
-  const unknownBtn = $('#sourceUnknown');
+  let unknownBtn = $('#sourceUnknown');
 
   if (totalSrc <= 4) {
-    // inline buttons — show All + source buttons
+    // inline buttons: show All + source buttons
     if (allBtn) allBtn.style.display = '';
     if (unknownCount > 0) {
       if (!unknownBtn) {
         unknownBtn = document.createElement('button');
+        unknownBtn.type = 'button';
         unknownBtn.className = 'btn btn-sm';
         unknownBtn.id = 'sourceUnknown';
         unknownBtn.dataset.source = 'unknown';
@@ -242,11 +353,12 @@ function renderSourceButtons(sources, unknownCount, totalCount) {
     } else if (unknownBtn) {
       unknownBtn.style.display = 'none';
     }
-    for (const s of (sources || [])) {
+    for (const s of list) {
       const id = 'srcBtn-' + s.id;
       let btn = document.getElementById(id);
       if (!btn) {
         btn = document.createElement('button');
+        btn.type = 'button';
         btn.className = 'btn btn-sm source-btn-src';
         btn.id = id;
         btn.dataset.source = String(s.id);
@@ -259,14 +371,15 @@ function renderSourceButtons(sources, unknownCount, totalCount) {
     if (allBtn) allBtn.style.display = 'none';
     const sel = document.createElement('select');
     sel.className = 'input source-select';
+    sel.setAttribute('aria-label', 'Источник прокси');
     sel.style.width = 'auto';
     sel.style.maxWidth = '280px';
     let opts = `<option value="">Все (${totalCount || 0})</option>`;
     if (unknownCount > 0) {
       opts += `<option value="unknown">Свои (${unknownCount})</option>`;
     }
-    for (const s of (sources || [])) {
-      opts += `<option value="${s.id}">${s.name} (${s.cnt})</option>`;
+    for (const s of list) {
+      opts += `<option value="${esc(s.id)}">${esc(s.name)} (${esc(s.cnt)})</option>`;
     }
     sel.innerHTML = opts;
     sel.value = currentSource;
@@ -304,7 +417,7 @@ function statusBadge(status, failedSince) {
   return status === 'failed' ? 'badge-orange' : 'badge-muted';
 }
 
-// last_test_at из API хранится в UTC (naive) — добавляем 'Z' и форматируем локально
+// last_test_at из API хранится в UTC (naive): добавляем 'Z' и форматируем локально
 function fmtUtcTime(t) {
   if (!t) return '';
   const d = new Date(String(t).replace(' ', 'T') + 'Z');
@@ -340,25 +453,45 @@ function statusText(s) {
 }
 
 function securityBadge(sec) {
-  if (!sec || sec === 'none') return ' <span class="badge badge-warn" title="без шифрования транспорта">без TLS</span>';
+  if (!sec || sec === 'none') return ' <span class="badge badge-orange" title="без шифрования транспорта">без TLS</span>';
   return '';
 }
 
 function toggleSelect(id) {
   if (selected.has(id)) selected.delete(id); else selected.add(id);
   updateBatchButtons();
-  const cb = $(`#cb-${id}`);
-  if (cb) cb.checked = selected.has(id);
+  $$(`.row-chk[data-id="${id}"]`).forEach(cb => { cb.checked = selected.has(id); });
+  syncSelectAll();
+}
+
+// Раньше у чекбокса строки и у мобильной карточки был один и тот же id,
+// поэтому на телефоне выбор вообще не переключался.
+function toggleSelectAllFrom(checked) {
+  for (const p of allProxies) {
+    if (checked) selected.add(p.id); else selected.delete(p.id);
+  }
+  $$('.row-chk').forEach(cb => { cb.checked = checked; });
+  updateBatchButtons();
 }
 
 function toggleSelectAll() {
-  const checked = $('#selectAll').checked;
-  for (const p of allProxies) {
-    if (checked) selected.add(p.id); else selected.delete(p.id);
-    const cb = $(`#cb-${p.id}`);
-    if (cb) cb.checked = checked;
-  }
-  updateBatchButtons();
+  const desktop = $('#selectAll');
+  toggleSelectAllFrom(!!(desktop && desktop.checked));
+}
+
+function syncSelectAll() {
+  const all = allProxies.length > 0 && allProxies.every(p => selected.has(p.id));
+  const desktop = $('#selectAll');
+  if (desktop) desktop.checked = all;
+  const mobile = $('#selectAllMobile');
+  if (mobile) mobile.checked = all;
+}
+
+function resetSelectAll() {
+  const desktop = $('#selectAll');
+  if (desktop) desktop.checked = false;
+  const mobile = $('#selectAllMobile');
+  if (mobile) mobile.checked = false;
 }
 
 function updateBatchButtons() {
@@ -377,8 +510,10 @@ function updateBatchButtons() {
 async function batchDelete() {
   if (!confirm(`Удалить выбранные прокси (${selected.size})?`)) return;
   const ids = Array.from(selected);
-  await api('POST', '/api/proxies/batch-delete', {ids});
-  toast(`удалено прокси: ${ids.length}`, 'success');
+  const r = await api('POST', '/api/proxies/batch-delete', {ids});
+  if (r.error) return toast(r.error, 'error');
+  const deleted = r.deleted != null ? r.deleted : ids.length;
+  toast(`удалено прокси: ${deleted}`, 'success');
   loadData();
 }
 
@@ -400,15 +535,15 @@ function renderDesktop(proxies) {
   for (const p of proxies) {
     const tr = document.createElement('tr');
     const badgeCls = statusBadge(p.status, p.failed_since);
-    const speedHtml = p.speed_kbps ? formatSpeed(p.speed_kbps) : '<span class="dim">—</span>';
+    const speedHtml = p.speed_kbps ? formatSpeed(p.speed_kbps) : '<span class="dim">нет</span>';
     const vlessClass = p.latency_vless && p.latency_vless < 300 ? 'lat-good' : p.latency_vless >= 300 ? 'lat-bad' : 'dim';
-    const vlessHtml = p.latency_vless ? `<span class="${vlessClass}">${p.latency_vless}мс</span>` : '<span class="dim">—</span>';
+    const vlessHtml = p.latency_vless ? `<span class="${vlessClass}">${p.latency_vless}мс</span>` : '<span class="dim">нет</span>';
     tr.innerHTML = `
-      <td class="chk"><input type="checkbox" class="chk-custom" id="cb-${p.id}" ${selected.has(p.id)?'checked':''} onchange="toggleSelect(${p.id})"></td>
+      <td class="chk"><input type="checkbox" class="chk-custom row-chk" data-id="${p.id}" aria-label="Выбрать прокси ${p.id}" ${selected.has(p.id)?'checked':''} onchange="toggleSelect(${p.id})"></td>
       <td class="id">${p.id}</td>
-      <td class="host-cell" title="${p.host}">${p.host}</td>
-      <td>${p.port}</td>
-      <td>${p.country || '—'}${securityBadge(p.security)}</td>
+      <td class="host-cell" title="${esc(p.host)}">${esc(p.host)}</td>
+      <td>${esc(p.port)}</td>
+      <td>${esc(p.country || 'нет')}${securityBadge(p.security)}</td>
       <td class="status-cell"><span class="badge ${badgeCls}" title="${testTooltip(p)}">${statusText(p.status)}</span>${errorHint(p)}</td>
       <td class="speed-cell">${speedHtml}</td>
       <td class="lat-cell">${vlessHtml}</td>
@@ -431,15 +566,15 @@ function renderMobile(proxies) {
   }
   for (const p of proxies) {
     const badgeCls = statusBadge(p.status, p.failed_since);
-    const speedHtml = p.speed_kbps ? formatSpeed(p.speed_kbps) : '—';
+    const speedHtml = p.speed_kbps ? formatSpeed(p.speed_kbps) : '<span class="dim">нет</span>';
     const vlessClass = p.latency_vless && p.latency_vless < 300 ? 'lat-good' : p.latency_vless >= 300 ? 'lat-bad' : 'dim';
     const card = document.createElement('div');
     card.className = 'mobile-card';
     card.innerHTML = `
-      <div class="mc-chk"><input type="checkbox" class="chk-custom" id="cb-${p.id}" ${selected.has(p.id)?'checked':''} onchange="toggleSelect(${p.id})"></div>
-      <div class="mc-host" title="${p.host}">${p.host}</div>
+      <div class="mc-chk"><input type="checkbox" class="chk-custom row-chk" data-id="${p.id}" aria-label="Выбрать прокси ${p.id}" ${selected.has(p.id)?'checked':''} onchange="toggleSelect(${p.id})"></div>
+      <div class="mc-host" title="${esc(p.host)}">${esc(p.host)}</div>
       <div class="mc-meta">
-        <span>#${p.id}</span><span>${p.port}</span><span>${p.country || '—'}${securityBadge(p.security)}</span>
+        <span>#${p.id}</span><span>${esc(p.port)}</span><span>${esc(p.country || 'нет')}${securityBadge(p.security)}</span>
       </div>
       <div class="mc-actions">
         <button class="btn btn-sm" onclick="copyLink(${p.id})">копия</button>
@@ -449,7 +584,7 @@ function renderMobile(proxies) {
       <div class="mc-status">
         <span class="badge ${badgeCls}" title="${testTooltip(p)}">${statusText(p.status)}</span>
         ${errorHint(p)}
-        <span class="${vlessClass}">VLESS: ${p.latency_vless ? p.latency_vless + 'мс' : '—'}</span>
+        <span class="${vlessClass}">VLESS: ${p.latency_vless ? p.latency_vless + 'мс' : 'нет'}</span>
         <span>Скорость: ${speedHtml}</span>
       </div>
     `;
@@ -469,9 +604,9 @@ async function testOne(id) {
   if (r.error) return toast(r.error, 'error');
   if (r.status === 'working') {
     const speedStr = r.speed ? ` · ${formatSpeed(r.speed)}` : '';
-    toast(`прокси #${id} работает — ${r.latency}мс${speedStr}`, 'success');
+    toast(`прокси #${id} работает: ${r.latency}мс${speedStr}`, 'success');
   }
-  else toast(`прокси #${id} не работает${r.error ? ' — ' + r.error : ''}`);
+  else toast(`прокси #${id} не работает${r.error ? ': ' + r.error : ''}`);
   loadData();
 }
 
@@ -504,7 +639,7 @@ async function delOne(id) {
 async function testAll() {
   const r = await api('POST','/api/test-all');
   if (r.error) return toast(r.error, 'error');
-  toast('запущен полный тест: проверка → пинг → скорость');
+  toast('запущен полный тест прокси');
   setTimeout(loadData, 3000);
 }
 
@@ -517,13 +652,15 @@ async function retestFailed() {
 }
 
 async function cancelTest() {
-  await api('POST','/api/test-cancel');
+  const r = await api('POST','/api/test-cancel');
+  if (r.error) return toast(r.error, 'error');
   toast('тест отменён');
 }
 
 async function cleanupFailed() {
   if (!confirm('Удалить ВСЕ неработающие прокси? Рабочие можно восстановить повторным импортом из Источников.')) return;
   const r = await api('POST','/api/cleanup');
+  if (r.error) return toast(r.error, 'error');
   if (r.deleted > 0) toast(`удалено неработающих прокси: ${r.deleted}`, 'success');
   else toast('неработающих прокси нет');
   loadData();
@@ -606,19 +743,14 @@ function fmtElapsed(secs) {
 }
 
 async function updateStats() {
-  try {
-    const status = await api('GET', '/api/status');
-    $('#statTotal').textContent = status.total;
-    $('#statWorking').textContent = status.working;
-    $('#statFailed').textContent = status.failed;
-    $('#statTopSpeed').textContent = status.top_speed;
-    const speedLabel = document.querySelector('.stat-card[data-filter="top_speed"] .label-s');
-    if (speedLabel && status.top_speed_threshold) {
-      const mbps = status.top_speed_threshold / 1000;
-      speedLabel.textContent = mbps >= 1 ? `топ-скорость ≥${mbps}Mbps` : `топ-скорость ≥${status.top_speed_threshold}Kbps`;
-    }
-    renderReasonFilter(status.reasons || []);
-  } catch (_) {}
+  const status = await api('GET', '/api/status');
+  if (!status || status.error) {
+    showDataError('не удалось обновить счётчики: ' + (status && status.error ? status.error : 'нет ответа'));
+    renderStats(status);
+    return;
+  }
+  renderStats(status);
+  renderReasonFilter(status.reasons || []);
 }
 
 function setStatUpdating(on) {
@@ -627,7 +759,11 @@ function setStatUpdating(on) {
 
 function resetStatNumbers() {
   ['statTotal','statWorking','statFailed','statTopSpeed'].forEach(id => {
-    $(`#${id}`).textContent = '—';
+    const el = $(`#${id}`);
+    if (el) {
+      el.textContent = '…';
+      el.title = 'идёт прогон, значения обновятся после его завершения';
+    }
   });
 }
 
@@ -637,7 +773,7 @@ function onProgressEvent(p) {
   const label = $('#testProgressLabel');
   const detail = $('#testProgressDetail');
   const steps = $('#stageSteps');
-  const btns = ['testAllBtn', 'batchTestBtn', 'retestFailedBtn'];
+  const btns = ['testAllBtn', 'batchTestBtn', 'retestFailedBtn', 'cleanupBtn', 'batchDeleteBtn'];
   const cancelBtn = $('#cancelTestBtn');
 
   if (p.running) {
@@ -668,7 +804,7 @@ function onProgressEvent(p) {
           : stageStatusText(active))
       : `${p.done}/${p.total}`;
     label.textContent = p.cancel_requested
-      ? `«${labelRu(p.label)}» — отмена… · ${elapsed}`
+      ? `«${labelRu(p.label)}»: отмена… · ${elapsed}`
       : `«${labelRu(p.label)}» → ${stTitle}: ${phaseText} · ${elapsed}`;
 
     if (detail) {
@@ -700,7 +836,7 @@ function onProgressEvent(p) {
     fill.style.background = 'var(--text-muted)';
     fill.style.height = '2px';
     if (p.last_completed) {
-      updateLastTestRow(`Последний прогон «${labelRu(p.last_label)}»: работает ${p.last_ok} из ${p.last_total} — ${p.last_completed}`);
+      updateLastTestRow(`Последний прогон «${labelRu(p.last_label)}»: работает ${p.last_ok} из ${p.last_total}, завершён ${p.last_completed}`);
     }
     btns.forEach(id => { const b = $(`#${id}`); if (b) b.disabled = false; });
     if (cancelBtn) cancelBtn.style.display = 'none';
@@ -794,15 +930,22 @@ async function loadPerIPTraffic() {
   if (!el) return;
   try {
     const data = await api('GET', '/api/connections/traffic');
+    if (data && data.error) {
+      el.innerHTML = `<div class="conn-empty">// не удалось получить трафик по клиентам: ${esc(data.error)}</div>`;
+      return;
+    }
     const clients = data.clients || [];
-    if (!clients.length) { el.innerHTML = ''; return; }
+    if (!clients.length) {
+      el.innerHTML = '<div class="conn-empty">// трафика по клиентам пока нет</div>';
+      return;
+    }
     const maxBytes = Math.max(...clients.map(c => c.bytes_down), 1);
     let html = '<table><thead><tr><th>Клиент</th><th>Соед.</th><th>↓</th><th>↑</th><th></th></tr></thead><tbody>';
     for (const c of clients) {
       const pct = (c.bytes_down / maxBytes) * 100;
       html += `<tr>
-        <td class="ip">${c.ip}</td>
-        <td>${c.connections}</td>
+        <td class="ip">${esc(c.ip)}</td>
+        <td>${esc(c.connections)}</td>
         <td class="bytes">${formatConnBytes(c.bytes_down)}</td>
         <td class="bytes">${formatConnBytes(c.bytes_up)}</td>
         <td><span class="bar" style="width:${pct}%"></span></td>
@@ -810,7 +953,9 @@ async function loadPerIPTraffic() {
     }
     html += '</tbody></table>';
     el.innerHTML = html;
-  } catch (_) { /* silent */ }
+  } catch (e) {
+    el.innerHTML = `<div class="conn-empty">// не удалось получить трафик по клиентам: ${esc(e && e.message ? e.message : e)}</div>`;
+  }
 }
 
 function filterConnTable() {
@@ -823,14 +968,27 @@ function filterConnTable() {
   }
 }
 
+// Цвет бейджа выводится из статуса соединения: раньше каждая строка была зелёной
+function connStatusClass(status) {
+  const s = String(status || '').toUpperCase();
+  if (s === 'ESTABLISHED' || s === 'LISTEN' || s === 'LISTENING') return 'badge-green';
+  if (!s) return 'badge-muted';
+  return 'badge-orange';
+}
+
 async function loadConnections() {
   const wrap = $('#connTableWrap');
   if (!wrap) return;
   try {
     const data = await api('GET', '/api/connections/list');
+    if (data && data.error) {
+      wrap.innerHTML = `<div class="data-error" role="status"><span>// не удалось получить соединения: ${esc(data.error)}</span>` +
+        '<button type="button" class="btn btn-sm" onclick="loadConnections()">повторить</button></div>';
+      return;
+    }
     const conns = data.connections || [];
     if (!conns.length) {
-      wrap.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.8rem">// активных соединений нет</div>';
+      wrap.innerHTML = '<div class="conn-empty">// активных соединений нет</div>';
       return;
     }
     let html = `<table class="conn-table">
@@ -840,22 +998,29 @@ async function loadConnections() {
       const remote = `${c.remote}:${c.remote_port}`;
       const local = `${c.local}:${c.local_port}`;
       const traffic = formatConnBytes(c.bytes_out || 0) + (c.bytes_in ? '/' + formatConnBytes(c.bytes_in) : '');
+      const proc = c.process || 'нет';
+      // remote приходит из /proc: в inline-обработчик пускаем только адрес из допустимых символов
+      const remoteIp = /^[0-9a-fA-F:.]+$/.test(String(c.remote || '')) ? String(c.remote) : '';
+      const closeCell = remoteIp
+        ? `<button type="button" class="btn btn-sm btn-danger" onclick="closeConn('${remoteIp}',${Number(c.remote_port) || 0})">закрыть</button>`
+        : '<span class="dim">нет данных</span>';
       html += `<tr>
-        <td class="proc" title="${c.process || '—'}">${c.process || '—'}</td>
-        <td>${c.pid || '—'}</td>
-        <td>${local}</td>
-        <td>${remote}</td>
-        <td><span class="badge badge-green">${c.status}</span></td>
+        <td class="proc" title="${esc(proc)}">${esc(proc)}</td>
+        <td>${c.pid != null ? esc(c.pid) : 'нет'}</td>
+        <td>${esc(local)}</td>
+        <td>${esc(remote)}</td>
+        <td><span class="badge ${connStatusClass(c.status)}">${esc(c.status || 'неизвестно')}</span></td>
         <td class="bytes" title="вниз/вверх">${traffic}</td>
-        <td><button class="btn btn-sm btn-danger" onclick="closeConn('${c.remote}',${c.remote_port})">закрыть</button></td>
+        <td>${closeCell}</td>
       </tr>`;
     }
     html += '</tbody></table>';
     wrap.innerHTML = html;
     // переприменяем активный фильтр
     filterConnTable();
-  } catch (_) {
-    wrap.innerHTML = '<div style="padding:20px;text-align:center;color:var(--red)">не удалось загрузить</div>';
+  } catch (e) {
+    wrap.innerHTML = `<div class="data-error" role="status"><span>// не удалось загрузить соединения: ${esc(e && e.message ? e.message : e)}</span>` +
+      '<button type="button" class="btn btn-sm" onclick="loadConnections()">повторить</button></div>';
   }
 }
 
@@ -869,9 +1034,10 @@ async function closeConn(host, port) {
 }
 
 async function flushConns() {
-  if (!confirm('Закрыть ВСЕ активные соединения? Это может прервать активные загрузки.')) return;
+  if (!confirm('Закрыть все активные соединения? Это может прервать активные загрузки.')) return;
   const r = await api('POST', '/api/connections/flush');
-  toast(`закрыто соединений: ${r.killed}`, 'success');
+  if (r.error) return toast(r.error, 'error');
+  toast(`закрыто соединений: ${r.killed != null ? r.killed : 0}`, 'success');
   loadConnections();
   loadPerIPTraffic();
 }

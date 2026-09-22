@@ -32,7 +32,7 @@ function renderList(sources) {
   const list = $('#list');
   list.innerHTML = '';
   if (!sources.length) {
-    list.innerHTML = '<div class="empty">// источников пока нет — добавьте URL-подписку или TXT-список ниже</div>';
+    list.innerHTML = '<div class="empty">// источников пока нет. Добавьте URL-подписку или TXT-список ниже</div>';
     return;
   }
   for (const s of sources) {
@@ -40,7 +40,7 @@ function renderList(sources) {
     card.className = 'card';
     const isTxt = (s.type || 'url') === 'txt';
     const imported = s.last_import ? fmtUtcTime(s.last_import) : 'никогда';
-    const count = s.count != null ? s.count : '—';
+    const count = s.count != null ? s.count : 'нет';
     const working = s.working != null ? s.working : 0;
     card.innerHTML = `
       <div class="c-body">
@@ -65,16 +65,35 @@ function renderList(sources) {
 }
 
 async function load() {
+  const list = $('#list');
+  const err = $('#srcError');
+  if (err) { err.hidden = true; err.innerHTML = ''; }
+  list.innerHTML = '<div class="empty">// загрузка источников…</div>';
   const [sources, settings] = await Promise.all([
     api('GET', '/api/sources'),
     api('GET', '/api/settings'),
   ]);
+  const cause = sources.error || settings.error;
+  if (cause) {
+    list.innerHTML = '';
+    renderSummary([]);
+    showLoadError(cause);
+    return;
+  }
   renderSummary(sources || []);
   renderList(sources || []);
   const chk = $('#chkSafeOnly');
   if (chk && settings.safe_only_import === 'true') {
     chk.checked = true;
   }
+}
+
+function showLoadError(cause) {
+  const err = $('#srcError');
+  if (!err) return;
+  err.hidden = false;
+  err.innerHTML = `<span>Не удалось загрузить источники: ${esc(cause)}</span>
+    <button class="btn btn-sm" onclick="load()">повторить</button>`;
 }
 
 function switchTab(tab) {
@@ -85,12 +104,18 @@ function switchTab(tab) {
 }
 
 async function toggleSafeOnly() {
-  const val = $('#chkSafeOnly').checked ? 'true' : 'false';
-  await api('POST', '/api/settings', { safe_only_import: val });
+  const chk = $('#chkSafeOnly');
+  const prev = !chk.checked;
+  const val = chk.checked ? 'true' : 'false';
+  const res = await api('POST', '/api/settings', { safe_only_import: val });
+  if (res.error) {
+    chk.checked = prev;
+    return toast(res.error, 'error');
+  }
   toast(`Безопасный импорт: ${val === 'true' ? 'включён' : 'выключен'}`);
 }
 
-// ─── Добавление ───
+// Добавление
 
 async function addProxy() {
   const link = $('#inpProxy').value.trim();
@@ -98,7 +123,7 @@ async function addProxy() {
   const res = await api('POST', '/api/add', { link });
   if (res.error) return toast(res.error, 'error');
   $('#inpProxy').value = '';
-  toast('прокси добавлен — тест стартует, если нет другого замера', 'success');
+  toast('прокси добавлен. Тест стартует, если нет другого замера', 'success');
 }
 
 async function addSource() {
@@ -127,7 +152,7 @@ async function addTxtSource() {
   load();
 }
 
-// ─── Редактирование TXT ───
+// Редактирование TXT
 
 async function editTxtContent(id) {
   const res = await api('GET', `/api/sources/${id}/content`);
@@ -173,7 +198,7 @@ async function saveTxtContent(withImport) {
     if (imp.error) {
       toast(`импорт не удался: ${imp.error}`, 'error');
     } else {
-      toast(`импортировано прокси: ${imp.added} — замеры запускаются отдельно`, 'success');
+      toast(`импортировано прокси: ${imp.added}. Замеры запускаются отдельно`, 'success');
     }
   } else {
     toast('контент сохранён', 'success');
@@ -181,12 +206,13 @@ async function saveTxtContent(withImport) {
   load();
 }
 
-// ─── Удаление / импорт ───
+// Удаление и импорт
 
 async function delSource(id) {
   if (!confirm('Удалить источник #' + id + '?')) return;
-  await api('DELETE', `/api/sources/${id}`);
-  toast('источник удалён');
+  const res = await api('DELETE', `/api/sources/${id}`);
+  if (res.error) return toast(`источник не удалён: ${res.error}`, 'error');
+  toast('источник удалён', 'success');
   load();
 }
 
@@ -195,7 +221,7 @@ async function importOne(id) {
   await busyButton(btn, 'Импорт…', async () => {
     const res = await api('POST', `/api/sources/${id}/import`);
     if (res.error) return toast(`импорт не удался: ${res.error}`, 'error');
-    toast(`импортировано прокси: ${res.added} — замеры запускаются отдельно («Тест всех» на дашборде)`, 'success');
+    toast(`импортировано прокси: ${res.added}. Замеры запускаются отдельно («Тест всех» на дашборде)`, 'success');
   });
   load();
 }
@@ -206,9 +232,9 @@ async function importAll() {
     const res = await api('POST', '/api/sources/import-all');
     if (res.error) return toast(`импорт не удался: ${res.error}`, 'error');
     if (res.errors && res.errors.length) {
-      toast(`импортировано ${res.added} прокси — ${res.errors.length} источник(ов) с ошибками`, 'error');
+      toast(`импортировано ${res.added} прокси. Источников с ошибками: ${res.errors.length}`, 'error');
     } else {
-      toast(`импортировано ${res.added} прокси — замеры запускаются отдельно`, 'success');
+      toast(`импортировано ${res.added} прокси. Замеры запускаются отдельно`, 'success');
     }
   });
   load();
@@ -223,7 +249,7 @@ async function busyButton(btn, busyText, fn) {
   finally { btn.disabled = false; btn.textContent = old; }
 }
 
-// ─── Enter в формах = добавить ───
+// Enter в формах: добавить
 function bindEnter(id, fn) {
   const el = $(id);
   if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); fn(); } });
