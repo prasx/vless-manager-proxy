@@ -1,6 +1,5 @@
 """Генерация конфига Xray, горячее применение через API, диагностика, подписка."""
 
-import hashlib
 import json
 import os
 import re
@@ -18,7 +17,7 @@ from .vless import parse_vless, stream_settings, sanitize_flow
 from config import SOCKS_PORT, HTTP_PORT, API_PORT, API_LISTEN
 
 
-def _ensure_duration(val: str, default: str = "15s") -> str:
+def _ensure_duration(val: str, default: str = "10s") -> str:
     """Гарантирует, что строка — валидный Go duration (имеет суффикс s/ms/m/h)."""
     val = (val or "").strip()
     if not val:
@@ -33,7 +32,6 @@ class XrayConfigurator:
 
     def __init__(self):
         self._apply_lock = threading.Lock()
-        self._last_config_hash = ""
         self._last_restart_time = 0.0
         self._restart_cooldown = 20  # seconds
         self._stats_cache = {"data": None, "ts": 0.0}
@@ -213,7 +211,7 @@ class XrayConfigurator:
         return {
             "levels": {
                 "0": {
-                    "handshake": int(Settings.get("handshake_timeout", "8")),
+                    "handshake": int(Settings.get("handshake_timeout")),
                     "connIdle": int(Settings.get("conn_idle", "300")),
                 }
             },
@@ -319,7 +317,7 @@ class XrayConfigurator:
             config["observatory"] = {
                 "subjectSelector": ["node"],
                 "probeUrl": Settings.probe_url(),
-                "probeInterval": _ensure_duration(Settings.get("observatory_probe_interval", "15s")),
+                "probeInterval": _ensure_duration(Settings.get("observatory_probe_interval")),
                 "enableConcurrency": True,
             }
             config["routing"]["balancers"] = [
@@ -384,40 +382,6 @@ class XrayConfigurator:
                 tags.add(m.group(1))
         return sorted(tags)
 
-    def get_traffic_values(self) -> dict:
-        """Возвращает числовые значения трафика по outbound-ам.
-        Формат: {tag: {downlink: int, uplink: int}}."""
-        rc, out = self._cached_statsquery()
-        result = {}
-        if rc != 0:
-            return result
-        for line in out.splitlines():
-            m = re.search(r"outbound>>>([^>]+)>>>traffic>>>([a-z]+)", line)
-            if not m:
-                continue
-            tag, direction = m.group(1), m.group(2)
-            parts = line.split()
-            if len(parts) >= 2:
-                try:
-                    value = int(parts[-1])
-                except (ValueError, IndexError):
-                    value = 0
-            else:
-                value = 0
-            result.setdefault(tag, {})[direction] = result.get(tag, {}).get(direction, 0) + value
-        return result
-
-    def get_total_traffic(self) -> dict:
-        """Возвращает суммарный downlink/uplink по всем node* outbound-ам."""
-        values = self.get_traffic_values()
-        total_down = 0
-        total_up = 0
-        for tag, stats in values.items():
-            if tag.startswith("node"):
-                total_down += stats.get("downlink", 0)
-                total_up += stats.get("uplink", 0)
-        return {"downlink": total_down, "uplink": total_up}
-
     @staticmethod
     def _remove_outbound(tag):
         """Удаляет один outbound по тегу через Xray API (26.x: rmo)."""
@@ -442,12 +406,6 @@ class XrayConfigurator:
                 )
         except Exception as e:
             add_log("DEBUG", f"Failed to remove outbound {tag}: {e}")
-
-    def remove_all_outbounds(self):
-        """Удаляет все node* outbound из Xray через API."""
-        for tag in self.list_active_outbounds():
-            if tag.startswith("node"):
-                XrayConfigurator._remove_outbound(tag)
 
     @staticmethod
     def add_outbound(ob):
@@ -501,46 +459,6 @@ class XrayConfigurator:
         except Exception as e:
             add_log("WARN", f"Could not restart systemd xray: {e}")
         return False
-
-    # ─── Config hash (skip if unchanged) ───
-
-    def _compute_config_hash(self):
-        """Хэш входных данных для конфига — если не изменился, apply_all можно пропустить."""
-        max_active = Settings.max_active_proxies()
-        blocked = Settings.blocked_countries()
-        codes = [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
-        min_kbps = Settings.min_speed_kbps()
-        speed_sql = f"AND speed_kbps >= {min_kbps}" if min_kbps > 0 else ""
-        sort_col = "speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC"
-        if codes:
-            placeholders = ",".join("?" * len(codes))
-            rows = db_q(
-                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 AND country NOT IN ({placeholders}) {speed_sql} ORDER BY {sort_col} LIMIT ?",
-                codes + [max_active],
-            )
-        else:
-            rows = db_q(
-                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {speed_sql} ORDER BY {sort_col} LIMIT ?",
-                (max_active,),
-            )
-        links = "|".join(r["link"] for r in rows)
-        sig = "|".join(
-            [
-                links,
-                str(max_active),
-                blocked,
-                Settings.proxy_listen(),
-                Settings.get("geo_enabled", "true"),
-                Settings.get("geosite_rules", "[]"),
-                Settings.probe_url(),
-                Settings.get("observatory_probe_interval", "15s"),
-                Settings.get("balancer_strategy", "random"),
-                Settings.get("handshake_timeout", "8"),
-                Settings.get("conn_idle", "300"),
-                Settings.get("min_speed_mbps", "0"),
-            ]
-        )
-        return hashlib.sha256(sig.encode()).hexdigest()
 
     # ─── Apply config ───
 

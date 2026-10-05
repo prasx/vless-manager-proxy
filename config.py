@@ -25,9 +25,6 @@ HTTP_PORT = 1081  # HTTP inbound
 API_PORT = 10085  # gRPC API Xray (add/remove outbound)
 API_LISTEN = "127.0.0.1"  # Слушать API только на localhost
 
-# ─── Фоновый чекер ────────────────────────────────────
-PROBE_INTERVAL = "10s"  # Интервал Observatory в конфиге Xray
-
-# ─── Логирование ──────────────────────────────────────
-LOG_TRIM_EVERY = 500  # Чистить логи каждые N записей
-LOG_KEEP = 2000  # Оставлять последние N записей после чистки
+# Интервал Observatory, глубина и чистка логов настраиваются в UI и живут в БД:
+# observatory_probe_interval, log_keep, log_trim_every. Значения по умолчанию —
+# в app/db.py (SETTING_DEFAULTS).

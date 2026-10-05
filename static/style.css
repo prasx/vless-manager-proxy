@@ -65,22 +65,34 @@ body {
 }
 .header .label::before { content:'// '; }
 
-/* Shared header */
+/* Shared header.
+
+   Порядок на мобильном: название → действия (колокольчик, гамбургер) →
+   раскрытое меню на всю ширину. На десктопе: название → меню → действия. */
 .header-top {
   display:flex;
-  justify-content:space-between;
   align-items:center;
   flex-wrap:wrap;
   gap:10px;
 }
-.nav {
+.header-brand { order:1; min-width:0; }
+.header-actions {
+  order:2;
+  margin-left:auto;
   display:flex;
-  gap:6px;
   align-items:center;
-  flex-wrap:wrap;
+  gap:6px;
+  /* Точка отсчёта для попапа уведомлений: он выравнивается по правому краю
+     шапки, а не по колокольчику, — на узком экране справа от колокольчика
+     стоит гамбургер, и панель шириной 9:16 вылезла бы за левый край. */
+  position:relative;
 }
+.header-top .nav { order:3; }
 @media(min-width:769px) {
-  .header-top { flex-wrap:nowrap; gap:0; }
+  .header-top { flex-wrap:nowrap; gap:8px; }
+  .header-brand { margin-right:auto; }
+  .header-top .nav { order:2; }
+  .header-actions { order:3; margin-left:0; }
 }
 
 /* Buttons */
@@ -225,7 +237,6 @@ td.id { color:var(--text-muted); }
   font-size:1.4rem;
   line-height:1;
   padding:6px 12px;
-  margin-left:auto;
 }
 @media(min-width:769px) { .btn-nav-toggle { display:none; } }
 
@@ -235,6 +246,8 @@ td.id { color:var(--text-muted); }
   flex-direction:column;
   width:100%;
   gap:6px;
+  align-items:center;
+  flex-wrap:wrap;
   margin-top:10px;
   padding-top:10px;
   border-top:1px solid var(--border);
@@ -260,6 +273,161 @@ td.id { color:var(--text-muted); }
   line-height:34px;
   text-align:center;
 }
+
+/* ─────────── Уведомления (колокольчик) ─────────── */
+/* .notif намеренно без position: отсчёт попапа ведёт .header-actions. */
+.notif {
+  display:inline-flex;
+}
+.btn-bell {
+  position:relative;
+  width:34px;
+  padding:0;
+}
+/* Есть непрочитанное: цвет состояния, а не декор (DESIGN: состояния — семантика) */
+.btn-bell.has-unread {
+  color:var(--red);
+  border-color:var(--red);
+}
+.notif-badge {
+  position:absolute;
+  top:-5px;
+  right:-5px;
+  min-width:16px;
+  height:16px;
+  padding:0 4px;
+  border-radius:8px;
+  background:var(--red);
+  color:#fff;
+  font-size:0.58rem;
+  font-weight:600;
+  line-height:16px;
+  text-align:center;
+  pointer-events:none;
+}
+.notif-badge[hidden] { display:none; }
+
+/* Попап — прямоугольник ровно 9:16.
+   Пропорцию задаёт высота: ширина выводится из неё, поэтому прямоугольник
+   остаётся 9:16 и на низких, и на узких экранах (высота ограничена и высотой
+   окна, и шириной экрана). */
+.notif-pop {
+  --notif-h: min(544px, calc(100vh - 120px), calc((100vw - 28px) * 16 / 9));
+  position:absolute;
+  top:calc(100% + 8px);
+  right:0;
+  z-index:900;
+  width:calc(var(--notif-h) * 9 / 16);
+  height:var(--notif-h);
+  display:flex;
+  flex-direction:column;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:4px;
+  box-shadow:0 12px 32px rgba(0,0,0,.35);
+  overflow:hidden;
+}
+.notif-pop[hidden] { display:none; }
+
+.notif-head {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 10px;
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+.notif-title {
+  font-size:0.68rem;
+  color:var(--text-muted);
+  text-transform:uppercase;
+  letter-spacing:0.06em;
+}
+.notif-tabs {
+  margin-left:auto;
+  display:flex;
+  gap:4px;
+}
+.notif-tab {
+  padding:2px 8px;
+  font:inherit;
+  font-size:0.66rem;
+  color:var(--text-muted);
+  background:transparent;
+  border:1px solid transparent;
+  border-radius:3px;
+  cursor:pointer;
+  transition:all var(--transition);
+}
+.notif-tab:hover { color:var(--text-primary); border-color:var(--border); }
+.notif-tab.active { color:var(--green); border-color:var(--green); }
+
+.notif-list {
+  flex:1;
+  min-height:0;
+  overflow-y:auto;
+}
+.notif-item {
+  display:block;
+  width:100%;
+  padding:7px 10px;
+  text-align:left;
+  font:inherit;
+  color:var(--text-secondary);
+  background:transparent;
+  border:0;
+  border-bottom:1px solid var(--border);
+  cursor:pointer;
+  transition:background var(--transition);
+}
+.notif-item:hover { background:var(--bg-secondary); }
+.notif-item-top {
+  display:flex;
+  align-items:center;
+  gap:6px;
+  margin-bottom:2px;
+}
+.notif-time {
+  font-size:0.64rem;
+  color:var(--text-muted);
+  font-variant-numeric:tabular-nums;
+}
+.notif-lvl {
+  padding:1px 5px;
+  font-size:0.58rem;
+  line-height:1.5;
+  border:1px solid;
+  border-radius:2px;
+}
+.notif-lvl.lvl-error { color:var(--red); border-color:var(--red); }
+.notif-lvl.lvl-warn { color:var(--orange); border-color:var(--orange); }
+.notif-lvl.lvl-info { color:var(--text-muted); border-color:var(--border); }
+.notif-lvl.lvl-debug { color:var(--text-muted); border-color:var(--border); opacity:0.75; }
+.notif-msg {
+  font-size:0.7rem;
+  line-height:1.45;
+  word-break:break-word;
+}
+.notif-empty {
+  padding:24px 14px;
+  text-align:center;
+  font-size:0.72rem;
+  color:var(--text-muted);
+}
+.notif-empty-error { color:var(--red); }
+.notif-foot {
+  flex-shrink:0;
+  padding:8px 10px;
+  text-align:center;
+  border-top:1px solid var(--border);
+}
+.notif-all {
+  font-size:0.72rem;
+  color:var(--green);
+  text-decoration:none;
+}
+.notif-all:hover { text-decoration:underline; }
+
 
 /* White noise overlay */
 .noise {
@@ -368,8 +536,8 @@ td.id { color:var(--text-muted); }
 }
 /* Tuning section */
 .tuning-notice {
-  background:rgba(237,168,54,0.08);
-  border:1px solid rgba(237,168,54,0.25);
+  background:rgba(251,146,60,0.08);
+  border:1px solid rgba(251,146,60,0.25);
   border-radius:4px;
   padding:10px 14px;
   margin-bottom:18px;
@@ -413,7 +581,7 @@ td.id { color:var(--text-muted); }
   flex:1;
   background:var(--bg-secondary);
   border:1px solid var(--border);
-  border-radius:8px;
+  border-radius:4px;
   padding:16px;
 }
 .tuning-card-header {
@@ -421,9 +589,6 @@ td.id { color:var(--text-muted); }
   align-items:center;
   gap:8px;
   margin-bottom:8px;
-}
-.tuning-card-icon {
-  font-size:1.2rem;
 }
 .tuning-card-title {
   font-weight:600;
@@ -546,36 +711,15 @@ td.id { color:var(--text-muted); }
   gap:12px;
 }
 
-/* Settings nav */
+/* Settings nav: здесь только раскладка-примитив.
+   Залипание, отступы и вид панели заданы ниже, в компактном блоке — раньше
+   те же свойства дублировались здесь и полностью перекрывались там. */
 .settings-nav {
   display:flex;
   flex-wrap:wrap;
-  gap:6px;
-  margin-bottom:20px;
-  padding:12px 16px;
-  background:var(--bg-card);
-  border:1px solid var(--border);
-  border-radius:4px;
 }
-.settings-nav a {
-  padding:4px 12px;
-  font-size:0.78rem;
-  color:var(--text-secondary);
-  text-decoration:none;
-  border:1px solid var(--border);
-  border-radius:3px;
-  transition:all var(--transition);
-}
-.settings-nav a:hover {
-  color:var(--text-primary);
-  border-color:var(--border-hover);
-  background:var(--bg-secondary);
-}
-
-/* Scroll offset for anchored sections */
-.settings-section[id] {
-  scroll-margin-top:16px;
-}
+/* Оформление ссылок и отступ якорей заданы ниже, в компактном блоке:
+   там же залипающая панель разделов, и дублировать правила здесь не нужно. */
 
 /* Section sub-elements */
 .settings-h2-row {
@@ -799,7 +943,7 @@ html { scroll-behavior:smooth; }
   padding:6px;
   background:var(--bg-card);
   border:1px solid var(--border);
-  border-radius:6px;
+  border-radius:4px;
   box-shadow:0 8px 24px rgba(0,0,0,.28);
 }
 .settings-nav a {
@@ -907,4 +1051,66 @@ html { scroll-behavior:smooth; }
   .tuning-range::-webkit-slider-thumb { width:26px; height:26px; }
   .tuning-range::-moz-range-thumb { width:26px; height:26px; }
 }
+
+/* ─────────── Настройки: элементы секций ───────────
+   Раньше это были inline-стили в шаблоне; правила вынесены сюда, чтобы
+   разметка оставалась структурой, а оформление — в одном месте. */
+
+/* Разделители групп в залипающем меню разделов */
+.settings-nav-sep {
+  width:1px;
+  align-self:stretch;
+  margin:2px 5px;
+  background:var(--border);
+}
+
+/* Демон Xray */
+.xray-nodes { color:var(--green); font-size:11px; }
+
+/* Правила GeoSite */
+.geosite-domain {
+  flex:1;
+  max-width:360px;
+  font-family:'JetBrains Mono','Fira Code','Courier New',monospace;
+}
+.geosite-outbound { width:auto; min-width:150px; }
+.geosite-remove { padding:2px 10px; font-size:12px; line-height:1.6; }
+.geosite-empty {
+  justify-content:center;
+  padding:12px 0;
+  color:var(--text-muted);
+  font-size:0.82rem;
+}
+.geosite-cheatsheet-summary { cursor:pointer; font-weight:bold; color:var(--text-primary); }
+.geosite-cheatsheet-note { margin:8px 0 4px; color:var(--text-muted); }
+.geosite-cheatsheet-note a { color:var(--green); }
+.geosite-cheatsheet-table { width:100%; border-collapse:collapse; margin-top:6px; }
+.geosite-cheatsheet-table td { padding:3px 6px; }
+.geosite-cheatsheet-table tr { border-bottom:1px solid var(--border); }
+.geosite-cheatsheet-table tr:last-child { border-bottom:none; }
+.geosite-cheatsheet-kind {
+  color:var(--text-muted);
+  vertical-align:top;
+  white-space:nowrap;
+}
+.geosite-cheatsheet-hint { color:var(--text-muted); font-size:0.72rem; }
+.geo-proxy { color:var(--orange); }
+.geo-direct { color:var(--green); }
+
+/* Фильтр стран */
+.country-row { border-bottom:1px solid var(--border); }
+.country-cell-chk { padding:4px 10px; width:32px; }
+.country-cell-code { padding:4px 6px; font-weight:bold; color:var(--text-primary); }
+.country-source { font-size:0.65rem; color:var(--text-muted); cursor:default; }
+.country-cell-stat { padding:4px 6px; color:var(--text-muted); font-size:0.72rem; }
+.country-cell-mark {
+  padding:4px 6px;
+  text-align:right;
+  white-space:nowrap;
+  color:var(--red);
+  font-size:0.7rem;
+}
+
+/* Оценка длительности прогона */
+.perf-est-value { font-size:0.9rem; font-weight:600; color:var(--green); }
 

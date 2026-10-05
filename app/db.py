@@ -80,6 +80,49 @@ _SCHEMA = {
     ],
 }
 
+# Единственный источник значений по умолчанию. Отсюда их берут и init_db
+# (запись в БД при первом запуске), и Settings.get для ключей, которых в БД
+# ещё нет, — раньше запасные значения в классах Settings расходились с этими
+# (например max_workers 10 против 15) и панель вела себя по-разному до и после
+# первой записи настройки.
+SETTING_DEFAULTS = {
+    "xray_bin": "/usr/local/bin/xray",
+    "xray_config_path": "",  # подставляется из default_xray_config_path() при init_db
+    "proxy_listen": "0.0.0.0",
+    "max_active_proxies": "30",
+    "safe_only_import": "false",
+    "blocked_countries": "",
+    "probe_url": "https://www.gstatic.com/generate_204",
+    # Интервалы и тюнинг
+    "check_interval_db": "1800",
+    "check_interval_import": "10800",
+    "vless_per_proxy_timeout": "3",
+    "log_trim_every": "500",
+    "log_keep": "2000",
+    "geosite_rules": "[]",
+    "geo_enabled": "true",
+    "observatory_probe_interval": "10s",
+    "speed_test_enabled": "true",
+    "speed_test_max": "15",
+    "speed_test_url": "http://speedtest.selectel.ru/10MB",
+    "speed_test_min_sec": "10",
+    "apply_after_test": "true",
+    "balancer_strategy": "random",
+    "handshake_timeout": "5",
+    "conn_idle": "300",
+    "min_speed_mbps": "0",
+    "speed_test_adaptive_sec": "2",
+    "sniffing_enabled": "true",
+    "sniffing_dest_override": "http,tls",
+    "sniffing_route_only": "true",
+    # Performance tuning
+    "max_workers": "15",
+    "probe_timeout": "3",
+    "xray_startup_retries": "15",
+    "db_check_auto_cleanup": "false",
+    "import_proxy": "",
+}
+
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     """Проверяет эталонную схему и добавляет недостающие таблицы/колонки."""
@@ -185,43 +228,10 @@ def init_db() -> None:
 
     _run_migrations(c)
 
-    defaults = {
-        "xray_bin": "/usr/local/bin/xray",
-        "xray_config_path": str(default_xray_config_path()),
-        "proxy_listen": "0.0.0.0",
-        "max_active_proxies": "30",
-        "safe_only_import": "false",
-        "blocked_countries": "",
-        "probe_url": "https://www.gstatic.com/generate_204",
-        # Интервалы и тюнинг
-        "check_interval_db": "1800",
-        "check_interval_import": "10800",
-        "vless_per_proxy_timeout": "3",
-        "log_trim_every": "500",
-        "log_keep": "2000",
-        "geosite_rules": "[]",
-        "geo_enabled": "true",
-        "observatory_probe_interval": "10s",
-        "speed_test_enabled": "true",
-        "speed_test_max": "15",
-        "speed_test_url": "http://speedtest.selectel.ru/10MB",
-        "speed_test_min_sec": "10",
-        "apply_after_test": "true",
-        "balancer_strategy": "random",
-        "handshake_timeout": "5",
-        "conn_idle": "300",
-        "min_speed_mbps": "0",
-        "speed_test_adaptive_sec": "2",
-        "sniffing_enabled": "true",
-        "sniffing_dest_override": "http,tls",
-        "sniffing_route_only": "true",
-        # Performance tuning
-        "max_workers": "15",
-        "probe_timeout": "3",
-        "xray_startup_retries": "15",
-        "db_check_auto_cleanup": "false",
-        "import_proxy": "",
-    }
+    defaults = dict(SETTING_DEFAULTS)
+    # Путь к конфигу Xray зависит от файловой системы, поэтому вычисляется здесь,
+    # а не лежит готовой строкой в SETTING_DEFAULTS.
+    defaults["xray_config_path"] = str(default_xray_config_path())
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
 
@@ -238,10 +248,16 @@ class Settings:
     """Работа с настройками из таблицы settings в БД."""
 
     @staticmethod
-    def get(key: str, default: str = "") -> str:
-        """Возвращает значение настройки из БД."""
+    def get(key: str, default: str | None = None) -> str:
+        """Возвращает значение настройки из БД.
+
+        Если ключа в БД нет и `default` не задан явно, берётся значение из
+        SETTING_DEFAULTS — так дефолты не расходятся между init_db и чтением.
+        """
         rows = db_q("SELECT value FROM settings WHERE key=?", (key,))
-        return rows[0]["value"] if rows else default
+        if rows:
+            return rows[0]["value"]
+        return SETTING_DEFAULTS.get(key, "") if default is None else default
 
     @staticmethod
     def set(key: str, value: str) -> None:
@@ -266,50 +282,50 @@ class Settings:
     @classmethod
     def safe_only_import(cls) -> bool:
         """True если импортировать только прокси с шифрованием (reality/tls)."""
-        return cls.get("safe_only_import", "false") == "true"
+        return cls.get("safe_only_import") == "true"
 
     @classmethod
     def blocked_countries(cls) -> str:
         """Список заблокированных стран (строка с кодами через запятую).
         Пустая строка — не блокировать никого (все страны разрешены)."""
-        return cls.get("blocked_countries", "").strip()
+        return cls.get("blocked_countries").strip()
 
     @classmethod
     def probe_url(cls) -> str:
         """URL для проверки работоспособности прокси (observatory)."""
-        return cls.get("probe_url", "https://www.gstatic.com/generate_204")
+        return cls.get("probe_url")
 
     @classmethod
     def check_interval_db(cls) -> int:
         """Интервал проверки прокси из БД, секунд."""
-        return int(cls.get("check_interval_db", "1800"))
+        return int(cls.get("check_interval_db"))
 
     @classmethod
     def check_interval_import(cls) -> int:
         """Интервал импорт + проверка, секунд."""
-        return int(cls.get("check_interval_import", "10800"))
+        return int(cls.get("check_interval_import"))
 
     @classmethod
     def vless_per_proxy_timeout(cls) -> int:
         """Таймаут VLESS-теста одного прокси, секунд."""
-        return int(cls.get("vless_per_proxy_timeout", "5"))
+        return int(cls.get("vless_per_proxy_timeout"))
 
     @classmethod
     def log_trim_every(cls) -> int:
         """Чистить логи каждые N записей."""
-        return int(cls.get("log_trim_every", "500"))
+        return int(cls.get("log_trim_every"))
 
     @classmethod
     def log_keep(cls) -> int:
         """Оставлять последние N записей после чистки."""
-        return int(cls.get("log_keep", "2000"))
+        return int(cls.get("log_keep"))
 
     @classmethod
     def geosite_rules(cls) -> list[dict]:
         """Список geosite-правил для routing Xray (JSON-строка)."""
         import json
 
-        raw = cls.get("geosite_rules", "[]")
+        raw = cls.get("geosite_rules")
         try:
             return json.loads(raw)
         except (json.JSONDecodeError, TypeError):
@@ -318,7 +334,7 @@ class Settings:
     @classmethod
     def min_speed_kbps(cls) -> int:
         """Минимальная скорость профиля в kbps. 0 = фильтр отключён."""
-        raw = cls.get("min_speed_mbps", "0")
+        raw = cls.get("min_speed_mbps")
         try:
             mbps = float(raw)
             return int(mbps * 1000) if mbps > 0 else 0
@@ -328,7 +344,7 @@ class Settings:
     @classmethod
     def speed_test_adaptive_sec(cls) -> int:
         """Через сколько секунд adaptive speed test проверяет порог."""
-        return max(1, int(cls.get("speed_test_adaptive_sec", "2")))
+        return max(1, int(cls.get("speed_test_adaptive_sec")))
 
     @classmethod
     def speed_test_duration_sec(cls) -> int:
@@ -338,28 +354,28 @@ class Settings:
         столько секунд (файл при необходимости докачивается повторно).
         Ранний выход возможен только при включённом пороге min_speed_mbps.
         """
-        return max(1, min(300, int(cls.get("speed_test_min_sec", "10"))))
+        return max(1, min(300, int(cls.get("speed_test_min_sec"))))
 
     @classmethod
     def max_workers(cls) -> int:
         """Количество параллельных воркеров для тестирования прокси."""
-        return max(1, min(30, int(cls.get("max_workers", "10"))))
+        return max(1, min(30, int(cls.get("max_workers"))))
 
     @classmethod
     def probe_timeout(cls) -> int:
         """Таймаут проверки прокси (секунды)."""
-        return max(1, min(15, int(cls.get("probe_timeout", "5"))))
+        return max(1, min(15, int(cls.get("probe_timeout"))))
 
     @classmethod
     def xray_startup_retries(cls) -> int:
         """Количество попыток дождаться старта Xray (каждая 0.1с)."""
-        return max(5, min(50, int(cls.get("xray_startup_retries", "30"))))
+        return max(5, min(50, int(cls.get("xray_startup_retries"))))
 
     @classmethod
     def import_proxy(cls) -> str:
         """Прокси для импорта подписок (socks5://host:port или http://host:port).
         Пустая строка — напрямую. Приоритет: БД > env IMPORT_PROXY."""
-        db_val = cls.get("import_proxy", "").strip()
+        db_val = cls.get("import_proxy").strip()
         if db_val:
             return db_val
         import os

@@ -178,7 +178,7 @@
   background:var(--bg-card);
   color:var(--text-primary);
   border:1px solid var(--border);
-  border-radius:6px;
+  border-radius:4px;
   padding:20px;
   width:min(640px, calc(100vw - 24px));
   max-height:calc(100vh - 32px);

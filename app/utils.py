@@ -167,7 +167,9 @@ _enrich_lock = threading.Lock()
 def _get_conntrack_map():
     """Парсит conntrack, возвращает {(client_ip, client_port): (bytes_to_client, bytes_from_client)}.
     Тихий возврат {} если conntrack недоступен."""
+    import os
     import re
+    import subprocess
     from config import SOCKS_PORT, HTTP_PORT
     proxy_ports_str = [str(SOCKS_PORT), str(HTTP_PORT)]
     result = {}
@@ -208,11 +210,11 @@ def _get_conntrack_map():
 
 
 def list_active_connections(proxy_ports: list[int] | None = None) -> list[dict]:
+    """Возвращает детальный список TCP-соединений через прокси-порты.
+    Каждый элемент: {pid, process, local, local_port, remote, remote_port, status, direction, bytes_in, bytes_out}"""
     if proxy_ports is None:
         from config import SOCKS_PORT, HTTP_PORT
         proxy_ports = [SOCKS_PORT, HTTP_PORT]
-    """Возвращает детальный список TCP-соединений через прокси-порты.
-    Каждый элемент: {pid, process, local, local_port, remote, remote_port, status, direction, bytes_in, bytes_out}"""
     import os
     import subprocess
 

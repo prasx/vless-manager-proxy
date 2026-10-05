@@ -8,6 +8,9 @@ subscribe.txt
 .import_cache/
 .ui-verify/
 
+# Служебные отчёты и резервные копии прав рабочей папки
+.dsh-acl-reports/
+
 # Python
 __pycache__/
 *.pyc

@@ -1,4 +1,4 @@
-const $ = s => document.querySelector(s);
+// $, esc() и api() приходят из api.js (подключается до этого файла в base.html).
 
 let allLogs = [];
 let totalLogs = 0;
@@ -35,7 +35,7 @@ function showLoadError(cause) {
   const el = $('#logError');
   if (!el) return;
   el.hidden = false;
-  el.innerHTML = `<span>Не удалось загрузить логи: ${escHtml(cause)}</span>
+  el.innerHTML = `<span>Не удалось загрузить логи: ${esc(cause)}</span>
     <button class="btn btn-sm" onclick="loadData()">повторить</button>`;
 }
 
@@ -88,26 +88,19 @@ function render() {
     return;
   }
   for (const row of allLogs) {
-    const tr = document.createElement('tr');
-    const cid = row.correlation_id || '';
-    tr.innerHTML = `
-      <td style="color:var(--text-muted);white-space:nowrap">${row.timestamp}</td>
-      <td class="level-${row.level}">${row.level}</td>
-      <td style="font-size:0.65rem;color:var(--text-muted);font-family:monospace">${cid ? cid.slice(0,8) : ''}</td>
-      <td style="word-break:break-word">${escHtml(row.message)}</td>
-    `;
-    tb.appendChild(tr);
+    tb.appendChild(renderRow(row));
   }
 }
 
+/** Строка таблицы логов: используется и полной перерисовкой, и подстановкой новых записей. */
 function renderRow(row) {
   const tr = document.createElement('tr');
   const cid = row.correlation_id || '';
   tr.innerHTML = `
-    <td style="color:var(--text-muted);white-space:nowrap">${row.timestamp}</td>
-    <td class="level-${row.level}">${row.level}</td>
-    <td style="font-size:0.65rem;color:var(--text-muted);font-family:monospace">${cid ? cid.slice(0,8) : ''}</td>
-    <td style="word-break:break-word">${escHtml(row.message)}</td>
+    <td style="color:var(--text-muted);white-space:nowrap">${esc(row.timestamp)}</td>
+    <td class="level-${esc(row.level)}">${esc(row.level)}</td>
+    <td style="font-size:0.65rem;color:var(--text-muted);font-family:monospace">${cid ? esc(cid.slice(0, 8)) : ''}</td>
+    <td style="word-break:break-word">${esc(row.message)}</td>
   `;
   return tr;
 }
@@ -138,12 +131,6 @@ async function pollNew() {
   }
   totalLogs = data.total || totalLogs;
   updatePagination();
-}
-
-function escHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
 }
 
 function updatePagination() {

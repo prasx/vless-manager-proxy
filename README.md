@@ -1,7 +1,7 @@
 # VLESS Manager Proxy
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.1%2B-green)](https://flask.palletsprojects.com/)
 [![Xray](https://img.shields.io/badge/Xray-26.3+-orange)](https://github.com/XTLS/Xray-core)
 
@@ -39,6 +39,7 @@
 - **Перетест failed** — Кнопка «Перетест failed» запускает полный поэтапный прогон только для нерабочих прокси (без перепроверки рабочих).
 - **Backup** — Экспорт/импорт настроек и источников в JSON.
 - **Traffic stats** — Активные outbound и узлы с трафиком (без графиков).
+- **Уведомления** — колокольчик в шапке на каждой странице: попап 9:16 с последними важными записями (WARN/ERROR), переключателем показываются все, счётчик непрочитанных хранится в браузере, внизу — ссылка на логи целиком.
 - **Connections monitor** — Модалка со списком активных TCP-соединений через прокси (кто, куда, сколько байт, закрытие по одному или всех).
 - **Анализатор соединений** — Per-IP группировка трафика, conntrack для per-connection байтов.
 - **Прогресс тестов** — Прогресс-бар в реальном времени.
@@ -56,7 +57,10 @@
 | `API_LISTEN` | 127.0.0.1 | gRPC API listen address |
 | `DATABASE` | `proxies.db` | SQLite |
 | `SUBSCRIBE_FILE` | `subscribe.txt` | Кеш подписки |
-| `PROBE_INTERVAL` | 10s | Интервал Observatory |
+
+Интервал Observatory, глубина и чистка логов настраиваются в UI и хранятся в БД
+(`observatory_probe_interval`, `log_keep`, `log_trim_every`); значения по умолчанию —
+в `app/db.py` (`SETTING_DEFAULTS`).
 
 Настройки через UI (Settings):
 
@@ -264,23 +268,29 @@ journalctl -u vless-manager -f
 vless-manager/
 ├── app.py                   # Entry point
 ├── config.py                # Централизованная конфигурация
+├── DESIGN.md                # Визуальный язык панели (типографика, палитра, мотивы)
 ├── proxies.db               # SQLite (создаётся автоматически)
+├── subscribe.txt            # Кеш подписки (создаётся автоматически)
+├── xray_config.json         # Локальный конфиг Xray (если нет systemd-конфига)
 ├── requirements.txt
 ├── vless-manager.service    # systemd unit (эталонный)
 ├── app/
 │   ├── __init__.py          # Фабрика Flask
-│   ├── db.py                # SQLite + Settings класс + миграции
+│   ├── db.py                # SQLite + Settings класс + миграции + SETTING_DEFAULTS
 │   ├── vless.py             # Парсинг VLESS
-│   ├── utils.py             # Время, логи, geo enrichment
+│   ├── utils.py             # Время, логи, geo enrichment, коннекты
 │   ├── proxy_manager.py     # Тестирование, фоновый чекер, failover, трафик
 │   ├── xray_configurator.py # Генерация конфига + Xray API + диагностика
 │   ├── importer.py          # Импорт подписок (urllib + curl fallback + прокси)
 │   ├── subscribe.py         # Генерация subscribe.txt
 │   └── routes/
+│       ├── __init__.py
 │       ├── pages.py         # HTML-роуты
 │       └── api.py           # REST API
 ├── static/
 │   ├── style.css / dashboard.css / sources.css / logs.css
+│   ├── api.js               # Общие клиентские утилиты: $, $$, api(), esc(), fmtUtcTime()
+│   ├── notifications.js     # Колокольчик уведомлений
 │   ├── dashboard.js / sources.js / settings.js / logs.js
 │   ├── theme.js / toast.js
 └── templates/
@@ -327,7 +337,7 @@ vless-manager/
 | POST | `/api/xray/rebuild` | Пересобрать конфиг и применить |
 | POST | `/api/import` | Импорт по URL `{"url":"..."}` |
 | GET | `/api/subscribe.txt` | Subscription URL для клиентов |
-| GET | `/api/logs?limit=&offset=&level=` | Логи с фильтрацией |
+| GET | `/api/logs?limit=&offset=&level=` | Логи с фильтрацией; `level` — один уровень или список через запятую (`WARN,ERROR`) |
 | POST | `/api/logs/clear` | Очистить логи |
 | GET | `/api/connections/list` | Активные TCP-соединения через прокси |
 | GET | `/api/connections/traffic` | Трафик сгруппированный по IP клиента |

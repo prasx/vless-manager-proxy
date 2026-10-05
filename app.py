@@ -18,6 +18,12 @@ from app.proxy_manager import proxy_manager
 
 
 def _on_shutdown(signum, frame):
+    """Завершение процесса: убить дочерние Xray и выйти.
+
+    proxy_manager тоже ставит обработчик SIGTERM (чистка дочерних процессов),
+    но этот его перекрывает: оба убивают детей, а здесь дополнительно
+    завершается процесс целиком.
+    """
     proxy_manager.kill_all_xray_children()
     sys.exit(0)
 

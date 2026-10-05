@@ -1,19 +1,6 @@
-const $ = s => document.querySelector(s);
+// $, esc(), fmtUtcTime() и api() приходят из api.js (подключается до этого файла).
+
 let _editTxtId = null;
-
-function esc(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function fmtUtcTime(t) {
-  if (!t) return '';
-  const d = new Date(String(t).replace(' ', 'T') + 'Z');
-  return isNaN(d.getTime()) ? String(t) : d.toLocaleString();
-}
 
 function renderSummary(sources) {
   const el = $('#srcSummary');

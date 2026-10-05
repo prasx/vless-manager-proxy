@@ -1,5 +1,4 @@
-const $ = s => document.querySelector(s);
-const $$ = s => Array.from(document.querySelectorAll(s));
+// $, $$ и api() приходят из api.js (подключается до этого файла в base.html).
 
 let currentFilter = '';
 let currentSource = '';
@@ -333,25 +332,16 @@ function renderSourceButtons(sources, unknownCount, totalCount) {
 
   const totalSrc = list.length + (unknownCount > 0 ? 1 : 0);
   const allBtn = $('#sourceAll');
-  let unknownBtn = $('#sourceUnknown');
+  const unknownBtn = $('#sourceUnknown');
 
   if (totalSrc <= 4) {
     // inline buttons: show All + source buttons
     if (allBtn) allBtn.style.display = '';
-    if (unknownCount > 0) {
-      if (!unknownBtn) {
-        unknownBtn = document.createElement('button');
-        unknownBtn.type = 'button';
-        unknownBtn.className = 'btn btn-sm';
-        unknownBtn.id = 'sourceUnknown';
-        unknownBtn.dataset.source = 'unknown';
-        unknownBtn.onclick = () => setSource('unknown');
-        bar.appendChild(unknownBtn);
-      }
+    // Кнопка «Свои» есть в разметке (templates/index.html), поэтому её не создаём,
+    // а только показываем при наличии прокси без источника.
+    if (unknownBtn) {
       unknownBtn.textContent = 'Свои ' + unknownCount;
-      unknownBtn.style.display = '';
-    } else if (unknownBtn) {
-      unknownBtn.style.display = 'none';
+      unknownBtn.style.display = unknownCount > 0 ? '' : 'none';
     }
     for (const s of list) {
       const id = 'srcBtn-' + s.id;
@@ -411,25 +401,11 @@ function updatePagination() {
 function statusBadge(status, failedSince) {
   if (status === 'working') return 'badge-green';
   if (status === 'failed' && failedSince) {
-    return (Date.now() - new Date(failedSince).getTime()) / 3600000 < 24
+    const since = utcDate(failedSince);
+    return since && (Date.now() - since.getTime()) / 3600000 < 24
       ? 'badge-orange' : 'badge-red';
   }
   return status === 'failed' ? 'badge-orange' : 'badge-muted';
-}
-
-// last_test_at из API хранится в UTC (naive): добавляем 'Z' и форматируем локально
-function fmtUtcTime(t) {
-  if (!t) return '';
-  const d = new Date(String(t).replace(' ', 'T') + 'Z');
-  return isNaN(d.getTime()) ? String(t) : d.toLocaleString();
-}
-
-function esc(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 function testTooltip(p) {
@@ -870,7 +846,7 @@ function fallbackPoll() {
   }, 2000);
 }
 
-let sseSource = connectSSE();
+connectSSE();
 
 // ─── Connections Modal ───
 

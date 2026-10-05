@@ -23,18 +23,29 @@ api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 # ─── Логи ───
 
+LOG_LEVELS = ("DEBUG", "INFO", "WARN", "ERROR")
+
 
 @api_bp.route("/logs")
 def api_logs():
-    """GET /api/logs?limit=&offset=&level= — возвращает логи с пагинацией (timestamp в MSK)."""
+    """GET /api/logs?limit=&offset=&level= — логи с пагинацией (timestamp в MSK).
+
+    `level` принимает один уровень или список через запятую (`WARN,ERROR`) —
+    так колокольчик уведомлений забирает одним запросом только важные записи.
+    Неизвестные значения игнорируются.
+    """
     limit = request.args.get("limit", type=int, default=50)
     offset = request.args.get("offset", type=int, default=0)
-    level = request.args.get("level", "").strip().upper()
+    raw_level = request.args.get("level", "").strip().upper()
+    levels = [lvl.strip() for lvl in raw_level.split(",") if lvl.strip() in LOG_LEVELS]
     where = ""
     params = []
-    if level in ("DEBUG", "INFO", "WARN", "ERROR"):
+    if len(levels) == 1:
         where = "WHERE level = ?"
-        params = [level]
+        params = [levels[0]]
+    elif levels:
+        where = f"WHERE level IN ({','.join('?' * len(levels))})"
+        params = levels
     total = db_q(f"SELECT COUNT(*) c FROM logs {where}", params)[0]["c"]
     rows = db_q(
         f"SELECT id, timestamp, level, message, correlation_id FROM logs {where} ORDER BY id DESC LIMIT ? OFFSET ?",
@@ -469,7 +480,7 @@ _REBUILD_KEYS = {
     "blocked_countries", "geo_enabled", "max_active_proxies", "probe_url",
     "observatory_probe_interval", "balancer_strategy", "handshake_timeout", "conn_idle",
     "min_speed_mbps", "sniffing_enabled", "sniffing_dest_override", "sniffing_route_only",
-    "geosite_rules",
+    "geosite_rules", "proxy_listen",
 }
 
 
@@ -508,23 +519,39 @@ def api_settings_set():
     return jsonify(success=True, restart_hint=hint)
 
 
-_INT_KEYS = {
-    "max_active_proxies", "vless_per_proxy_timeout", "log_trim_every", "log_keep",
-    "speed_test_max", "speed_test_min_sec", "handshake_timeout", "conn_idle", "check_interval_db", "check_interval_import",
-    "speed_test_adaptive_sec", "max_workers", "probe_timeout", "xray_startup_retries",
+# Допустимые диапазоны целочисленных настроек. Границы намеренно шире полей UI:
+# сервер отсекает заведомо нерабочие значения (0 попадёт в `LIMIT 0` и опустошит
+# подписку, отрицательный таймаут ломает прогон), но не блокирует сохранение
+# уже записанного значения, которое UI показывает вне своего диапазона.
+_INT_RANGES = {
+    "max_active_proxies": (1, 10000),
+    "vless_per_proxy_timeout": (1, 600),
+    "log_trim_every": (1, 10**9),
+    "log_keep": (1, 10**9),
+    "speed_test_max": (1, 10000),
+    "speed_test_min_sec": (1, 3600),
+    "speed_test_adaptive_sec": (1, 600),
+    "handshake_timeout": (1, 600),
+    "conn_idle": (1, 86400),
+    "check_interval_db": (1, 604800),
+    "check_interval_import": (1, 2592000),
+    "max_workers": (1, 256),
+    "probe_timeout": (1, 300),
+    "xray_startup_retries": (1, 1000),
 }
 
 
 def _validate_settings(data: dict) -> None:
     """Базовая валидация настроек перед сохранением."""
-    for k in _INT_KEYS:
-        if k in data:
-            try:
-                val = int(data[k])
-                if val < 0:
-                    raise ValueError
-            except (ValueError, TypeError):
-                raise ValueError(f"{k} must be a positive integer, got {data[k]!r}")
+    for key, (low, high) in _INT_RANGES.items():
+        if key not in data:
+            continue
+        try:
+            val = int(data[key])
+        except (ValueError, TypeError):
+            raise ValueError(f"{key} must be an integer, got {data[key]!r}")
+        if not low <= val <= high:
+            raise ValueError(f"{key} must be in {low}..{high}, got {val}")
 
 
 # ─── Бекап настроек и источников ───
@@ -844,7 +871,7 @@ def api_performance_recommendations():
     total = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
     working = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working'")[0]["c"]
     speed_enabled = Settings.get("speed_test_enabled", "true") == "true"
-    speed_max = int(Settings.get("speed_test_max", "30"))
+    speed_max = int(Settings.get("speed_test_max"))
     workers = Settings.max_workers()
     probe_t = Settings.probe_timeout()
     startup_r = Settings.xray_startup_retries()

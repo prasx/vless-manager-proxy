@@ -27,7 +27,9 @@ def create_app():
         static_folder=str(root / "static"),
         static_url_path="/static",
     )
-    app.config["JSON_AS_ASCII"] = False
+    # Кириллица в JSON ответах должна оставаться читаемой. Ключ JSON_AS_ASCII
+    # перестал действовать в Flask 2.3+, актуальный способ — настройка провайдера.
+    app.json.ensure_ascii = False
 
     from .routes.pages import pages_bp
     from .routes.api import api_bp

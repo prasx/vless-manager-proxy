@@ -1,18 +1,6 @@
-async function api(method, url, body) {
-  const opts = { method, headers: {'Content-Type':'application/json'} };
-  if (body !== undefined) opts.body = JSON.stringify(body);
-  try {
-    const r = await fetch(url, opts);
-    const data = await r.json();
-    if (!r.ok && !data.error) data.error = `HTTP ${r.status}`;
-    return data;
-  } catch (e) {
-    toast('Сетевая ошибка: ' + e.message, 'error');
-    return {error: e.message};
-  }
-}
+/* Страница настроек: загрузка, валидация, сохранение, сброс.
 
-const $ = id => document.getElementById(id);
+   $ и api() приходят из api.js (подключается до этого файла в base.html). */
 
 // ─── Ошибки загрузки ───
 const _loadErrors = {};
@@ -46,6 +34,7 @@ function fmtHours(v) {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
+// ─── Диапазоны-слайдеры ───
 let _rangeDb, _rangeImport;
 
 function setupRange(id, labelId) {
@@ -58,35 +47,51 @@ function setupRange(id, labelId) {
 }
 
 function setRangeValue(range, val) {
-  if (!range) return;
-  if (isNaN(val)) return;
+  if (!range || isNaN(val)) return;
   range.el.value = val;
   range.update();
 }
 
-// ─── Dirty flag ───
+// ─── Отметка несохранённых изменений ───
+//
+// Источник истины — снимок всех полей настроек. Изменение сравнивается со
+// снимком целиком, поэтому возврат поля к исходному значению снимает отметку,
+// а динамически отрисованные элементы (страны, правила GeoSite) учитываются
+// через data-key — у них нет id.
 let _dirty = false;
 let _initialSnapshot = null;
-let _watching = false;
 let _profileCount = 0;
 
-function takeSnapshot() {
-  const s = {};
-  document.querySelectorAll('.settings-section input, .settings-section select').forEach(el => {
-    if (el.type === 'checkbox' || el.type === 'radio') {
-      s[el.id || el.name] = el.checked;
-    } else {
-      s[el.id || el.name] = el.value;
-    }
-  });
-  return s;
+function fieldKey(el) {
+  return el.id || el.dataset.key || el.name || '';
 }
 
-function markDirty() {
-  if (!_dirty) {
-    _dirty = true;
-    updateDirtyUI();
+/** Поля-фильтры (поиск, выбор файла) не настройки: они не считаются изменениями. */
+function isTrackedField(el) {
+  return el.dataset.nodirty === undefined && el.type !== 'file';
+}
+
+function takeSnapshot() {
+  const snap = {};
+  $$('.settings-section input, .settings-section select, .settings-section textarea').forEach(el => {
+    const key = fieldKey(el);
+    if (!key || !isTrackedField(el)) return;
+    snap[key] = el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value;
+  });
+  return snap;
+}
+
+function recomputeDirty() {
+  if (!_initialSnapshot) return;
+  const cur = takeSnapshot();
+  const keys = new Set([...Object.keys(_initialSnapshot), ...Object.keys(cur)]);
+  let dirty = false;
+  for (const k of keys) {
+    if (_initialSnapshot[k] !== cur[k]) { dirty = true; break; }
   }
+  if (dirty === _dirty) return;
+  _dirty = dirty;
+  updateDirtyUI();
 }
 
 function markClean() {
@@ -98,13 +103,8 @@ function markClean() {
 function updateDirtyUI() {
   const el = $('dirtyIndicator');
   if (!el) return;
-  if (_dirty) {
-    el.textContent = 'есть несохранённые изменения';
-    el.className = 'settings-dirty-indicator dirty';
-  } else {
-    el.textContent = '';
-    el.className = 'settings-dirty-indicator';
-  }
+  el.textContent = _dirty ? 'есть несохранённые изменения' : '';
+  el.className = _dirty ? 'settings-dirty-indicator dirty' : 'settings-dirty-indicator';
 }
 
 function isDirty() { return _dirty; }
@@ -119,22 +119,17 @@ function clearInputError(el) {
   }
 }
 
-function watchDirty() {
-  if (_watching) return;
-  _watching = true;
-  document.querySelectorAll('.settings-section input, .settings-section select').forEach(el => {
-    const onChange = () => {
-      clearInputError(el);
-      if (!_initialSnapshot) return;
-      const id = el.id || el.name;
-      const cur = el.type === 'checkbox' ? el.checked : el.value;
-      if (_initialSnapshot[id] !== cur) {
-        markDirty();
-      }
-    };
-    el.addEventListener('change', onChange);
-    el.addEventListener('input', onChange);
-  });
+// Делегирование: слушатели живут на документе, поэтому поля, отрисованные позже
+// (страны, правила GeoSite), отслеживаются без повторной подписки.
+document.addEventListener('input', onFieldChanged);
+document.addEventListener('change', onFieldChanged);
+
+function onFieldChanged(e) {
+  const el = e.target;
+  if (!el || typeof el.closest !== 'function') return;
+  if (!el.closest('.settings-section')) return;
+  clearInputError(el);
+  recomputeDirty();
 }
 
 window.addEventListener('beforeunload', e => {
@@ -144,7 +139,7 @@ window.addEventListener('beforeunload', e => {
   }
 });
 
-// ─── GeoSite Rules ───
+// ─── Правила GeoSite ───
 let geositeRules = [];
 
 async function loadGeositeRules() {
@@ -162,21 +157,44 @@ function renderGeositeRules() {
   if (!wrap) return;
   wrap.innerHTML = '';
   if (!geositeRules.length) {
-    wrap.innerHTML = '<div class="tuning-item" style="justify-content:center;color:var(--text-muted);font-size:0.82rem;padding:12px 0">правил нет: весь трафик идёт через балансер</div>';
+    const empty = document.createElement('div');
+    empty.className = 'tuning-item geosite-empty';
+    empty.textContent = 'правил нет: весь трафик идёт через балансер';
+    wrap.appendChild(empty);
     return;
   }
   geositeRules.forEach((rule, i) => {
     const item = document.createElement('div');
     item.className = 'tuning-item';
-    item.innerHTML = `
-      <input type="text" class="input geosite-domain" value="${rule.domain}" style="flex:1;font-family:monospace;max-width:360px" placeholder="geosite:google">
-      <select class="input geosite-outbound" style="width:auto;min-width:150px">
-        <option value="direct" ${rule.outboundTag === 'direct' ? 'selected' : ''}>direct: напрямую</option>
-        <option value="proxy" ${rule.outboundTag === 'proxy' ? 'selected' : ''}>proxy: через балансер</option>
-      </select>
-      <button class="btn btn-danger" onclick="removeGeositeRule(${i})" aria-label="Удалить правило" title="Удалить правило" style="padding:2px 10px;font-size:12px;line-height:1.6">✕</button>
-    `;
-    item.querySelector('input, select').addEventListener('change', markDirty);
+
+    const domain = document.createElement('input');
+    domain.type = 'text';
+    domain.className = 'input geosite-domain';
+    domain.value = rule.domain || '';
+    domain.placeholder = 'geosite:google';
+    domain.spellcheck = false;
+    domain.dataset.key = `geosite:${i}:domain`;
+
+    const outbound = document.createElement('select');
+    outbound.className = 'input geosite-outbound';
+    outbound.dataset.key = `geosite:${i}:outbound`;
+    for (const [value, label] of [['direct', 'direct: напрямую'], ['proxy', 'proxy: через балансер']]) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      if (rule.outboundTag === value) opt.selected = true;
+      outbound.appendChild(opt);
+    }
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn btn-danger btn-sm geosite-remove';
+    remove.textContent = '✕';
+    remove.title = 'Удалить правило';
+    remove.setAttribute('aria-label', 'Удалить правило');
+    remove.addEventListener('click', () => removeGeositeRule(i));
+
+    item.append(domain, outbound, remove);
     wrap.appendChild(item);
   });
 }
@@ -185,11 +203,11 @@ function addGeositeRule() {
   syncGeositeDomToArray();
   geositeRules.push({ domain: 'geosite:google', outboundTag: 'direct' });
   renderGeositeRules();
-  markDirty();
+  recomputeDirty();
 }
 
 function syncGeositeDomToArray() {
-  const items = document.querySelectorAll('#geositeRulesWrap .tuning-item');
+  const items = $$('#geositeRulesWrap .tuning-item');
   const rules = [];
   items.forEach(item => {
     const domain = item.querySelector('.geosite-domain');
@@ -198,19 +216,24 @@ function syncGeositeDomToArray() {
       rules.push({ domain: domain.value.trim(), outboundTag: outbound.value });
     }
   });
-  if (rules.length) geositeRules = rules;
+  geositeRules = rules;
 }
 
 function removeGeositeRule(idx) {
+  syncGeositeDomToArray();
   geositeRules.splice(idx, 1);
   renderGeositeRules();
-  markDirty();
+  recomputeDirty();
 }
 
-// ─── Country Filter ───
+// ─── Фильтр стран ───
+//
+// blockedCodes — источник истины. Поиск только фильтрует отрисовку, поэтому
+// сохранение берёт все отметки, а не только попавшие в найденное подмножество
+// (раньше поиск + сохранение молча снимали блокировку с остальных стран).
 let countryData = [];
-let countrySearchValue = '';
-let _blockedRaw = '';
+let blockedCodes = new Set();
+let countrySearch = '';
 
 async function loadCountries() {
   const seq = nextSeq('countries');
@@ -219,12 +242,12 @@ async function loadCountries() {
   if (data.error) { setLoadError('countries', 'не удалось загрузить страны: ' + data.error); return; }
   setLoadError('countries', '');
   countryData = data.countries || [];
-  _blockedRaw = data.blocked || '';
+  blockedCodes = new Set((data.blocked || '').split(',').map(s => s.trim()).filter(Boolean));
   const badge = $('countryVerifyBadge');
-  if (badge && data.last_verify) {
-    badge.textContent = `проверено ip-api · последняя проверка ${data.last_verify.slice(0, 10)}`;
-  } else if (badge) {
-    badge.textContent = countryData.length ? 'ожидание определения стран…' : '';
+  if (badge) {
+    badge.textContent = data.last_verify
+      ? `проверено ip-api · последняя проверка ${data.last_verify.slice(0, 10)}`
+      : (countryData.length ? 'ожидание определения стран…' : '');
   }
   renderCountryFilter();
 }
@@ -234,78 +257,116 @@ function renderCountryFilter() {
   if (!tb) return;
   tb.innerHTML = '';
   if (!countryData.length) {
-    tb.innerHTML = '<tr><td colspan="4" class="empty">стран пока нет: импортируйте прокси</td></tr>';
-    const cnt = $('countryFilterCount');
-    if (cnt) cnt.textContent = '';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 4;
+    td.className = 'empty';
+    td.textContent = 'стран пока нет: импортируйте прокси';
+    tr.appendChild(td);
+    tb.appendChild(tr);
+    updateCountryCount();
     return;
   }
-  const blockedSet = new Set(_blockedRaw ? _blockedRaw.split(',').map(s => s.trim()).filter(Boolean) : []);
-  const search = countrySearchValue.trim().toUpperCase();
-  let selected = 0;
-  let shown = 0;
+  const search = countrySearch.trim().toUpperCase();
   for (const c of countryData) {
     if (search && !c.code.includes(search)) continue;
-    shown++;
-    const blocked = blockedSet.has(c.code);
-    if (blocked) selected++;
-    const tr = document.createElement('tr');
-    tr.style.cssText = 'border-bottom:1px solid var(--border)';
-    const allVerified = c.verified === c.total;
-    const verifiedLabel = allVerified ? 'ip-api' : (c.verified === 0 ? 'fragment' : 'mixed');
-    tr.innerHTML = `
-      <td style="padding:4px 10px;width:32px">
-        <input type="checkbox" class="chk-custom" data-code="${c.code}" ${blocked ? 'checked' : ''}>
-      </td>
-      <td style="padding:4px 6px;font-weight:bold;color:var(--text-primary)">
-        <span style="font-size:0.65rem;color:var(--text-muted);cursor:default" title="source: ${verifiedLabel} (${c.verified}/${c.total} verified)">[${verifiedLabel}]</span>
-        ${c.code}
-      </td>
-      <td style="padding:4px 6px;color:var(--text-muted);font-size:0.72rem">
-        ${c.working}/${c.total} работают
-      </td>
-      <td style="padding:4px 6px;color:var(--text-muted);font-size:0.7rem;text-align:right;white-space:nowrap">
-        ${blocked ? '<span style="color:var(--red)">excluded</span>' : ''}
-      </td>
-    `;
-    tr.querySelector('input[type="checkbox"]').addEventListener('change', markDirty);
-    tb.appendChild(tr);
+    tb.appendChild(countryRow(c));
   }
+  updateCountryCount();
+}
+
+function countryRow(c) {
+  const tr = document.createElement('tr');
+  tr.className = 'country-row';
+
+  const tdChk = document.createElement('td');
+  tdChk.className = 'country-cell-chk';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.className = 'chk-custom';
+  cb.dataset.code = c.code;
+  cb.dataset.key = `country:${c.code}`;
+  cb.checked = blockedCodes.has(c.code);
+  cb.addEventListener('change', () => {
+    if (cb.checked) blockedCodes.add(c.code); else blockedCodes.delete(c.code);
+    markCell(tr, cb.checked);
+    updateCountryCount();
+    recomputeDirty();
+  });
+  tdChk.appendChild(cb);
+
+  const tdCode = document.createElement('td');
+  tdCode.className = 'country-cell-code';
+  const src = document.createElement('span');
+  src.className = 'country-source';
+  const verifiedLabel = c.verified === c.total ? 'ip-api' : (c.verified === 0 ? 'fragment' : 'mixed');
+  src.textContent = `[${verifiedLabel}]`;
+  src.title = `source: ${verifiedLabel} (${c.verified}/${c.total} verified)`;
+  tdCode.append(src, document.createTextNode(' ' + c.code));
+
+  const tdStat = document.createElement('td');
+  tdStat.className = 'country-cell-stat';
+  tdStat.textContent = `${c.working}/${c.total} работают`;
+
+  const tdMark = document.createElement('td');
+  tdMark.className = 'country-cell-mark';
+  markCell(tr, cb.checked, tdMark);
+
+  tr.append(tdChk, tdCode, tdStat, tdMark);
+  return tr;
+}
+
+function markCell(tr, blocked, cell) {
+  const td = cell || tr.querySelector('.country-cell-mark');
+  if (!td) return;
+  td.textContent = blocked ? 'excluded' : '';
+}
+
+function updateCountryCount() {
   const cnt = $('countryFilterCount');
-  if (cnt) cnt.textContent = `заблокировано: ${selected} из ${shown}`;
+  if (!cnt) return;
+  if (!countryData.length) { cnt.textContent = ''; return; }
+  const inList = countryData.filter(c => blockedCodes.has(c.code)).length;
+  const extra = blockedCodes.size - inList;
+  cnt.textContent = `исключено ${blockedCodes.size} из ${countryData.length}`
+    + (extra > 0 ? ` · вне списка: ${extra}` : '');
 }
 
 function selectAllCountries(blocked) {
-  if (!blocked && !confirm('Снять отметки со всех стран? После сохранения ни одна страна не будет исключена из конфига и подписки.')) return;
-  const boxes = document.querySelectorAll('#countryFilterBody input[type="checkbox"]');
-  boxes.forEach(cb => { cb.checked = blocked; });
-  markDirty();
+  if (!countryData.length) return;
+  const msg = blocked
+    ? `Исключить все страны (${countryData.length}) из конфига и подписки?`
+    : 'Снять отметки со всех стран? После сохранения ни одна страна не будет исключена из конфига и подписки.';
+  if (!confirm(msg)) return;
+  for (const c of countryData) {
+    if (blocked) blockedCodes.add(c.code); else blockedCodes.delete(c.code);
+  }
+  renderCountryFilter();
+  recomputeDirty();
 }
 
 function blockCountry(code) {
-  const boxes = document.querySelectorAll('#countryFilterBody input[type="checkbox"]');
-  boxes.forEach(cb => { cb.checked = cb.dataset.code === code || cb.checked; });
-  markDirty();
+  blockedCodes.add(code);
+  renderCountryFilter();
+  recomputeDirty();
 }
 
 function collectBlockedCountries() {
-  const checked = [];
-  document.querySelectorAll('#countryFilterBody input[type="checkbox"]:checked').forEach(cb => {
-    checked.push(cb.dataset.code);
-  });
-  return checked.join(',');
+  return [...blockedCodes].sort().join(',');
 }
 
 {
   const searchInput = $('countryFilterSearch');
   if (searchInput) {
     searchInput.addEventListener('input', function () {
-      countrySearchValue = this.value;
+      countrySearch = this.value;
       renderCountryFilter();
     });
   }
 }
 
-// ─── Load ───
+// ─── Загрузка ───
+
 async function loadSettings() {
   const seq = nextSeq('settings');
   const [s, status] = await Promise.all([
@@ -315,6 +376,7 @@ async function loadSettings() {
   if (isStale('settings', seq)) return;
   if (s.error) { setLoadError('settings', 'не удалось загрузить настройки: ' + s.error); return; }
   setLoadError('settings', '');
+
   $('xrayBin').value = s.xray_bin || 'xray';
   $('xrayConfigPath').value = s.xray_config_path || '';
   $('proxyListen').value = s.proxy_listen || '0.0.0.0';
@@ -353,12 +415,18 @@ async function loadSettings() {
   $('maxWorkers').value = s.max_workers || '15';
   $('probeTimeout').value = s.probe_timeout || '3';
   $('xrayStartupRetries').value = s.xray_startup_retries || '15';
+
   setLoadError('xray', status.error ? `не удалось получить статус Xray: ${status.error}` : '');
+  if (!status.error) renderXrayStatus(status);
   updateConfigStatus(status);
   updateSpeedTestDependants();
   loadPerfEstimate();
+}
+
+/** Полная синхронизация страницы с сервером: после неё снимок «чистый». */
+async function refreshAll() {
+  await Promise.all([loadSettings(), loadCountries(), loadGeositeRules()]);
   markClean();
-  watchDirty();
 }
 
 function updateConfigStatus(status) {
@@ -367,8 +435,7 @@ function updateConfigStatus(status) {
   if (status.error) { el.textContent = '…'; return; }
   const active = status.nodes_in_config || 0;
   const candidates = status.config_candidates || 0;
-  const api = status.api_accessible;
-  if (!api) {
+  if (!status.api_accessible) {
     el.textContent = `кандидатов: ${candidates} (API недоступен)`;
     el.style.color = 'var(--text-muted)';
     return;
@@ -381,45 +448,23 @@ function updateSpeedTestDependants() {
   const enabled = $('speedTestEnabled').checked;
   const body = $('speedTestBody');
   if (!body) return;
-  const inputs = body.querySelectorAll('input');
-  inputs.forEach(inp => {
-    if (inp.id !== 'speedTestEnabled') {
-      inp.disabled = !enabled;
-    }
+  body.querySelectorAll('input').forEach(inp => {
+    if (inp.id !== 'speedTestEnabled') inp.disabled = !enabled;
   });
   body.style.opacity = enabled ? '1' : '0.45';
 }
 
-async function rebuildConfig() {
-  const btn = document.querySelector('button[onclick*="rebuildConfig"]');
-  if (btn) { btn.disabled = true; btn.textContent = 'Пересобираем…'; }
-  const r = await api('POST', '/api/xray/rebuild');
-  if (r.error) { toast(r.error, 'error'); }
-  else { toast('Конфиг пересобирается', 'success'); }
-  if (btn) { btn.disabled = false; btn.textContent = 'Пересобрать'; }
-  setTimeout(() => loadSettings(), 2000);
-}
-
-async function loadPerfEstimate() {
-  // реальное число профилей берём из /api/status, расчёт ведём локально при изменении полей
-  try {
-    const st = await api('GET', '/api/status');
-    if (st && st.total != null) _profileCount = st.total;
-  } catch (_) {}
-  updatePerfEstimate();
-}
-
-// ─── Validation ───
+// ─── Валидация ───
 const FIELD_LABELS = {
   maxActiveProxies: 'Макс. активных прокси',
   maxWorkers: 'Кол-во воркеров',
   probeTimeout: 'Таймаут пробы',
-  vlessPerProxyTimeout: 'Таймаут VLESS-теста',
-  handshakeTimeout: 'Таймаут handshake',
+  vlessPerProxyTimeout: 'Таймаут одной пробы',
+  handshakeTimeout: 'Таймаут рукопожатия',
   connIdle: 'Таймаут простоя',
-  speedTestMax: 'Топ-N для speed test',
-  speedTestMinSec: 'Длительность замера одного профиля',
-  speedTestAdaptiveSec: 'Adaptive check',
+  speedTestMax: 'Топ-N для теста скорости',
+  speedTestMinSec: 'Длительность одного профиля',
+  speedTestAdaptiveSec: 'Адаптивная проверка',
   logTrimEvery: 'Чистка логов',
   logKeep: 'Хранение логов',
   xrayStartupRetries: 'Ожидание старта Xray',
@@ -433,7 +478,7 @@ function fieldLabel(id) {
 function clearValidationUI() {
   const panel = $('validationPanel');
   if (panel) { panel.innerHTML = ''; panel.style.display = 'none'; }
-  document.querySelectorAll('.input-invalid').forEach(el => el.classList.remove('input-invalid'));
+  $$('.input-invalid').forEach(el => el.classList.remove('input-invalid'));
 }
 
 function showValidationErrors(errors) {
@@ -471,12 +516,12 @@ function validateSettings() {
   for (const f of numFields) {
     const el = $(f.id);
     if (!el) continue;
-    const val = parseFloat(el.value);
     if (el.value.trim() === '') {
       errors.push(`${fieldLabel(f.id)}: не может быть пустым`);
       markInvalid(f.id);
       continue;
     }
+    const val = parseFloat(el.value);
     if (isNaN(val) || val < 0) {
       errors.push(`${fieldLabel(f.id)}: должно быть числом`);
       markInvalid(f.id);
@@ -494,21 +539,21 @@ function validateSettings() {
   ];
   for (const f of requiredFields) {
     const el = $(f.id);
-    if (!el) continue;
-    if (!el.value.trim()) {
+    if (el && !el.value.trim()) {
       errors.push(f.msg);
       markInvalid(f.id);
     }
   }
-  const probeUrl = $('probeUrl').value.trim();
-  if (probeUrl && !/^https?:\/\//i.test(probeUrl)) {
-    errors.push('URL проверки: должен начинаться с http:// или https://');
-    markInvalid('probeUrl');
-  }
-  const speedUrl = $('speedTestUrl').value.trim();
-  if (speedUrl && !/^https?:\/\//i.test(speedUrl)) {
-    errors.push('Файл замера: должен начинаться с http:// или https://');
-    markInvalid('speedTestUrl');
+  const urlFields = [
+    { id: 'probeUrl', label: 'URL проверки' },
+    { id: 'speedTestUrl', label: 'Файл замера' },
+  ];
+  for (const f of urlFields) {
+    const value = $(f.id).value.trim();
+    if (value && !/^https?:\/\//i.test(value)) {
+      errors.push(`${f.label}: должен начинаться с http:// или https://`);
+      markInvalid(f.id);
+    }
   }
   const importProxy = $('importProxy').value.trim();
   if (importProxy && !/^(socks5|socks4|http|https):\/\//i.test(importProxy)) {
@@ -516,12 +561,15 @@ function validateSettings() {
     markInvalid('importProxy');
   }
   const obsInterval = $('observatoryProbeInterval').value.trim();
-  if (obsInterval && !/^\d+(s|ms|m|h)?$/i.test(obsInterval)) {
-    errors.push('Интервал пинга: ожидается число с суффиксом, например 10s, 15, 1m');
+  // Xray принимает Go-duration: целое или дробное число с суффиксом s/ms/m/h.
+  if (obsInterval && !/^\d+(\.\d+)?(s|ms|m|h)?$/i.test(obsInterval)) {
+    errors.push('Интервал пинга: ожидается число с суффиксом, например 10s, 15, 1.5s, 1m');
     markInvalid('observatoryProbeInterval');
   }
   return errors;
 }
+
+// ─── Сохранение ───
 
 async function saveSettings() {
   const errors = validateSettings();
@@ -531,14 +579,10 @@ async function saveSettings() {
     return;
   }
   clearValidationUI();
-
   syncGeositeDomToArray();
 
   const btn = $('saveSettingsBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Сохранение…'; }
-  $('xrayBin').disabled = true;
-  $('xrayConfigPath').disabled = true;
-  $('proxyListen').disabled = true;
   const data = {
     xray_bin: $('xrayBin').value.trim(),
     xray_config_path: $('xrayConfigPath').value.trim(),
@@ -584,62 +628,97 @@ async function saveSettings() {
     probe_timeout: $('probeTimeout').value.trim() || '3',
     xray_startup_retries: $('xrayStartupRetries').value.trim() || '15',
   };
-  const r = await api('POST', '/api/settings', data);
-  $('xrayBin').disabled = false;
-  $('xrayConfigPath').disabled = false;
-  $('proxyListen').disabled = false;
-  if (btn) { btn.disabled = false; btn.textContent = 'Сохранить настройки'; }
+
+  let r;
+  try {
+    r = await api('POST', '/api/settings', data);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Сохранить настройки'; }
+  }
   if (r.error) { toast(r.error, 'error'); return; }
   toast(r.restart_hint || 'Настройки сохранены', 'success');
-  loadSettings();
-  loadCountries();
+  await refreshAll();
 }
 
-function resetTuning() {
+// ─── Сброс тюнинга к заводским значениям ───
+//
+// Пути Xray, адрес прослушивания, URL проверки, прокси импорта, страны и
+// правила GeoSite не сбрасываются: это привязка к окружению и содержимое,
+// а не тюнинг. Список совпадает со значениями по умолчанию в app/db.py.
+const RESET_NUMBERS = {
+  maxActiveProxies: '30',
+  minSpeedMbps: '0',
+  vlessPerProxyTimeout: '3',
+  observatoryProbeInterval: '10s',
+  handshakeTimeout: '5',
+  connIdle: '300',
+  speedTestMax: '15',
+  speedTestMinSec: '10',
+  speedTestAdaptiveSec: '2',
+  maxWorkers: '15',
+  probeTimeout: '3',
+  xrayStartupRetries: '15',
+  logTrimEvery: '500',
+  logKeep: '2000',
+};
+
+const RESET_CHECKBOXES = {
+  dbCheckAutoCleanup: false,
+  speedTestEnabled: true,
+  applyAfterTest: true,
+  safeOnlyImport: false,
+  sniffingEnabled: true,
+  sniffingRouteOnly: true,
+  sniffHttp: true,
+  sniffTls: true,
+  sniffQuic: false,
+  sniffFtp: false,
+};
+
+function resetSettings() {
+  if (!confirm(
+    'Вернуть тюнинг-параметры к значениям по умолчанию?\n\n' +
+    'Затронуты: интервалы проверок, таймауты, воркеры, тест скорости, ' +
+    'балансировщик, сниффинг, чистка логов.\n' +
+    'Пути Xray, адрес прослушивания, URL проверки, прокси импорта, страны и ' +
+    'правила GeoSite не меняются.')) return;
+
+  for (const [id, value] of Object.entries(RESET_NUMBERS)) {
+    const el = $(id);
+    if (el) el.value = value;
+  }
+  for (const [id, value] of Object.entries(RESET_CHECKBOXES)) {
+    const el = $(id);
+    if (el) el.checked = value;
+  }
+  $('speedTestUrl').value = 'http://speedtest.selectel.ru/10MB';
+  $('balancerStrategy').value = 'random';
   setRangeValue(_rangeDb, 0.5);
   setRangeValue(_rangeImport, 3);
-  $('vlessPerProxyTimeout').value = '3';
-  $('observatoryProbeInterval').value = '10s';
-  $('logTrimEvery').value = '500';
-  $('logKeep').value = '2000';
-  $('handshakeTimeout').value = '5';
-  $('connIdle').value = '300';
-  $('speedTestMax').value = '15';
-  $('speedTestUrl').value = 'http://speedtest.selectel.ru/10MB';
-  $('speedTestMinSec').value = '10';
-  $('minSpeedMbps').value = '0';
-  $('speedTestAdaptiveSec').value = '2';
-  $('safeOnlyImport').checked = false;
-  $('balancerStrategy').value = 'random';
-  $('maxWorkers').value = '15';
-  $('probeTimeout').value = '3';
-  $('xrayStartupRetries').value = '15';
-  markDirty();
-  toast('Значения сброшены к заводским, нажмите «Сохранить настройки»');
-}
 
-async function restartXray() {
-  toast('перезапускаем Xray…');
-  const r = await api('POST', '/api/xray-restart');
-  if (r && r.error) toast(r.error, 'error');
+  updateSpeedTestDependants();
+  updatePerfEstimate();
+  recomputeDirty();
+  toast('Значения сброшены к заводским, нажмите «Сохранить настройки»');
 }
 
 function resetProbeUrl() {
   $('probeUrl').value = 'https://www.gstatic.com/generate_204';
-  markDirty();
+  recomputeDirty();
   toast('URL проверки сброшен к значению по умолчанию');
 }
 
-// ─── Xray Daemon ───
+// ─── Демон Xray ───
+
 function renderXrayStatus(s) {
   const el = $('xrayStatus');
   if (!el) return;
   const run = s.running ? '<span class="badge badge-green">работает</span>' : '<span class="badge badge-muted">остановлен</span>';
-  const api_ok = s.api_accessible ? 'API ✓' : 'API ✗';
+  const apiOk = s.api_accessible ? 'API ✓' : 'API ✗';
   const sd = s.systemd_active ? 'systemd ✓' : '';
-  const active = s.active_outbounds && s.active_outbounds.length
+  const nodes = s.active_outbounds && s.active_outbounds.length
     ? `узлы: ${s.active_outbounds.filter(t => t.startsWith('node')).join(', ')}` : '';
-  el.innerHTML = `${run} &nbsp;${api_ok} &nbsp;${sd}<br><span style="color:var(--green);font-size:11px">${active}</span>`;
+  el.innerHTML = `${run} &nbsp;${apiOk} &nbsp;${sd}<br><span class="xray-nodes">${nodes}</span>`;
   const btnStart = $('btnXrayStart');
   const btnStop = $('btnXrayStop');
   if (btnStart) btnStart.style.display = s.running ? 'none' : '';
@@ -647,6 +726,7 @@ function renderXrayStatus(s) {
 }
 
 async function startXrayDaemon() {
+  if (!confirm('Запустить Xray?')) return;
   const r = await api('POST', '/api/xray/start');
   if (r.error) { toast(r.error, 'error'); return; }
   toast('Xray запущен', 'success');
@@ -654,71 +734,43 @@ async function startXrayDaemon() {
 }
 
 async function stopXrayDaemon() {
-  await api('POST', '/api/xray/stop');
+  if (!confirm('Остановить Xray? Прокси перестанет работать.')) return;
+  const r = await api('POST', '/api/xray/stop');
+  if (r.error) { toast(r.error, 'error'); return; }
   toast('Xray остановлен', 'success');
   loadSettings();
 }
 
-// ─── Backup ───
-async function exportBackup() {
-  const r = await api('GET', '/api/backup');
-  if (r.error) { toast(r.error, 'error'); return; }
-  const blob = new Blob([JSON.stringify(r, null, 2)], {type: 'application/json'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `vless-backup-${new Date().toISOString().slice(0,10)}.json`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-  toast('Резервная копия скачана', 'success');
+async function restartXray() {
+  if (!confirm('Перезапустить Xray?')) return;
+  toast('перезапускаем Xray…');
+  const r = await api('POST', '/api/xray-restart');
+  if (r.error) toast(r.error, 'error');
 }
 
-function confirmImportBackup() {
-  if (confirm('Импортировать резервную копию? Текущие настройки и источники будут перезаписаны.')) {
-    document.getElementById('backupFile').click();
-  }
-}
-
-async function importBackup(event) {
-  const file = event.target.files[0];
-  if (!file) return;
+async function rebuildConfig() {
+  if (!confirm('Пересобрать конфиг сейчас?')) return;
+  const btn = $('rebuildConfigBtn');
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Пересобираем…'; }
   try {
-    const text = await file.text();
-    const data = JSON.parse(text);
-    const r = await api('POST', '/api/backup/import', data);
-    if (r.error) { toast(r.error, 'error'); return; }
-    toast(`Импортировано: настроек ${r.imported.settings}, источников ${r.imported.sources}`, 'success');
-    loadSettings();
-  } catch (e) {
-    toast('Некорректный JSON-файл: ' + e.message, 'error');
+    const r = await api('POST', '/api/xray/rebuild');
+    if (r.error) toast(r.error, 'error');
+    else toast('Конфиг пересобирается', 'success');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
   }
-  event.target.value = '';
+  setTimeout(loadSettings, 2000);
 }
 
-_rangeDb = setupRange('checkIntervalDb', 'checkIntervalDbLabel');
-_rangeImport = setupRange('checkIntervalImport', 'checkIntervalImportLabel');
-$('speedTestEnabled').addEventListener('change', updateSpeedTestDependants);
+// ─── Оценка длительности прогона ───
 
-// ─── Sticky settings nav: подсветка активного раздела ───
-(function initSettingsNav() {
-  const nav = $('settingsNav');
-  if (!nav) return;
-  const links = Array.from(nav.querySelectorAll('a[href^="#"]'));
-  const targets = links
-    .map(a => document.querySelector(a.getAttribute('href')))
-    .filter(Boolean);
-  const offset = 88;
-  function update() {
-    const pos = window.scrollY + offset;
-    let cur = '';
-    for (const s of targets) {
-      if (s.offsetTop <= pos) cur = '#' + s.id;
-    }
-    links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === cur));
-  }
-  window.addEventListener('scroll', update, { passive: true });
-  window.addEventListener('resize', update);
-  update();
-})();
+async function loadPerfEstimate() {
+  // реальное число профилей берём из /api/status, расчёт ведём локально при изменении полей
+  const st = await api('GET', '/api/status');
+  if (st && st.total != null) _profileCount = st.total;
+  updatePerfEstimate();
+}
 
 function updatePerfEstimate() {
   const estVal = $('perfEstValue');
@@ -742,13 +794,81 @@ function updatePerfEstimate() {
   estVal.title = 'оценка сверху: как будто все прокси отвечают до таймаута';
   estDetail.textContent = `${_profileCount} профилей · ${workers} воркеров · таймаут ${vlessT} с`;
 }
-$('maxWorkers').addEventListener('input', updatePerfEstimate);
-$('vlessPerProxyTimeout').addEventListener('input', updatePerfEstimate);
-$('xrayStartupRetries').addEventListener('input', updatePerfEstimate);
 
-loadSettings();
-loadCountries();
-loadGeositeRules();
+// ─── Резервная копия ───
+
+async function exportBackup() {
+  const r = await api('GET', '/api/backup');
+  if (r.error) { toast(r.error, 'error'); return; }
+  const blob = new Blob([JSON.stringify(r, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `vless-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('Резервная копия скачана', 'success');
+}
+
+function confirmImportBackup() {
+  if (confirm('Импортировать резервную копию? Текущие настройки и источники будут перезаписаны.')) {
+    $('backupFile').click();
+  }
+}
+
+async function importBackup(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    const r = await api('POST', '/api/backup/import', data);
+    if (r.error) { toast(r.error, 'error'); return; }
+    toast(`Импортировано: настроек ${r.imported.settings}, источников ${r.imported.sources}`, 'success');
+    await refreshAll();
+  } catch (e) {
+    toast('Некорректный JSON-файл: ' + e.message, 'error');
+  }
+  event.target.value = '';
+}
+
+// ─── Подсветка активного раздела в залипающем меню ───
+function initSettingsNav() {
+  const nav = $('settingsNav');
+  if (!nav) return;
+  const links = $$('#settingsNav a[href^="#"]');
+  const targets = links
+    .map(a => document.querySelector(a.getAttribute('href')))
+    .filter(Boolean);
+  if (!targets.length) return;
+  const OFFSET = 88;
+
+  function update() {
+    const pos = window.scrollY + OFFSET;
+    let current = targets[0].id;
+    for (const section of targets) {
+      if (section.getBoundingClientRect().top + window.scrollY <= pos) current = section.id;
+    }
+    // Последний раздел может быть короче экрана — у самого низа страницы
+    // подсвечиваем его, иначе он не подсвечивается никогда.
+    const atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+    if (atBottom) current = targets[targets.length - 1].id;
+    links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + current));
+  }
+
+  window.addEventListener('scroll', update, { passive: true });
+  window.addEventListener('resize', update);
+  update();
+}
+
+// ─── Инициализация ───
+_rangeDb = setupRange('checkIntervalDb', 'checkIntervalDbLabel');
+_rangeImport = setupRange('checkIntervalImport', 'checkIntervalImportLabel');
+$('speedTestEnabled').addEventListener('change', updateSpeedTestDependants);
+['maxWorkers', 'vlessPerProxyTimeout', 'xrayStartupRetries'].forEach(id => {
+  $(id).addEventListener('input', updatePerfEstimate);
+});
+
+initSettingsNav();
+refreshAll();
 setInterval(() => {
-  api('GET', '/api/xray/status').then(renderXrayStatus).catch(() => {});
+  api('GET', '/api/xray/status').then(s => { if (!s.error) renderXrayStatus(s); });
 }, 5000);

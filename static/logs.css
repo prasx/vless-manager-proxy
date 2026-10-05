@@ -3,7 +3,7 @@
 table { min-width:100%; }
 
 .level-INFO { color:var(--green); }
-.level-WARN { color:#ed8936; }
+.level-WARN { color:var(--orange); }
 .level-ERROR { color:var(--red); }
 
 .toolbar {

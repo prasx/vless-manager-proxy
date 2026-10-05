@@ -3,42 +3,47 @@
 {% block page_title %}Настройки{% endblock %}
 {% block content %}
 
-<nav class="settings-nav" id="settingsNav">
+{# Навигация сгруппирована по смыслу: соединение → маршрутизация → проверка качества →
+   обслуживание. Порядок ссылок совпадает с порядком секций ниже, иначе подсветка
+   активного раздела и переходы по якорям разъезжаются. #}
+<nav class="settings-nav" id="settingsNav" aria-label="Разделы настроек">
   <a href="#sec-xray">Xray</a>
-  <a href="#sec-sniffing">Сниффинг</a>
-  <a href="#sec-filter">Фильтры и страны</a>
-  <a href="#sec-balancer">Балансировщик</a>
-  <a href="#sec-check">Проверка</a>
-  <a href="#sec-speed">Скорость</a>
-  <a href="#sec-perf">Производительность</a>
-  <a href="#sec-geo">GeoSite</a>
   <a href="#sec-network">Сеть</a>
-  <a href="#sec-system">Система</a>
-  <a href="#api-ref">API</a>
+  <a href="#sec-sniffing">Сниффинг</a>
+  <span class="settings-nav-sep" aria-hidden="true"></span>
+  <a href="#sec-filter">Конфиг и фильтры</a>
+  <a href="#sec-geo">Правила GeoSite</a>
+  <a href="#sec-balancer">Балансировщик</a>
+  <span class="settings-nav-sep" aria-hidden="true"></span>
+  <a href="#sec-check">Проверка прокси</a>
+  <a href="#sec-speed">Тест скорости</a>
+  <a href="#sec-perf">Производительность</a>
+  <span class="settings-nav-sep" aria-hidden="true"></span>
+  <a href="#sec-system">Логи и бэкап</a>
 </nav>
 
 <div class="data-error" id="settingsError" role="status" hidden>
   <span id="settingsErrorText"></span>
-  <button class="btn btn-sm" onclick="loadSettings()">повторить</button>
+  <button type="button" class="btn btn-sm" onclick="loadSettings()">повторить</button>
 </div>
 
-<!-- ─── 1. Xray: пути + демон ─── -->
+<!-- ─── Xray: пути и демон ─── -->
 <div class="settings-section" id="sec-xray">
   <div class="settings-cols">
     <div class="settings-col">
       <h2>Xray <span class="settings-h2-sub">пути и адреса</span></h2>
       <div class="form-row">
-        <label>Бинарник Xray</label>
+        <label for="xrayBin">Бинарник Xray</label>
         <input type="text" id="xrayBin" class="input" placeholder="xray или /usr/local/bin/xray" spellcheck="false">
         <span class="field-hint">Исполняемый файл Xray нужен для тестов прокси и применения конфига.</span>
       </div>
       <div class="form-row">
-        <label>Файл конфига</label>
+        <label for="xrayConfigPath">Файл конфига</label>
         <input type="text" id="xrayConfigPath" class="input" placeholder="/etc/xray/config.json" spellcheck="false">
         <span class="field-hint">Куда панель пишет сгенерированный конфиг.</span>
       </div>
       <div class="form-row">
-        <label>Адрес прослушивания</label>
+        <label for="proxyListen">Адрес прослушивания</label>
         <input type="text" id="proxyListen" class="input" placeholder="0.0.0.0 или 127.0.0.1" spellcheck="false">
         <span class="field-hint"><code>0.0.0.0</code>: доступ с LAN, <code>127.0.0.1</code>: только локально.</span>
       </div>
@@ -47,14 +52,14 @@
       <h2>Демон <span class="settings-h2-sub">systemd</span></h2>
       <div id="xrayStatus" class="label label-daemon">// checking...</div>
       <div class="form-actions form-actions-wrap">
-        <button class="btn btn-sm" id="btnXrayStart" onclick="if(confirm('Запустить Xray?'))startXrayDaemon()">Запустить</button>
-        <button class="btn btn-sm btn-danger" id="btnXrayStop" onclick="if(confirm('Остановить Xray?'))stopXrayDaemon()">Остановить</button>
-        <button class="btn btn-sm btn-apply" onclick="if(confirm('Перезапустить Xray?'))restartXray()">Перезапустить</button>
+        <button type="button" class="btn btn-sm" id="btnXrayStart" onclick="startXrayDaemon()">Запустить</button>
+        <button type="button" class="btn btn-sm btn-danger" id="btnXrayStop" onclick="stopXrayDaemon()">Остановить</button>
+        <button type="button" class="btn btn-sm btn-apply" onclick="restartXray()">Перезапустить</button>
       </div>
       <div class="settings-sep">
         <div class="settings-config-row">
           <span class="settings-config-label">Конфиг: <span id="configStatus">…</span></span>
-          <button class="btn btn-sm btn-apply" onclick="if(confirm('Пересобрать конфиг сейчас?'))rebuildConfig()">Пересобрать</button>
+          <button type="button" class="btn btn-sm btn-apply" id="rebuildConfigBtn" onclick="rebuildConfig()">Пересобрать</button>
         </div>
       </div>
       <p class="daemon-hint">Управление через systemd. Смена адреса прослушивания требует перезапуска Xray.</p>
@@ -62,7 +67,18 @@
   </div>
 </div>
 
-<!-- ─── 2. Sniffing ─── -->
+<!-- ─── Сеть ─── -->
+<div class="settings-section tuning-section" id="sec-network">
+  <h2>Сеть</h2>
+  <p class="settings-desc">Прокси для загрузки подписок, если сервер не достаёт источники напрямую (DPI/блокировки).</p>
+  <div class="tuning-item tuning-item-wrap" style="border-bottom:none">
+    <span class="tuning-label">Прокси для импорта</span>
+    <input type="text" id="importProxy" class="input" placeholder="socks5://127.0.0.1:1080 или http://proxy:8080" style="flex:1;min-width:260px" spellcheck="false">
+    <span class="tuning-comment">формат <code>socks5://…</code>/<code>http://…</code>; пусто: напрямую; поддерживается env <code>IMPORT_PROXY</code></span>
+  </div>
+</div>
+
+<!-- ─── Сниффинг ─── -->
 <div class="settings-section tuning-section" id="sec-sniffing">
   <div class="settings-cols">
     <div class="settings-col">
@@ -97,7 +113,7 @@
   </div>
 </div>
 
-<!-- ─── 3. Config + Country filter ─── -->
+<!-- ─── Конфиг и фильтры ─── -->
 <div class="settings-section tuning-section" id="sec-filter">
   <div class="settings-cols">
     <div class="settings-col">
@@ -113,7 +129,7 @@
           <span class="tuning-label">URL проверки</span>
           <div class="input-row">
             <input type="text" id="probeUrl" class="input" placeholder="https://www.gstatic.com/generate_204" spellcheck="false">
-            <button class="btn btn-icon" onclick="resetProbeUrl()" title="Сбросить к значению по умолчанию" aria-label="Сбросить URL пробы">
+            <button type="button" class="btn btn-icon" onclick="resetProbeUrl()" title="Сбросить к значению по умолчанию" aria-label="Сбросить URL пробы">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15.36-6.36L21 8M3 22v-6h6M21 12a9 9 0 0 1-15.36 6.36L3 16"/></svg>
             </button>
           </div>
@@ -136,9 +152,9 @@
     </div>
     <div class="settings-col settings-col-narrow">
       <h2>Фильтр стран</h2>
-      <p class="settings-muted-label">Отмеченные страны исключаются из конфига и подписки</p>
+      <p class="settings-muted-label">Отмеченные страны исключаются из конфига и подписки. Отметки хранятся отдельно от поиска: найденное подмножество не теряет остальные страны.</p>
       <div id="countryVerifyBadge" class="settings-muted-label" style="margin-bottom:6px"></div>
-      <input type="text" id="countryFilterSearch" class="input country-filter-search" placeholder="Поиск по коду страны…" spellcheck="false">
+      <input type="text" id="countryFilterSearch" class="input country-filter-search" placeholder="Поиск по коду страны…" spellcheck="false" data-nodirty aria-label="Поиск по коду страны">
       <div class="country-filter-list">
         <table class="country-filter-table">
           <tbody id="countryFilterBody"></tbody>
@@ -146,15 +162,54 @@
       </div>
       <div class="country-filter-actions">
         <span id="countryFilterCount" class="country-filter-count"></span>
-        <button class="btn btn-sm" onclick="selectAllCountries(true)">Все</button>
-        <button class="btn btn-sm" onclick="selectAllCountries(false)">Снять</button>
-        <button class="btn btn-sm btn-danger" onclick="blockCountry('RU')" style="margin-left:auto">Блок RU</button>
+        <button type="button" class="btn btn-sm" onclick="selectAllCountries(true)">Все</button>
+        <button type="button" class="btn btn-sm" onclick="selectAllCountries(false)">Снять</button>
+        <button type="button" class="btn btn-sm btn-danger" onclick="blockCountry('RU')" style="margin-left:auto">Блок RU</button>
       </div>
     </div>
   </div>
 </div>
 
-<!-- ─── 4. Balancer ─── -->
+<!-- ─── Правила GeoSite ─── -->
+<div class="settings-section tuning-section" id="sec-geo">
+  <h2 class="settings-h2-row">
+    Правила GeoSite
+    <label class="settings-h2-toggle">
+      <input type="checkbox" id="geoEnabled">
+      Использовать GeoIP/GeoSite
+    </label>
+    <button type="button" class="btn btn-sm" style="margin-left:auto" onclick="addGeositeRule()">+ Добавить правило</button>
+  </h2>
+  <details class="tuning-notice geosite-cheatsheet">
+    <summary class="geosite-cheatsheet-summary">Шпаргалка по категориям</summary>
+    <p class="geosite-cheatsheet-note">
+      <a href="https://github.com/runetfreedom/russia-v2ray-rules-dat" target="_blank" rel="noopener">runetfreedom</a> ·
+      <strong>direct</strong>: напрямую, <strong>proxy</strong>: через балансер
+    </p>
+    <table class="geosite-cheatsheet-table">
+      <tr>
+        <td class="geosite-cheatsheet-kind">Стандартные</td>
+        <td><code>google</code> <code>youtube</code> <code>netflix</code> <code>telegram</code> <code>twitter</code> <code>instagram</code> <code>discord</code> <code>meta</code> <code>openai</code> <code>category-ads</code></td>
+      </tr>
+      <tr>
+        <td class="geosite-cheatsheet-kind">Россия</td>
+        <td><code>geosite:ru-blocked</code> → <strong class="geo-proxy">proxy</strong> <code>geosite:ru-blocked-all</code> → <strong class="geo-proxy">proxy</strong><br><code>geosite:ru-available-only-inside</code> → <strong class="geo-direct">direct</strong> <code>geosite:antifilter-download</code> <code>geosite:refilter</code></td>
+      </tr>
+      <tr>
+        <td class="geosite-cheatsheet-kind">Windows</td>
+        <td><code>geosite:win-spy</code> <code>geosite:win-update</code> <code>geosite:win-extra</code></td>
+      </tr>
+      <tr>
+        <td class="geosite-cheatsheet-kind">IP (geoip)</td>
+        <td><code>geoip:ru</code> <code>geoip:private</code>: всегда <strong class="geo-direct">direct</strong><br><span class="geosite-cheatsheet-hint">geoip работает с полем <code>ip</code>, не <code>domain</code></span></td>
+      </tr>
+    </table>
+  </details>
+  <div id="geositeRulesWrap"></div>
+  <p class="settings-muted-label">Правила применяются кнопкой «Сохранить настройки» внизу и пересобирают конфиг автоматически.</p>
+</div>
+
+<!-- ─── Балансировщик ─── -->
 <div class="settings-section tuning-section" id="sec-balancer">
   <h2>Балансировщик</h2>
   <p class="settings-desc">Xray Observatory следит за узлами и распределяет трафик. Обычно хватает значений по умолчанию.</p>
@@ -188,14 +243,11 @@
         <span class="tuning-suffix">сек</span>
         <span class="tuning-comment">закрывать соединение после простоя</span>
       </div>
-      <div class="form-actions">
-        <button class="btn btn-sm" onclick="resetTuning()">Сбросить к заводским</button>
-      </div>
     </div>
   </div>
 </div>
 
-<!-- ─── 5. Proxy Check ─── -->
+<!-- ─── Проверка прокси ─── -->
 <div class="settings-section tuning-section" id="sec-check">
   <h2>Проверка прокси</h2>
   <div class="tuning-notice">
@@ -210,7 +262,7 @@
         <span class="tuning-card-badge badge badge-green">каждые <span id="checkIntervalDbLabel">…</span></span>
       </div>
       <div class="tuning-card-control">
-        <label>Интервал</label>
+        <label for="checkIntervalDb">Интервал</label>
         <input type="range" id="checkIntervalDb" class="tuning-range" min="0.25" max="5" step="0.25" value="0.25">
         <div class="tuning-range-labels"><span>15 мин</span><span>1 ч</span><span>3 ч</span><span>5 ч</span></div>
       </div>
@@ -226,7 +278,7 @@
         <span class="tuning-card-badge badge badge-orange">каждые <span id="checkIntervalImportLabel">…</span></span>
       </div>
       <div class="tuning-card-control">
-        <label>Интервал</label>
+        <label for="checkIntervalImport">Интервал</label>
         <input type="range" id="checkIntervalImport" class="tuning-range" min="1" max="24" step="0.5" value="3">
         <div class="tuning-range-labels"><span>1 ч</span><span>8 ч</span><span>16 ч</span><span>24 ч</span></div>
       </div>
@@ -254,7 +306,7 @@
   </div>
 </div>
 
-<!-- ─── 6. Speed Test ─── -->
+<!-- ─── Тест скорости ─── -->
 <div class="settings-section tuning-section" id="sec-speed">
   <h2>Тест скорости</h2>
   <div id="speedTestBody">
@@ -294,7 +346,7 @@
   </div>
 </div>
 
-<!-- ─── 7. Performance ─── -->
+<!-- ─── Производительность ─── -->
 <div class="settings-section tuning-section" id="sec-perf">
   <h2>Производительность</h2>
   <p class="settings-desc">Параллельность стадий проверки и пинга. Замер скорости всегда последовательный, по одному профилю.</p>
@@ -321,64 +373,14 @@
     <div class="tuning-group">
       <div class="tuning-item">
         <span class="tuning-label">Оценка прогона</span>
-        <span id="perfEstValue" style="font-size:0.9rem;font-weight:600;color:var(--green)">…</span>
+        <span id="perfEstValue" class="perf-est-value">…</span>
         <span class="tuning-comment" id="perfEstDetail"></span>
       </div>
     </div>
   </div>
 </div>
 
-<!-- ─── 8. GeoSite Rules ─── -->
-<div class="settings-section tuning-section" id="sec-geo">
-  <h2 class="settings-h2-row">
-    Правила GeoSite
-    <label class="settings-h2-toggle">
-      <input type="checkbox" id="geoEnabled">
-      Использовать GeoIP/GeoSite
-    </label>
-    <button class="btn btn-sm" style="margin-left:auto" onclick="addGeositeRule()">+ Добавить правило</button>
-  </h2>
-  <details class="tuning-notice geosite-cheatsheet">
-    <summary style="cursor:pointer;font-weight:bold;color:var(--text-primary)">Шпаргалка по категориям</summary>
-    <p style="margin:8px 0 4px;color:var(--text-muted)">
-      <a href="https://github.com/runetfreedom/russia-v2ray-rules-dat" target="_blank" style="color:var(--green)">runetfreedom</a> ·
-      <strong>direct</strong>: напрямую, <strong>proxy</strong>: через балансер
-    </p>
-    <table style="width:100%;border-collapse:collapse;margin-top:6px">
-      <tr style="border-bottom:1px solid var(--border)">
-        <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">Стандартные</td>
-        <td style="padding:3px 6px"><code>google</code> <code>youtube</code> <code>netflix</code> <code>telegram</code> <code>twitter</code> <code>instagram</code> <code>discord</code> <code>meta</code> <code>openai</code> <code>category-ads</code></td>
-      </tr>
-      <tr style="border-bottom:1px solid var(--border)">
-        <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">Россия</td>
-        <td style="padding:3px 6px"><code>geosite:ru-blocked</code> → <strong style="color:var(--orange)">proxy</strong> <code>geosite:ru-blocked-all</code> → <strong style="color:var(--orange)">proxy</strong><br><code>geosite:ru-available-only-inside</code> → <strong style="color:var(--green)">direct</strong> <code>geosite:antifilter-download</code> <code>geosite:refilter</code></td>
-      </tr>
-      <tr style="border-bottom:1px solid var(--border)">
-        <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">Windows</td>
-        <td style="padding:3px 6px"><code>geosite:win-spy</code> <code>geosite:win-update</code> <code>geosite:win-extra</code></td>
-      </tr>
-      <tr>
-        <td style="padding:3px 6px;color:var(--text-muted);vertical-align:top;white-space:nowrap">IP (geoip)</td>
-        <td style="padding:3px 6px"><code>geoip:ru</code> <code>geoip:private</code>: всегда <strong style="color:var(--green)">direct</strong><br><span style="color:var(--text-muted);font-size:0.72rem">geoip работает с полем <code>ip</code>, не <code>domain</code></span></td>
-      </tr>
-    </table>
-  </details>
-  <div id="geositeRulesWrap"></div>
-  <p class="settings-muted-label">Правила применяются кнопкой «Сохранить настройки» внизу и пересобирают конфиг автоматически.</p>
-</div>
-
-<!-- ─── 9. Network ─── -->
-<div class="settings-section tuning-section" id="sec-network">
-  <h2>Сеть</h2>
-  <p class="settings-desc">Прокси для загрузки подписок, если сервер не достаёт источники напрямую (DPI/блокировки).</p>
-  <div class="tuning-item tuning-item-wrap" style="border-bottom:none">
-    <span class="tuning-label">Прокси для импорта</span>
-    <input type="text" id="importProxy" class="input" placeholder="socks5://127.0.0.1:1080 или http://proxy:8080" style="flex:1;min-width:260px" spellcheck="false">
-    <span class="tuning-comment">формат <code>socks5://…</code>/<code>http://…</code>; пусто: напрямую; поддерживается env <code>IMPORT_PROXY</code></span>
-  </div>
-</div>
-
-<!-- ─── 10. Logging + Backup ─── -->
+<!-- ─── Логи и резервная копия ─── -->
 <div class="settings-section tuning-section" id="sec-system">
   <div class="settings-cols">
     <div class="settings-col">
@@ -400,14 +402,15 @@
       <h2>Резервная копия</h2>
       <p class="settings-muted-label">Экспорт/импорт настроек и источников в JSON</p>
       <div class="form-actions">
-        <button class="btn btn-primary btn-sm" onclick="exportBackup()">Экспорт</button>
-        <button class="btn btn-sm" onclick="confirmImportBackup()">Импорт</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="exportBackup()">Экспорт</button>
+        <button type="button" class="btn btn-sm" onclick="confirmImportBackup()">Импорт</button>
         <input type="file" id="backupFile" accept=".json" class="hidden-input" onchange="importBackup(event)">
       </div>
     </div>
   </div>
 </div>
 
+{# Справочник по API — не настройка, поэтому его нет в навигации разделов. #}
 <details class="settings-section api-ref" id="api-ref">
   <summary class="api-ref-summary">API-справочник <span class="api-ref-arrow">▸</span></summary>
   <table class="api-ref-table">
@@ -423,8 +426,8 @@
       <tr><td class="api-method-get">GET</td><td><code>/api/xray/outbounds</code></td><td>Узлы и трафик</td></tr>
       <tr><td class="api-method-get">GET</td><td><code>/api/geosite-rules</code></td><td>Список geosite-правил</td></tr>
       <tr><td class="api-method-post">POST</td><td><code>/api/geosite-rules</code></td><td>Сохранить geosite-правила</td></tr>
-      <tr><td class="api-method-get">GET</td><td><code>/api/logs?limit=&amp;offset=&amp;level=</code></td><td>Логи с пагинацией</td></tr>
-      <tr><td class="api-method-get">GET</td><td><code>/api/subscribe.txt</code></td><td>Подписка: <a href="/api/subscribe.txt" target="_blank" class="api-link">open</a></td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/logs?limit=&amp;offset=&amp;level=</code></td><td>Логи; <code>level</code> принимает список через запятую (<code>WARN,ERROR</code>)</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/subscribe.txt</code></td><td>Подписка: <a href="/api/subscribe.txt" target="_blank" rel="noopener" class="api-link">open</a></td></tr>
       <tr><td class="api-method-post">POST</td><td><code>/api/add</code></td><td>Добавить прокси; тест стартует, если нет другого замера</td></tr>
       <tr><td class="api-method-post">POST</td><td><code>/api/test/&lt;id&gt;</code></td><td>Поэтапный тест одного прокси (409 при занятости)</td></tr>
       <tr><td class="api-method-post">POST</td><td><code>/api/test-all</code></td><td>Поэтапный конвейер всех прокси (409 при занятости)</td></tr>
@@ -449,7 +452,8 @@
 
 <div class="settings-footer">
   <div class="settings-footer-inner">
-    <button class="btn btn-primary" id="saveSettingsBtn" onclick="saveSettings()">Сохранить настройки</button>
+    <button type="button" class="btn btn-primary" id="saveSettingsBtn" onclick="saveSettings()">Сохранить настройки</button>
+    <button type="button" class="btn" id="resetSettingsBtn" onclick="resetSettings()" title="Вернуть тюнинг-параметры к значениям по умолчанию">Сбросить к заводским</button>
     <span class="settings-dirty-indicator" id="dirtyIndicator"></span>
   </div>
   <div id="validationPanel" style="display:none"></div>
