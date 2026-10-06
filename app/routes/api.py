@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, request, jsonify, Response
 
@@ -14,9 +15,11 @@ from ..utils import add_log, moscow_str, now_utc, list_active_connections, close
 from config import SUBSCRIBE_FILE
 from ..vless import parse_vless
 from ..proxy_manager import proxy_manager
-from ..importer import import_from_url, import_from_txt
+from .. import importer
+from ..importer import import_url, import_source, import_sources, save_source_status
 from ..xray_configurator import xray_configurator
 from ..subscribe import update_subscribe_cache
+from urllib.parse import urlparse
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -346,10 +349,11 @@ def api_test_failed():
 
 @api_bp.route("/sources", methods=["GET"])
 def api_sources_list():
-    """GET /api/sources — список источников со счётчиками прокси."""
+    """GET /api/sources — источники со счётчиками и итогом последнего импорта."""
     rows = db_q(
         """SELECT
              s.id, s.name, s.url, s.type, s.last_import, s.created_at,
+             s.last_status, s.last_error,
              (SELECT COUNT(*) FROM proxies p WHERE p.source_id = s.id) AS count,
              (SELECT COUNT(*) FROM proxies p WHERE p.source_id = s.id AND p.status='working') AS working
            FROM sources s
@@ -428,50 +432,108 @@ def api_sources_content_update(sid):
 
 @api_bp.route("/sources/<int:sid>/import", methods=["POST"])
 def api_sources_import_one(sid):
-    """POST /api/sources/<id>/import — только импорт из одного источника.
+    """POST /api/sources/<id>/import — импорт одного источника.
+
+    Всегда 200 со структурированным результатом (`status`, `reason`, счётчики):
+    сам запрос выполнен, а состояние импорта — это данные, а не код ответа.
+    Раньше клиент получал 502 и одну строку текста, по которой нельзя было
+    понять, сеть это, устаревший URL или пустой файл.
 
     Замеры запускаются отдельно (кнопки «Тест всех»/«Перетест failed» или
     фоновая Import+Check): импорт и замер скорости — независимые операции.
     """
-    rows = db_q("SELECT url, type FROM sources WHERE id=?", (sid,))
+    rows = db_q("SELECT id, name, url, type FROM sources WHERE id=?", (sid,))
     if not rows:
         return jsonify(error="Not found"), 404
-    try:
-        if rows[0]["type"] == "txt":
-            added = import_from_txt(sid)
-        else:
-            added = import_from_url(rows[0]["url"], source_id=sid)
-    except RuntimeError as e:
-        add_log("ERROR", f"Import source #{sid} failed: {e}")
-        return jsonify(error=str(e)), 502
-    db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), sid))
-    return jsonify(success=True, added=added)
+    result = import_source(dict(rows[0]))
+    save_source_status(result)
+    return jsonify(success=result["status"] == importer.STATUS_OK, **result)
 
 
 @api_bp.route("/sources/import-all", methods=["POST"])
 def api_sources_import_all():
-    """POST /api/sources/import-all — только импорт из всех источников.
+    """POST /api/sources/import-all — импорт всех источников одним прогоном.
 
-    Замеры запускаются отдельно (см. api_sources_import_one).
+    Прогон ограничен бюджетом времени и предохранителем по сети: при
+    недоступной сети остальные источники помечаются пропущенными, вместо того
+    чтобы последовательно выжидать таймаут каждого. Замеры запускаются отдельно
+    (см. api_sources_import_one).
     """
-    rows = db_q("SELECT id, url, type FROM sources")
-    total = 0
-    errors = []
+    rows = db_q("SELECT id, name, url, type FROM sources ORDER BY id")
+    report = import_sources([dict(r) for r in rows])
+    for result in report["results"]:
+        save_source_status(result)
+    # errors — только сбои (сеть/HTTP/URL). Пустой ответ и пропуск по бюджету —
+    # предупреждения: раньше в errors попадало всё подряд, и внешний потребитель
+    # считал предупреждения ошибками.
+    errors = [
+        f"#{r['id']} {r['name']}: {r['reason']}"
+        for r in report["results"]
+        if r["status"] in (importer.STATUS_NETWORK_ERROR, importer.STATUS_HTTP_ERROR,
+                           importer.STATUS_BAD_URL, importer.STATUS_ERROR)
+    ]
+    warnings = [
+        f"#{r['id']} {r['name']}: {r['reason']}"
+        for r in report["results"]
+        if r["status"] in (importer.STATUS_EMPTY, importer.STATUS_NO_CONTENT,
+                           importer.STATUS_SKIPPED)
+    ]
+    # added/ok/failed уже есть в report — именованными аргументами их не дублируем.
+    return jsonify(success=not report["network_down"], errors=errors,
+                   warnings=warnings, **report)
+
+
+@api_bp.route("/import/diagnose", methods=["GET"])
+def api_import_diagnose():
+    """GET /api/import/diagnose?url=&source_id=&timeout= — пошаговая проверка.
+
+    Без параметров проверяет URL-источники (не больше восьми уникальных хостов,
+    параллельно — иначе при заблокированной сети проверка ждала бы таймаут
+    каждого хоста по очереди). Возвращает шаги DNS → TCP → TLS → HTTP и
+    подсказку, что делать.
+    """
+    url = request.args.get("url", "").strip()
+    sid = request.args.get("source_id", type=int)
+    timeout = max(3, min(15, request.args.get("timeout", type=int, default=6)))
+    # Опечатка в source_id не должна молча превращаться в проверку всех хостов.
+    if "source_id" in request.args and not sid:
+        return jsonify(error="source_id должен быть числом"), 400
+    if not url and sid:
+        rows = db_q("SELECT url, type FROM sources WHERE id=?", (sid,))
+        if not rows:
+            return jsonify(error="Not found"), 404
+        if rows[0]["type"] == "txt":
+            return jsonify(error="TXT-источник не требует сети"), 400
+        url = rows[0]["url"]
+
+    if url:
+        return jsonify(reports=[importer.diagnose_url(url, timeout=timeout)])
+
+    rows = db_q("SELECT DISTINCT url FROM sources WHERE type != 'txt' ORDER BY id LIMIT 20")
+    urls: list[str] = []
+    seen_hosts = set()
     for r in rows:
-        try:
-            if r["type"] == "txt":
-                added = import_from_txt(r["id"])
-            else:
-                added = import_from_url(r["url"], source_id=r["id"])
-            db_q("UPDATE sources SET last_import=? WHERE id=?", (now_utc(), r["id"]))
-            total += added
-        except RuntimeError as e:
-            errors.append(f"#{r['id']}: {e}")
-            add_log("ERROR", f"Import source #{r['id']} failed: {e}")
-    if errors:
-        add_log("WARN", f"Import completed with errors: {'; '.join(errors)}")
-    add_log("INFO", f"Imported {total} proxies from all sources")
-    return jsonify(success=True, added=total, errors=errors)
+        host = urlparse(r["url"] or "").hostname or r["url"]
+        if host in seen_hosts:
+            continue
+        seen_hosts.add(host)
+        urls.append(r["url"])
+        if len(urls) >= 8:
+            break
+
+    reports = []
+    if urls:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(importer.diagnose_url, u, timeout=timeout) for u in urls]
+            for fut in futures:
+                try:
+                    # Диагностика ходит в сеть: без таймаута на будущее
+                    # «залипший» хост держал бы воркер Flask.
+                    reports.append(fut.result(timeout=timeout + 10))
+                except Exception as e:
+                    reports.append({"url": "?", "ok": False, "steps": [],
+                                    "hint": f"{type(e).__name__}: {e}"})
+    return jsonify(reports=reports)
 
 
 # ─── Настройки ───
@@ -934,11 +996,15 @@ def api_geosite_rules_set():
 
 @api_bp.route("/import", methods=["POST"])
 def api_import():
-    """POST /api/import — только импорт прокси по URL подписки
-    (тест запускается отдельной кнопкой/фоновой Import+Check)."""
+    """POST /api/import — импорт прокси по URL подписки (без источника в БД).
+
+    Возвращает тот же структурированный результат, что и импорт источника:
+    `status`, `reason`, счётчики. Ошибка сети больше не превращается в 500 с
+    HTML, как раньше, когда исключение уходило наружу без обработки.
+    """
     url = (request.get_json(silent=True) or {}).get("url", "")
-    added = import_from_url(url)
-    return jsonify(success=True, added=added)
+    result = import_url(url)
+    return jsonify(success=result["status"] == importer.STATUS_OK, **result)
 
 
 # ─── Active connections ───

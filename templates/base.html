@@ -21,6 +21,9 @@
       <h1>{% block page_title %}Dashboard{% endblock %}</h1>
     </div>
 
+    {# mainNav — единая навигация: один и тот же список разделов на каждой
+       странице. Действия страниц (тесты, импорт, обслуживание Xray) живут в
+       тулбарах самих страниц: в меню они ломали и вид, и смысл навигации. #}
     <nav class="nav" id="mainNav">
       {% set here = request.path %}
       {% set items = [('/', 'Дашборд'), ('/sources', 'Источники'), ('/settings', 'Настройки'), ('/logs', 'Логи')] %}
@@ -28,16 +31,17 @@
       <a href="{{ href }}" class="btn"{% if here == href %} aria-current="page"{% endif %}>{{ title }}</a>
       {% endfor %}
       <a href="/api/subscribe.txt" class="btn" target="_blank" rel="noopener">Подписка</a>
-      {% block nav_extra %}{% endblock %}
+      <button class="btn" type="button" onclick="toggleConnModal()">Соединения</button>
       <button class="btn btn-theme" onclick="toggleTheme()" aria-label="Переключить тему" title="Переключить тему">&#9681;</button>
     </nav>
 
     <div class="header-actions">
-      <!-- Уведомления: колокольчик и попап 9:16, внизу ссылка на логи целиком -->
+      <!-- Уведомления: колокольчик и попап 9:16 только с предупреждениями (WARN),
+           внизу ссылка на логи целиком -->
       <div class="notif">
         <button type="button" class="btn btn-bell" id="notifBell"
-                aria-label="Уведомления" aria-haspopup="dialog" aria-expanded="false"
-                aria-controls="notifPop" title="Уведомления">
+                aria-label="Предупреждения" aria-haspopup="dialog" aria-expanded="false"
+                aria-controls="notifPop" title="Предупреждения">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
@@ -46,13 +50,10 @@
           <span class="notif-badge" id="notifBadge" hidden></span>
         </button>
 
-        <div class="notif-pop" id="notifPop" role="dialog" aria-label="Уведомления" hidden>
+        <div class="notif-pop" id="notifPop" role="dialog" aria-label="Предупреждения" hidden>
           <div class="notif-head">
-            <span class="notif-title">// уведомления</span>
-            <div class="notif-tabs">
-              <button type="button" class="notif-tab active" data-notif-filter="important">важные</button>
-              <button type="button" class="notif-tab" data-notif-filter="all">все</button>
-            </div>
+            <span class="notif-title">// предупреждения</span>
+            <span class="notif-count" id="notifCount"></span>
           </div>
           <div class="notif-list" id="notifList"></div>
           <div class="notif-foot">
@@ -79,9 +80,29 @@
 
 </div>
 
+<!-- Модалка «Соединения»: раздел единой навигации, поэтому разметка общая для
+     всех страниц, а не только для дашборда. Логика — static/connections.js -->
+<div class="modal-overlay" id="connModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>Активные соединения</h3>
+      <button type="button" class="modal-close" onclick="toggleConnModal()" aria-label="Закрыть">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="text" class="conn-filter" id="connFilter" placeholder="Фильтр по IP…" oninput="filterConnTable()" spellcheck="false">
+      <div id="connPerIP" class="conn-perip"></div>
+      <div id="connTableWrap"></div>
+    </div>
+    <div class="conn-flush">
+      <button type="button" class="btn btn-sm btn-danger" onclick="flushConns()">Закрыть все соединения</button>
+    </div>
+  </div>
+</div>
+
 <script src="{{ url_for('static', filename='api.js') }}"></script>
 <script src="{{ url_for('static', filename='theme.js') }}"></script>
 <script src="{{ url_for('static', filename='toast.js') }}"></script>
+<script src="{{ url_for('static', filename='connections.js') }}"></script>
 <script src="{{ url_for('static', filename='notifications.js') }}"></script>
 {% block extra_js %}{% endblock %}
 </body>

@@ -438,9 +438,10 @@
       <tr><td class="api-method-post">POST</td><td><code>/api/proxies/batch-test</code></td><td>Поэтапный конвейер выбранных</td></tr>
       <tr><td class="api-method-post">POST</td><td><code>/api/sources</code></td><td>Добавить источник</td></tr>
       <tr><td class="api-method-delete">DELETE</td><td><code>/api/sources/&lt;id&gt;</code></td><td>Удалить источник</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/sources/&lt;id&gt;/import</code></td><td>Только импорт (без авто-теста)</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/sources/import-all</code></td><td>Только импорт всех источников</td></tr>
-      <tr><td class="api-method-post">POST</td><td><code>/api/import</code></td><td>Импорт по URL</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/sources/&lt;id&gt;/import</code></td><td>Импорт источника; 200 со статусом и причиной</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/sources/import-all</code></td><td>Импорт всех: бюджет времени, предохранитель по сети, построчный отчёт</td></tr>
+      <tr><td class="api-method-get">GET</td><td><code>/api/import/diagnose?source_id=</code></td><td>Проверка связи: DNS → TCP → TLS → HTTP + подсказка</td></tr>
+      <tr><td class="api-method-post">POST</td><td><code>/api/import</code></td><td>Импорт по URL без источника в БД</td></tr>
       <tr><td class="api-method-post">POST</td><td><code>/api/settings</code></td><td>Сохранить настройки</td></tr>
       <tr><td class="api-method-get">GET</td><td><code>/api/backup</code></td><td>Экспорт настроек + источников</td></tr>
       <tr><td class="api-method-post">POST</td><td><code>/api/backup/import</code></td><td>Импорт из JSON</td></tr>

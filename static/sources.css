@@ -213,3 +213,122 @@
   .card { flex-direction:column; align-items:stretch; }
   .card .c-actions { justify-content:flex-end; }
 }
+
+/* ─── Состояние импорта и отчёт ───
+   Причины сбоя показываются рядом с источником: «импорт не удался» без
+   причины — ровно та проблема, из-за которой состояние импорта было
+   непонятным. */
+
+.src-summary .summary-bad { color:var(--red); border-color:var(--red); }
+
+.c-status {
+  display:inline-block;
+  font-size:0.62rem;
+  padding:1px 6px;
+  border-radius:3px;
+  border:1px solid var(--border);
+  color:var(--text-muted);
+  margin-left:6px;
+  vertical-align:middle;
+  white-space:nowrap;
+}
+.c-status.st-ok { color:var(--green); border-color:var(--green); }
+.c-status.st-warn { color:var(--orange); border-color:var(--orange); }
+.c-status.st-bad { color:var(--red); border-color:var(--red); }
+.c-status.st-muted { color:var(--text-muted); border-color:var(--border); }
+
+.card .c-error {
+  font-size:0.68rem;
+  color:var(--red);
+  margin-top:3px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.import-report {
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:12px 14px;
+  margin-bottom:16px;
+}
+.ir-head {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+  font-size:0.76rem;
+  color:var(--text-secondary);
+  margin-bottom:8px;
+}
+.ir-head b { color:var(--text-primary); }
+.ir-head button { margin-left:auto; }
+.ir-alert {
+  border:1px solid var(--orange);
+  border-radius:4px;
+  background:rgba(251,146,60,0.08);
+  color:var(--orange);
+  font-size:0.72rem;
+  line-height:1.5;
+  padding:8px 10px;
+  margin-bottom:8px;
+}
+.ir-list {
+  list-style:none;
+  margin:0;
+  padding:0;
+  display:flex;
+  flex-direction:column;
+}
+.ir-item {
+  display:flex;
+  align-items:baseline;
+  gap:8px;
+  flex-wrap:wrap;
+  padding:4px 0;
+  border-bottom:1px solid var(--border);
+  font-size:0.72rem;
+}
+.ir-item:last-child { border-bottom:none; }
+.ir-name {
+  color:var(--text-primary);
+  min-width:120px;
+  flex:0 1 220px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.ir-status {
+  font-size:0.66rem;
+  padding:1px 6px;
+  border-radius:3px;
+  border:1px solid var(--border);
+  color:var(--text-muted);
+  white-space:nowrap;
+}
+.ir-item.st-ok .ir-status { color:var(--green); border-color:var(--green); }
+.ir-item.st-warn .ir-status { color:var(--orange); border-color:var(--orange); }
+.ir-item.st-bad .ir-status { color:var(--red); border-color:var(--red); }
+.ir-detail {
+  color:var(--text-muted);
+  flex:1 1 260px;
+  min-width:0;
+  word-break:break-word;
+}
+.dg-steps {
+  display:flex;
+  gap:4px;
+  flex-wrap:wrap;
+}
+.dg-step {
+  font-size:0.64rem;
+  padding:1px 5px;
+  border-radius:3px;
+  border:1px solid var(--border);
+  color:var(--text-muted);
+  white-space:nowrap;
+}
+.dg-step.ok { color:var(--green); border-color:var(--green); }
+.dg-step.bad { color:var(--red); border-color:var(--red); }
+

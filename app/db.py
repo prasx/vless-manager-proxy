@@ -66,6 +66,8 @@ _SCHEMA = {
         ("content", "TEXT"),
         ("last_import", "TIMESTAMP"),
         ("created_at", "TIMESTAMP"),
+        ("last_status", "TEXT"),
+        ("last_error", "TEXT"),
     ],
     "logs": [
         ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),

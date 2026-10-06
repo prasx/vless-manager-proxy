@@ -1,14 +1,16 @@
 /* Колокольчик уведомлений.
 
    Попап — прямоугольник 9:16 (пропорция задана в style.css), внизу ссылка на
-   логи целиком. Внутри — последние записи журнала: по умолчанию только
-   WARN/ERROR, переключателем можно показать все.
+   логи целиком. Внутри — только WARN: это записи о том, что реально пошло не
+   так (источник не импортировался, узел отвалился, прогон не прошёл). Полный
+   журнал со всеми уровнями остаётся на странице логов, куда ведёт ссылка внизу.
 
    Непрочитанное считаем по id последней прочитанной записи в localStorage,
    поэтому счётчик переживает перезагрузку страницы и общий для всех вкладок
    панели. Открытие попапа помечает показанное прочитанным. */
 (function () {
   const SEEN_KEY = 'vless.notif.seen';
+  const LEVEL = 'WARN';         // единственный уровень, попадающий в уведомления
   const CLOSED_POLL_MS = 15000; // свёрнутый колокольчик: только за счётчиком
   const OPEN_POLL_MS = 4000;    // открытый попап: держим список свежим
   const PANEL_LIMIT = 40;
@@ -19,12 +21,8 @@
   if (!bell || !pop) return;
   const badge = $('notifBadge');
   const list = $('notifList');
-  const tabs = $$('#notifPop .notif-tab');
+  const count = $('notifCount');
 
-  const LEVEL_LABEL = { ERROR: 'ERR', WARN: 'WRN', INFO: 'INF', DEBUG: 'DBG' };
-  const LEVEL_CLASS = { ERROR: 'error', WARN: 'warn', INFO: 'info', DEBUG: 'debug' };
-
-  let mode = 'important';
   let isOpen = false;
   let loading = false;
   let timer = null;
@@ -56,27 +54,22 @@
     badge.textContent = unread > BADGE_MAX ? BADGE_MAX + '+' : String(unread);
     badge.hidden = false;
     bell.classList.add('has-unread');
-    bell.title = `Уведомления: ${unread} новых`;
+    bell.title = `Предупреждения: ${unread} новых`;
   }
 
   function hideBadge() {
     badge.hidden = true;
     bell.classList.remove('has-unread');
-    bell.title = 'Уведомления';
+    bell.title = 'Предупреждения';
   }
 
   // ─── Загрузка ───
-
-  async function fetchRows(forMode) {
-    const level = forMode === 'important' ? '&level=WARN,ERROR' : '';
-    return api('GET', `/api/logs?limit=${PANEL_LIMIT}${level}`);
-  }
 
   async function tick() {
     if (loading) return;
     loading = true;
     try {
-      const data = await fetchRows(isOpen ? mode : 'important');
+      const data = await api('GET', `/api/logs?limit=${PANEL_LIMIT}&level=${LEVEL}`);
       if (data.error) {
         if (isOpen && !list.childElementCount) renderError(data.error);
         return;
@@ -104,11 +97,17 @@
 
   function render(rows) {
     list.innerHTML = '';
+    setCount(rows.length);
     if (!rows.length) {
-      renderNotice(mode === 'important' ? 'важных событий нет' : 'записей нет');
+      renderNotice('предупреждений нет');
       return;
     }
     for (const row of rows) list.appendChild(itemEl(row));
+  }
+
+  function setCount(n) {
+    if (!count) return;
+    count.textContent = n ? `${n}` : '';
   }
 
   function renderNotice(text) {
@@ -120,6 +119,7 @@
 
   function renderError(msg) {
     list.innerHTML = '';
+    setCount(0);
     const box = document.createElement('div');
     box.className = 'notif-empty notif-empty-error';
     box.textContent = 'не удалось загрузить: ' + msg;
@@ -144,8 +144,8 @@
     top.className = 'notif-item-top';
 
     const lvl = document.createElement('span');
-    lvl.className = 'notif-lvl lvl-' + (LEVEL_CLASS[row.level] || 'info');
-    lvl.textContent = LEVEL_LABEL[row.level] || row.level || '—';
+    lvl.className = 'notif-lvl lvl-warn';
+    lvl.textContent = LEVEL;
     top.appendChild(lvl);
 
     const time = document.createElement('span');
@@ -213,17 +213,6 @@
   }
 
   bell.addEventListener('click', () => (isOpen ? closePop() : openPop()));
-
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      const next = tab.dataset.notifFilter;
-      if (next === mode) return;
-      mode = next;
-      tabs.forEach(t => t.classList.toggle('active', t === tab));
-      list.innerHTML = '';
-      tick();
-    });
-  });
 
   // ─── Опрос ───
 

@@ -8,12 +8,15 @@
 
 <div class="toolbar" style="margin-bottom:16px">
   <button class="btn btn-primary" id="btnImportAll" onclick="importAll()">Импорт всех</button>
+  <button class="btn" id="btnCheckConnect" onclick="checkConnectivity()" title="Проверить доступность источников и показать причину сбоя">Проверить связь</button>
   <label class="chk-safe" title="Пропускать прокси без TLS/Reality-шифрования">
     <input type="checkbox" id="chkSafeOnly" onchange="toggleSafeOnly()">
     <span>Безопасный импорт (TLS/Reality)</span>
   </label>
   <span class="src-summary" id="srcSummary"></span>
 </div>
+
+<div class="import-report" id="importReport" role="status" hidden></div>
 
 <div class="section-label">Добавить прокси вручную</div>
 <div class="add-form" style="margin-bottom:24px;">

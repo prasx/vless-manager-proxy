@@ -35,7 +35,8 @@ from pathlib import Path
 
 from .db import db_q, Settings
 from .utils import add_log, now_utc, moscow_str, set_correlation_id
-from .importer import import_from_url, import_from_txt
+from . import importer
+from .importer import import_sources, save_source_status
 from .vless import parse_vless, stream_settings
 
 # Сколько проб делает отдельный замер пинга (в latency идёт медиана)
@@ -683,22 +684,34 @@ class ProxyManager:
             # ── Стадия 0 (опционально): импорт источников ──
             if import_srcs:
                 self._begin_stage("import", "Импорт источников", len(import_srcs))
+                advanced: set = set()
+
+                def on_import_result(res):
+                    """Прогресс стадии: один опрошенный источник — один шаг."""
+                    advanced.add(res.get("id"))
+                    label = res.get("name") or f"#{res.get('id')}"
+                    self._stage_advance(
+                        res.get("status") in importer.REACHED_STATUSES,
+                        current_text=f"источник: {label} ({res.get('status_label') or res['status']})",
+                    )
+
                 try:
-                    for src in import_srcs:
-                        if self._cancel.is_set():
-                            break
-                        src_label = src.get("name") or src.get("url") or f"#{src['id']}"
-                        self._set_current(f"источник: {src_label}")
-                        try:
-                            if src.get("type") == "txt":
-                                import_from_txt(src["id"])
-                            else:
-                                import_from_url(src.get("url", ""), source_id=src["id"])
-                            db_q("UPDATE sources SET last_import=? WHERE id=?",
-                                 (now_utc(), src["id"]))
-                        except RuntimeError as e:
-                            add_log("ERROR", f"Import source #{src['id']} failed: {e}")
-                        self._stage_advance(True, current_text=f"источник: {src_label}")
+                    report = import_sources(
+                        import_srcs,
+                        on_result=on_import_result,
+                        should_stop=self._cancel.is_set,
+                    )
+                    for res in report["results"]:
+                        save_source_status(res)
+                        if res.get("id") not in advanced:
+                            # Пропущенные предохранителем или бюджетом — тоже шаг
+                            # стадии: без этого прогресс стоит и закрывается скачком.
+                            label = res.get("name") or f"#{res.get('id')}"
+                            self._stage_advance(
+                                False,
+                                current_text=f"источник: {label} (пропущен)",
+                            )
+                    self._set_current("")
                 finally:
                     self._end_stage()
                 if self._cancel.is_set():

@@ -46,12 +46,18 @@ def parse_vless(link: str) -> Optional[dict]:
     """Разбирает vless:// строку в словарь с параметрами.
 
     Возвращает None, если ссылка невалидна или UUID не проходит проверку.
+    Битый порт (`vless://uuid@host:99999`) — тоже невалидная ссылка: urlparse
+    бросает на нём ValueError, и без перехвата одна строка в подписке роняла
+    импорт целого источника пятисоткой.
     """
     link = link.strip()
     if not link.lower().startswith("vless://"):
         return None
-    parsed = urlparse(link.replace("vless://", "https://", 1))
-    uid, server, port = parsed.username, parsed.hostname, parsed.port
+    try:
+        parsed = urlparse(link.replace("vless://", "https://", 1))
+        uid, server, port = parsed.username, parsed.hostname, parsed.port
+    except ValueError:
+        return None
     if not uid or not server or port is None:
         return None
     uid = unquote(str(uid)).split("#")[0].split("&")[0].strip()
