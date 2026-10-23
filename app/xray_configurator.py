@@ -257,6 +257,28 @@ class XrayConfigurator:
             rules.extend(XrayConfigurator._geosite_rules(has_balancer=has_balancer))
         return rules
 
+    def _proxy_link_rows(self, max_outbounds: int = 0):
+        """Кандидаты для outbound'ов с учётом blocked_countries и порога скорости.
+
+        Порог скорости отсекает только ИЗМЕРЕННО медленные профили. Профили
+        без замера (speed_kbps=0) остаются кандидатами: иначе, пока speed-стадия
+        не отработала, конфиг остаётся пустым и прокси не работает вовсе."""
+        blocked = Settings.blocked_countries()
+        codes = [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
+        country_sql = f"AND country NOT IN ({','.join(['?'] * len(codes))})" if codes else ""
+        min_kbps = Settings.min_speed_kbps()
+        speed_clause = (
+            f"AND (speed_kbps >= {min_kbps} OR speed_kbps = 0)" if min_kbps > 0 else ""
+        )
+        base = (
+            "SELECT link FROM proxies WHERE status='working' "
+            f"AND latency_vless > 0 {country_sql} {speed_clause} "
+            "ORDER BY speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC"
+        )
+        if max_outbounds > 0:
+            return db_q(base + " LIMIT ?", codes + [max_outbounds])
+        return db_q(base, codes)
+
     def generate_full_config(self, max_outbounds: int = 0, skip_geosite: bool = False) -> dict:
         """Генерирует полный конфиг с observatory + balancer.
 
@@ -264,27 +286,8 @@ class XrayConfigurator:
         Учитывает фильтр blocked_countries.
         skip_geosite=True — временно исключить geosite-правила (для recovery).
         """
-        blocked = Settings.blocked_countries()
-        codes = [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
-        if codes:
-            placeholders = ",".join("?" * len(codes))
-            country_sql = f"AND country NOT IN ({placeholders})"
-        else:
-            codes = []
-            country_sql = ""
-        min_kbps = Settings.min_speed_kbps()
-        speed_sql = f"AND speed_kbps >= {min_kbps}" if min_kbps > 0 else ""
+        rows = self._proxy_link_rows(max_outbounds)
         proxy_obs = []
-        if max_outbounds > 0:
-            rows = db_q(
-                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} {speed_sql} ORDER BY speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC LIMIT ?",
-                codes + [max_outbounds],
-            )
-        else:
-            rows = db_q(
-                f"SELECT link FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} {speed_sql}",
-                codes,
-            )
         for r in rows:
             parsed = parse_vless(r["link"])
             if parsed:

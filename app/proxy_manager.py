@@ -43,10 +43,12 @@ from .vless import parse_vless, stream_settings
 PING_SAMPLES = 3
 
 # Fallback-файлы для замера скорости (когда основной speed_test_url недоступен).
-# Только достаточно крупные файлы: маленькие файлы дают недостоверный замер.
+# Только достаточно крупные файлы и глобально доступные CDN-хосты:
+# российские зеркала (selectel/tele2) недоступны с иностранных exit-нод.
 _SPEED_FALLBACK_URLS = (
-    "http://speedtest.selectel.ru/10MB",
-    "http://speedtest.tele2.net/10MB",
+    "https://speed.cloudflare.com/__down?bytes=10000000",
+    "http://cachefly.cachefly.net/100mb.test",
+    "https://proof.ovh.net/files/100Mb.dat",
 )
 
 
@@ -637,6 +639,7 @@ class ProxyManager:
         """Стадия «Замер скорости» — СТРОГО по одному профилю за раз.
         Параллельные замеры скорости дают недостоверные данные (делят канал)."""
         window_sec = Settings.speed_test_duration_sec()
+        measured = 0
         for r in speed_rows:
             if self._cancel.is_set():
                 add_log("INFO", "Cancel requested, stopping speed stage")
@@ -654,6 +657,7 @@ class ProxyManager:
                 self._set_current(f"#{r['id']} {host} — замер {window_sec}с…")
                 kbps = ProxyManager._measure_kbps(http_port, window_sec)
                 if kbps:
+                    measured += 1
                     db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (kbps, r["id"]))
                     add_log("INFO", f"Speed #{r['id']} ({host}): {kbps}kbps / {window_sec}s window")
                 else:
@@ -662,6 +666,13 @@ class ProxyManager:
                                     current_text=f"#{r['id']} {host}: {kbps}kbps" if kbps else f"#{r['id']} {host}: 0 kbps")
             finally:
                 ProxyManager._stop_xray(proc, tmp_path)
+        if speed_rows and measured == 0:
+            add_log(
+                "WARN",
+                f"Speed stage: 0/{len(speed_rows)} measurements succeeded — "
+                f"проверьте speed_test_url ({Settings.get('speed_test_url')}) "
+                f"и доступность CDN с exit-нод",
+            )
 
     # ─── Конвейер прогона ───
 
@@ -981,19 +992,11 @@ class ProxyManager:
                     continue
 
                 max_active = Settings.max_active_proxies()
-                blocked = Settings.blocked_countries()
-                codes = [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
-                if codes:
-                    placeholders = ",".join("?" * len(codes))
-                    working_count = db_q(
-                        f"SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0 AND country NOT IN ({placeholders})",
-                        codes,
-                    )[0]["c"]
-                else:
-                    working_count = db_q(
-                        "SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0"
-                    )[0]["c"]
-                expected = min(working_count, max_active)
+                # Считаем ожидаемые ноды тем же селектором, что и генератор
+                # конфига (учитывает blocked_countries, порог скорости и
+                # fallback при отсутствии замеров) — иначе ложный рассинхрон
+                # и пересборка конфига каждые 30 секунд.
+                expected = len(xray_configurator._proxy_link_rows(max_active))
 
                 active = xray_configurator._active_node_count()
                 if active < expected:

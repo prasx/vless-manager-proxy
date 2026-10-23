@@ -698,15 +698,8 @@ def api_xray_status():
     running = api_ok or (d["systemd_active"] and d["ports"].get("1080"))
     active = xray_configurator.list_active_outbounds() if api_ok else []
     nodes = [t for t in active if t.startswith("node")]
-    blocked = Settings.blocked_countries()
-    codes = [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
-    country_sql = f"AND country NOT IN ({','.join(['?']*len(codes))})" if codes else ""
-    min_kbps = Settings.min_speed_kbps()
-    speed_sql = f"AND speed_kbps >= {min_kbps}" if min_kbps > 0 else ""
-    candidate = db_q(
-        f"SELECT COUNT(*) c FROM proxies WHERE status='working' AND latency_vless > 0 {country_sql} {speed_sql}",
-        codes,
-    )[0]["c"]
+    # Тем же селектором, что и генератор конфига (учёт blocked/скорости).
+    candidate = len(xray_configurator._proxy_link_rows(0))
     return jsonify(
         running=bool(running),
         api_accessible=api_ok,

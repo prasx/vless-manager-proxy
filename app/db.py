@@ -106,7 +106,7 @@ SETTING_DEFAULTS = {
     "observatory_probe_interval": "10s",
     "speed_test_enabled": "true",
     "speed_test_max": "15",
-    "speed_test_url": "http://speedtest.selectel.ru/10MB",
+    "speed_test_url": "https://speed.cloudflare.com/__down?bytes=10000000",
     "speed_test_min_sec": "10",
     "apply_after_test": "true",
     "balancer_strategy": "random",
@@ -163,6 +163,15 @@ _MIGRATIONS = [
         "sql": [
             "DELETE FROM settings WHERE key IN ('traffic_collect_interval', 'traffic_history_hours')",
             "DROP TABLE IF EXISTS traffic_history",
+        ],
+    },
+    {
+        "version": 4,
+        "description": "speed_test_url: недоступные российские зеркала → глобальный CDN",
+        "sql": [
+            "UPDATE settings SET value='https://speed.cloudflare.com/__down?bytes=10000000' "
+            "WHERE key='speed_test_url' AND value IN "
+            "('http://speedtest.selectel.ru/10MB', 'http://speedtest.tele2.net/10MB')",
         ],
     },
 ]
