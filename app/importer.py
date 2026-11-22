@@ -66,9 +66,6 @@ NETWORK_BREAK_AFTER = 2   # столько сетевых сбоев подря�
 # (ручной «Импорт всех» и стадия конвейера) иначе удаляли бы свежие строки
 # друг друга, потому что у каждого свой снимок ссылок источника.
 _STORE_LOCK = threading.Lock()
-# Обогащение стран — один прогон за раз, чтобы импорт десятка источников
-# не поднимал десяток одинаковых потоков.
-_ENRICH_LOCK = threading.Lock()
 
 
 def status_label(status: str) -> str:
@@ -359,21 +356,17 @@ def _schedule_enrichment() -> None:
 
     Вызывается из parse_and_store, поэтому работает и для одиночного импорта
     кнопкой, и для TXT-источников, и для прогона по всем источникам.
+    Работает в фоне и не держит блокировку замеров.
+
+    Отдельный _ENRICH_LOCK больше не нужен: сам планировщик в utils не даёт
+    запустить второй проход одновременно.
     """
-    if not _ENRICH_LOCK.acquire(blocking=False):
-        return
+    try:
+        from .utils import schedule_country_enrichment
 
-    def run():
-        try:
-            from .utils import enrich_all_unknown_countries
-
-            enrich_all_unknown_countries()
-        except Exception as e:
-            add_log("DEBUG", f"Country enrichment failed: {e}")
-        finally:
-            _ENRICH_LOCK.release()
-
-    threading.Thread(target=run, daemon=True).start()
+        schedule_country_enrichment()
+    except Exception as e:
+        add_log("DEBUG", f"Country enrichment scheduling failed: {e}")
 
 
 def parse_and_store(content: str, *, source_id=None, label: str = "") -> dict:

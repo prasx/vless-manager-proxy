@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 import traceback
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -9,9 +10,6 @@ from typing import Optional
 
 from .db import _get_conn, Settings
 from config import MOSCOW_TZ, UTC_TZ
-
-_geo_cache: dict[str, str] = {}
-_geo_cache_lock = threading.Lock()
 
 _current_cid: str = ""
 _cid_lock = threading.Lock()
@@ -121,34 +119,123 @@ def trim_logs_startup() -> None:
 
 
 # ─── Определение страны ───
+#
+# Раньше страна определялась для ВСЕХ профилей последовательно, по одному
+# запросу на прокси, прямо внутри эксклюзивного прогона: 900 адресов = ~4 минуты,
+# в которые пинг и замер скорости просто стояли. Теперь:
+#   * ip-api вызывается батчами (до 100 адресов за запрос);
+#   * запросы идут в фоновом потоке и не держат блокировку замеров;
+#   * результат кешируется по IP, неудачи — с отрицательным кешем, чтобы
+#     мёртвый хост не опрашивался в каждом прогоне;
+#   * повторно проверяются только ещё не верифицированные профили.
+
+_GEO_OK_TTL = 30 * 24 * 3600      # успешный ответ живёт месяц
+_GEO_NEG_TTL = 6 * 3600           # неудачу не повторяем 6 часов
+_GEO_HOST_TTL = 6 * 3600          # DNS-резолв хоста
+_GEO_BATCH = 100
+_GEO_BATCH_MIN_INTERVAL = 4.1     # не чаще 15 батч-запросов в минуту
+
+_geo_ip_cache: dict[str, tuple[float, str]] = {}
+_geo_neg_cache: dict[str, float] = {}
+_geo_host_cache: dict[str, tuple[float, str]] = {}
+_geo_lock = threading.Lock()
+_geo_last_request = 0.0
+
+# Один прогон обогащения за раз; повторный вызов во время работы игнорируется.
+_enrich_lock = threading.Lock()
+
+
+def _geo_cached(cache: dict, key: str, ttl: float):
+    with _geo_lock:
+        item = cache.get(key)
+    if item and (time.time() - item[0]) < ttl:
+        return item[1]
+    return None
+
+
+def _geo_store_ip(ip: str, cc: str) -> None:
+    with _geo_lock:
+        _geo_ip_cache[ip] = (time.time(), cc)
+        _geo_neg_cache.pop(ip, None)
+
+
+def _geo_mark_negative(ip: str) -> None:
+    with _geo_lock:
+        _geo_neg_cache[ip] = time.time()
+
+
+def resolve_host(host: str) -> str:
+    """Резолвит hostname в IP с кешированием (пустая строка — не резолвится)."""
+    cached = _geo_cached(_geo_host_cache, host, _GEO_HOST_TTL)
+    if cached is not None:
+        return cached
+    try:
+        import socket
+
+        ip = socket.gethostbyname(host)
+    except Exception:
+        ip = ""
+    with _geo_lock:
+        _geo_host_cache[host] = (time.time(), ip)
+    if not ip:
+        _geo_mark_negative(host)
+    return ip
+
+
+def _ipapi_batch(ips: list[str]) -> dict[str, str]:
+    """POST /batch в ip-api.com: до 100 адресов за один запрос."""
+    global _geo_last_request
+    if not ips:
+        return {}
+    wait = _GEO_BATCH_MIN_INTERVAL - (time.time() - _geo_last_request)
+    if wait > 0:
+        time.sleep(wait)
+    from urllib.request import Request, urlopen
+
+    payload = json.dumps(
+        [{"query": ip, "fields": "status,countryCode,query"} for ip in ips]
+    ).encode()
+    req = Request(
+        "http://ip-api.com/batch",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    _geo_last_request = time.time()
+    try:
+        with urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode())
+    except Exception as e:  # noqa: BLE001
+        add_log("DEBUG", f"ip-api batch failed: {e}")
+        return {}
+    out: dict[str, str] = {}
+    if isinstance(data, list):
+        for item in data:
+            query = item.get("query") or ""
+            if item.get("status") == "success" and item.get("countryCode"):
+                out[query] = item["countryCode"]
+    return out
 
 
 def detect_country(host):
     """Определяет страну по IP хоста через ip-api.com (с кешированием)."""
-    with _geo_cache_lock:
-        if host in _geo_cache:
-            return _geo_cache[host]
-    try:
-        import socket
-        import urllib.request
-
-        ip = socket.gethostbyname(host)
-        url = f"http://ip-api.com/json/{ip}?fields=countryCode"
-        with urllib.request.urlopen(url, timeout=3) as r:
-            data = json.loads(r.read().decode())
-        cc = data.get("countryCode", "")
-        if cc:
-            with _geo_cache_lock:
-                _geo_cache[host] = cc
-            return cc
-    except Exception:
-        pass
-    add_log("WARN", f"Failed to detect country for {host}")
-    return ""
+    ip = resolve_host(host)
+    if not ip:
+        return ""
+    cached = _geo_cached(_geo_ip_cache, ip, _GEO_OK_TTL)
+    if cached is not None:
+        return cached
+    cc = _ipapi_batch([ip]).get(ip, "")
+    if cc:
+        _geo_store_ip(ip, cc)
+    else:
+        _geo_mark_negative(ip)
+        add_log("WARN", f"Failed to detect country for {host}")
+    return cc
 
 
 def enrich_country(pid, host):
-    """Обновляет страну для прокси по его ID через ip-api, проставляет флаг верификации."""
+    """Обновляет страну одного профиля (совместимость; массовый путь — ниже)."""
     from .db import db_q
 
     cc = detect_country(host)
@@ -162,7 +249,128 @@ def enrich_country(pid, host):
     return True
 
 
-_enrich_lock = threading.Lock()
+def _geo_targets(limit: int | None = None) -> list[dict]:
+    """Профили, для которых страна ещё не верифицирована."""
+    from .db import db_q
+
+    sql = (
+        "SELECT id, host, country, COALESCE(country_verified, 0) AS verified "
+        "FROM proxies WHERE COALESCE(country_verified, 0) = 0 ORDER BY id ASC"
+    )
+    if limit:
+        sql += " LIMIT ?"
+        return [dict(r) for r in db_q(sql, (limit,))]
+    return [dict(r) for r in db_q(sql)]
+
+
+def enrich_countries_once(limit: int | None = None) -> int:
+    """Один проход обогащения: батчи запросов + один батч записи в БД.
+
+    Возвращает число исправленных стран. Рассчитан на фоновый поток:
+    блокировку замеров не держит и не требует.
+    """
+    rows = _geo_targets(limit)
+    if not rows:
+        return 0
+
+    # host → ip: уникальные хосты резолвятся параллельно (на 1500 профилей
+    # последовательный gethostbyname занимал минуты и всё это время висел поток).
+    hosts = sorted({r["host"] for r in rows if r["host"]})
+    host_to_ip: dict[str, str] = {}
+    if hosts:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(20, len(hosts)),
+                                thread_name_prefix="geo-dns") as pool:
+            for host, ip in zip(hosts, pool.map(resolve_host, hosts)):
+                if ip:
+                    host_to_ip[host] = ip
+
+    unknown = [
+        ip
+        for ip in {*host_to_ip.values()}
+        if _geo_cached(_geo_ip_cache, ip, _GEO_OK_TTL) is None
+        and not _neg_recent(ip)
+    ]
+    for start in range(0, len(unknown), _GEO_BATCH):
+        chunk = unknown[start:start + _GEO_BATCH]
+        for ip, cc in _ipapi_batch(chunk).items():
+            _geo_store_ip(ip, cc)
+        for ip in chunk:
+            if _geo_cached(_geo_ip_cache, ip, _GEO_OK_TTL) is None:
+                _geo_mark_negative(ip)
+
+    updates: list[tuple] = []
+    for r in rows:
+        ip = host_to_ip.get(r["host"], "")
+        cc = _geo_cached(_geo_ip_cache, ip, _GEO_OK_TTL) if ip else None
+        if not cc:
+            continue
+        if r["country"] == cc:
+            updates.append((None, None, r["id"]))  # только флаг верификации
+        else:
+            updates.append((cc, 1, r["id"]))
+    if not updates:
+        return 0
+
+    corrected = 0
+    conn = _get_conn()
+    try:
+        for item in updates:
+            cc, flag, pid = item[0], item[1], item[2]
+            if cc is None:
+                conn.execute("UPDATE proxies SET country_verified=1 WHERE id=?", (pid,))
+            else:
+                conn.execute(
+                    "UPDATE proxies SET country=?, country_verified=? WHERE id=?",
+                    (cc, flag or 1, pid),
+                )
+                corrected += 1
+        conn.commit()
+    finally:
+        conn.close()
+    if corrected:
+        add_log(
+            "INFO",
+            f"Country corrected for {corrected}/{len(rows)} proxies via ip-api.com",
+        )
+    return corrected
+
+
+def _neg_recent(key: str) -> bool:
+    with _geo_lock:
+        ts = _geo_neg_cache.get(key)
+    return bool(ts and (time.time() - ts) < _GEO_NEG_TTL)
+
+
+def enrich_all_unknown_countries():
+    """Синхронный проход обогащения (старое имя, неблокирующий для замеров)."""
+    if not _enrich_lock.acquire(blocking=False):
+        return
+    try:
+        enrich_countries_once()
+    except Exception as e:  # noqa: BLE001
+        add_log("DEBUG", f"Country enrichment failed: {e}")
+    finally:
+        _enrich_lock.release()
+
+
+def schedule_country_enrichment() -> bool:
+    """Запускает обогащение стран в фоне. True — поток запущен.
+
+    Вызывается из конвейера: раньше страна определялась прямо в прогоне и
+    пинг/скорость ждали эти минуты. Теперь прогон идёт дальше, а страны
+    досыпаются в фоне.
+    """
+    if _enrich_lock.locked():
+        return False
+
+    def run():
+        enrich_all_unknown_countries()
+
+    threading.Thread(target=run, daemon=True, name="geo-enrich").start()
+    return True
+
 
 def _get_conntrack_map():
     """Парсит conntrack, возвращает {(client_ip, client_port): (bytes_to_client, bytes_from_client)}.
@@ -445,23 +653,4 @@ def _parse_ss_peername(peername: str) -> tuple:
     return (0, "")
 
 
-def enrich_all_unknown_countries():
-    """Верифицирует страну для ВСЕХ прокси через ip-api.com.
-    Ранее заполняла только пропущенные — теперь перепроверяет все,
-    чтобы исправить неверную страну из VLESS-фрагмента (#XX).
-    Кеш detect_country() исключает повторные запросы для одного хоста.
-    Предотвращает конкурентный запуск через threading.Lock()."""
-    if not _enrich_lock.acquire(blocking=False):
-        return
-    try:
-        from .db import db_q
 
-        rows = db_q("SELECT id, host FROM proxies")
-        enriched = 0
-        for r in rows:
-            if enrich_country(r["id"], r["host"]):
-                enriched += 1
-        if enriched:
-            add_log("INFO", f"Country corrected for {enriched}/{len(rows)} proxies via ip-api.com")
-    finally:
-        _enrich_lock.release()

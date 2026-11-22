@@ -702,7 +702,9 @@ function renderStageSteps(stages) {
     const ico = status === 'done' ? '✓'
       : status === 'active' ? (STAGE_ICO[st.key] || '●')
       : status === 'canceled' ? '✕' : (STAGE_ICO[st.key] || '·');
-    return `<span class="stage-chip ${cls}"><span class="st-ico">${ico}</span>${esc(st.title)}${status === 'active' && st.total ? ' <b>· ' + stageStatusText(st) + '</b>' : ''}</span>`;
+    const time = (status === 'done' || status === 'canceled') && st.seconds
+      ? ` <b>· ${st.seconds}с</b>` : '';
+    return `<span class="stage-chip ${cls}"><span class="st-ico">${ico}</span>${esc(st.title)}${status === 'active' && st.total ? ' <b>· ' + stageStatusText(st) + '</b>' : ''}${time}</span>`;
   }).join('');
   box.style.display = 'flex';
 }

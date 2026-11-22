@@ -412,9 +412,12 @@ async function loadSettings() {
   $('sniffQuic').checked = destOverride.includes('quic');
   $('sniffFtp').checked = destOverride.includes('ftp');
   $('geoEnabled').checked = s.geo_enabled !== 'false';
-  $('maxWorkers').value = s.max_workers || '15';
-  $('probeTimeout').value = s.probe_timeout || '3';
+  $('checkBatchSize').value = s.check_batch_size || '64';
+  $('probeTimeout').value = s.probe_timeout || '5';
   $('xrayStartupRetries').value = s.xray_startup_retries || '15';
+  $('tcpPrefilter').checked = s.tcp_prefilter !== 'false';
+  $('tcpPrefilterTimeout').value = s.tcp_prefilter_timeout || '2';
+  $('speedStageBudget').value = s.speed_stage_budget_sec || '120';
 
   setLoadError('xray', status.error ? `не удалось получить статус Xray: ${status.error}` : '');
   if (!status.error) renderXrayStatus(status);
@@ -457,14 +460,16 @@ function updateSpeedTestDependants() {
 // ─── Валидация ───
 const FIELD_LABELS = {
   maxActiveProxies: 'Макс. активных прокси',
-  maxWorkers: 'Кол-во воркеров',
-  probeTimeout: 'Таймаут пробы',
-  vlessPerProxyTimeout: 'Таймаут одной пробы',
+  checkBatchSize: 'Профилей за раз',
+  probeTimeout: 'Таймаут массовой проверки',
+  tcpPrefilterTimeout: 'Таймаут TCP-префильтра',
+  vlessPerProxyTimeout: 'Таймаут ручного теста',
   handshakeTimeout: 'Таймаут рукопожатия',
   connIdle: 'Таймаут простоя',
   speedTestMax: 'Топ-N для теста скорости',
   speedTestMinSec: 'Длительность одного профиля',
   speedTestAdaptiveSec: 'Адаптивная проверка',
+  speedStageBudget: 'Бюджет стадии скорости',
   logTrimEvery: 'Чистка логов',
   logKeep: 'Хранение логов',
   xrayStartupRetries: 'Ожидание старта Xray',
@@ -500,17 +505,19 @@ function validateSettings() {
   const errors = [];
   const numFields = [
     { id: 'maxActiveProxies', min: 1, max: 500 },
-    { id: 'maxWorkers', min: 1, max: 30 },
-    { id: 'probeTimeout', min: 1, max: 15 },
+    { id: 'checkBatchSize', min: 4, max: 200 },
+    { id: 'probeTimeout', min: 1, max: 30 },
+    { id: 'tcpPrefilterTimeout', min: 0.5, max: 5 },
     { id: 'vlessPerProxyTimeout', min: 2, max: 30 },
     { id: 'handshakeTimeout', min: 1, max: 30 },
     { id: 'connIdle', min: 30, max: 3600 },
     { id: 'speedTestMax', min: 1, max: 100 },
     { id: 'speedTestAdaptiveSec', min: 1, max: 10 },
     { id: 'speedTestMinSec', min: 1, max: 300 },
+    { id: 'speedStageBudget', min: 0, max: 3600 },
     { id: 'logTrimEvery', min: 10, max: 99999 },
     { id: 'logKeep', min: 100, max: 99999 },
-    { id: 'xrayStartupRetries', min: 5, max: 50 },
+    { id: 'xrayStartupRetries', min: 5, max: 200 },
     { id: 'minSpeedMbps', min: 0, max: 1000 },
   ];
   for (const f of numFields) {
@@ -624,9 +631,12 @@ async function saveSettings() {
     blocked_countries: collectBlockedCountries(),
     geosite_rules: JSON.stringify(geositeRules),
     // Performance
-    max_workers: $('maxWorkers').value.trim() || '15',
-    probe_timeout: $('probeTimeout').value.trim() || '3',
+    check_batch_size: $('checkBatchSize').value.trim() || '64',
+    probe_timeout: $('probeTimeout').value.trim() || '5',
     xray_startup_retries: $('xrayStartupRetries').value.trim() || '15',
+    tcp_prefilter: $('tcpPrefilter').checked ? 'true' : 'false',
+    tcp_prefilter_timeout: $('tcpPrefilterTimeout').value.trim() || '2',
+    speed_stage_budget_sec: $('speedStageBudget').value.trim() || '120',
   };
 
   let r;
@@ -652,11 +662,13 @@ const RESET_NUMBERS = {
   observatoryProbeInterval: '10s',
   handshakeTimeout: '5',
   connIdle: '300',
-  speedTestMax: '15',
+  speedTestMax: '8',
   speedTestMinSec: '10',
   speedTestAdaptiveSec: '2',
-  maxWorkers: '15',
-  probeTimeout: '3',
+  speedStageBudget: '120',
+  checkBatchSize: '64',
+  tcpPrefilterTimeout: '2',
+  probeTimeout: '5',
   xrayStartupRetries: '15',
   logTrimEvery: '500',
   logKeep: '2000',
@@ -667,6 +679,7 @@ const RESET_CHECKBOXES = {
   speedTestEnabled: true,
   applyAfterTest: true,
   safeOnlyImport: false,
+  tcpPrefilter: true,
   sniffingEnabled: true,
   sniffingRouteOnly: true,
   sniffHttp: true,
@@ -776,23 +789,23 @@ function updatePerfEstimate() {
   const estVal = $('perfEstValue');
   const estDetail = $('perfEstDetail');
   if (!estVal || !estDetail) return;
-  const workers = Math.max(1, parseInt($('maxWorkers').value) || 1);
-  const retries = Math.max(1, parseInt($('xrayStartupRetries').value) || 15);
-  const vlessT = Math.max(2, parseInt($('vlessPerProxyTimeout').value) || 10);
+  const batch = Math.max(1, parseInt($('checkBatchSize').value) || 64);
+  const probeT = Math.max(1, parseInt($('probeTimeout').value) || 5);
+  const prefilter = $('tcpPrefilter').checked;
+  const tcpT = Math.max(0.5, parseFloat($('tcpPrefilterTimeout').value) || 2);
   if (_profileCount <= 0) {
     estVal.textContent = '…';
     estDetail.textContent = 'загрузка данных…';
     return;
   }
-  // На практике прогон упирается в таймаут VLESS-теста (прокси почти все отвечают
-  // "не работают" и висят до таймаута), а не в отдельный probe-таймаут.
-  const startup = retries * 0.05;
-  const perProxy = startup + vlessT;
-  const batches = Math.ceil(_profileCount / workers);
-  const estSec = batches * perProxy;
+  // Худший случай: каждый профиль выжидает свой таймаут. Один процесс Xray
+  // обслуживает всю пачку, поэтому стоимость волны = таймаут префильтра + таймаут пробы.
+  const waves = Math.ceil(_profileCount / batch);
+  const perWave = (prefilter ? tcpT : 0) + probeT;
+  const estSec = waves * perWave;
   estVal.textContent = `~${(estSec / 60).toFixed(1)} мин`;
-  estVal.title = 'оценка сверху: как будто все прокси отвечают до таймаута';
-  estDetail.textContent = `${_profileCount} профилей · ${workers} воркеров · таймаут ${vlessT} с`;
+  estVal.title = 'оценка сверху: как будто все профили отвечают только по таймауту';
+  estDetail.textContent = `${_profileCount} профилей · ${batch} за раз · ${waves} волн · таймаут ${probeT} с`;
 }
 
 // ─── Резервная копия ───
@@ -863,9 +876,10 @@ function initSettingsNav() {
 _rangeDb = setupRange('checkIntervalDb', 'checkIntervalDbLabel');
 _rangeImport = setupRange('checkIntervalImport', 'checkIntervalImportLabel');
 $('speedTestEnabled').addEventListener('change', updateSpeedTestDependants);
-['maxWorkers', 'vlessPerProxyTimeout', 'xrayStartupRetries'].forEach(id => {
+['checkBatchSize', 'probeTimeout', 'tcpPrefilterTimeout'].forEach(id => {
   $(id).addEventListener('input', updatePerfEstimate);
 });
+$('tcpPrefilter').addEventListener('change', updatePerfEstimate);
 
 initSettingsNav();
 refreshAll();

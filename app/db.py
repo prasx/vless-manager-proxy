@@ -1,14 +1,15 @@
 """Работа с SQLite: инициализация схемы, запросы, настройки."""
 
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
 from config import DATABASE, ETC_XRAY_CONFIG, DEFAULT_XRAY_CONFIG
 
 
-def _get_conn() -> sqlite3.Connection:
-    """Создаёт и возвращает новое подключение к БД."""
+def _sqlite_connect() -> sqlite3.Connection:
+    """Открывает подключение и выставляет PRAGMA (один раз на соединение)."""
     conn = sqlite3.connect(str(DATABASE), timeout=15)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
@@ -19,23 +20,44 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _get_conn() -> sqlite3.Connection:
+    """Новое подключение к БД (для длинных батчевых операций, закрывает сам вызов)."""
+    return _sqlite_connect()
+
+
+# Соединение на поток: прогон из 1500 прокси делает тысячи запросов, и открывать
+# SQLite + выполнять 5 PRAGMA на каждый было заметной долей времени стадии.
+_tls = threading.local()
+
+
+def _thread_conn() -> sqlite3.Connection:
+    """Подключение, привязанное к текущему потоку (переиспользуется между запросами)."""
+    conn = getattr(_tls, "conn", None)
+    if conn is None:
+        conn = _sqlite_connect()
+        _tls.conn = conn
+    return conn
+
+
 def db_q(sql: str, params: tuple | list = ()) -> list[sqlite3.Row]:
     """Выполняет SQL-запрос с параметрами, коммитит и возвращает результаты.
     При SQLITE_BUSY повторяет до 5 раз с экспоненциальной задержкой."""
+    conn = _thread_conn()
     for attempt in range(5):
-        conn = _get_conn()
         try:
             c = conn.cursor()
             c.execute(sql, params)
             conn.commit()
             return c.fetchall()
         except sqlite3.OperationalError as e:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
             if "busy" in str(e).lower() and attempt < 4:
                 time.sleep(0.1 * (2**attempt))
                 continue
             raise
-        finally:
-            conn.close()
 
 
 # Эталонная схема таблиц — все ожидаемые колонки и их типы
@@ -57,6 +79,11 @@ _SCHEMA = {
         ("source_id", "INTEGER"),
         ("last_test_at", "TIMESTAMP"),
         ("last_error", "TEXT"),
+        # Счётчик падений подряд и время следующей проверки: мёртвые профили
+        # перепроверяются с нарастающей паузой, а не в каждом прогоне.
+        ("fail_count", "INTEGER DEFAULT 0"),
+        ("next_test_at", "TIMESTAMP"),
+        ("last_ok_at", "TIMESTAMP"),
     ],
     "sources": [
         ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -105,7 +132,7 @@ SETTING_DEFAULTS = {
     "geo_enabled": "true",
     "observatory_probe_interval": "10s",
     "speed_test_enabled": "true",
-    "speed_test_max": "15",
+    "speed_test_max": "8",
     "speed_test_url": "https://speed.cloudflare.com/__down?bytes=10000000",
     "speed_test_min_sec": "10",
     "apply_after_test": "true",
@@ -119,10 +146,17 @@ SETTING_DEFAULTS = {
     "sniffing_route_only": "true",
     # Performance tuning
     "max_workers": "15",
-    "probe_timeout": "3",
+    "probe_timeout": "5",
     "xray_startup_retries": "15",
     "db_check_auto_cleanup": "false",
     "import_proxy": "",
+    # Как проверять: сколько прокси пихать в один процесс Xray и когда сдаваться
+    "check_batch_size": "64",
+    "tcp_prefilter": "true",
+    "tcp_prefilter_timeout": "2",
+    "ping_samples": "3",
+    "failed_backoff": "true",
+    "speed_stage_budget_sec": "120",
 }
 
 
@@ -258,6 +292,35 @@ def init_db() -> None:
 class Settings:
     """Работа с настройками из таблицы settings в БД."""
 
+    # Настройки читаются в горячем цикле проверки (по несколько раз на прокси).
+    # Каждое чтение — запрос в SQLite, поэтому значения кэшируются на пару секунд:
+    # изменение через UI подхватывается почти сразу, а прогон за это не платит.
+    _CACHE_TTL = 2.0
+    _cache: dict[str, tuple[float, str]] = {}
+    _cache_lock = threading.Lock()
+
+    @classmethod
+    def _cached(cls, key: str) -> str | None:
+        with cls._cache_lock:
+            item = cls._cache.get(key)
+        if item and (time.monotonic() - item[0]) < cls._CACHE_TTL:
+            return item[1]
+        return None
+
+    @classmethod
+    def _store(cls, key: str, value: str) -> None:
+        with cls._cache_lock:
+            cls._cache[key] = (time.monotonic(), value)
+
+    @classmethod
+    def invalidate(cls, key: str | None = None) -> None:
+        """Сбрасывает кэш настроек (одного ключа или целиком)."""
+        with cls._cache_lock:
+            if key is None:
+                cls._cache.clear()
+            else:
+                cls._cache.pop(key, None)
+
     @staticmethod
     def get(key: str, default: str | None = None) -> str:
         """Возвращает значение настройки из БД.
@@ -265,15 +328,21 @@ class Settings:
         Если ключа в БД нет и `default` не задан явно, берётся значение из
         SETTING_DEFAULTS — так дефолты не расходятся между init_db и чтением.
         """
+        cached = Settings._cached(key)
+        if cached is not None:
+            return cached
         rows = db_q("SELECT value FROM settings WHERE key=?", (key,))
         if rows:
-            return rows[0]["value"]
+            value = rows[0]["value"]
+            Settings._store(key, value)
+            return value
         return SETTING_DEFAULTS.get(key, "") if default is None else default
 
     @staticmethod
     def set(key: str, value: str) -> None:
         """Сохраняет значение настройки в БД."""
         db_q("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        Settings.invalidate(key)
 
     @classmethod
     def xray_bin(cls) -> str:
@@ -374,13 +443,57 @@ class Settings:
 
     @classmethod
     def probe_timeout(cls) -> int:
-        """Таймаут проверки прокси (секунды)."""
-        return max(1, min(15, int(cls.get("probe_timeout"))))
+        """Таймаут одной HTTP-пробы при массовой проверке (секунды).
+
+        Это таймаут стадии проверки: рабочий туннель отвечает на
+        generate_204 за 0.3–2 с, всё, что дольше, для эксплуатации нерабочее.
+        """
+        return max(1, min(30, int(cls.get("probe_timeout"))))
+
+    @classmethod
+    def check_batch_size(cls) -> int:
+        """Сколько профилей проверять в одном процессе Xray.
+
+        Один процесс на пачку вместо процесса на каждый прокси: на 48
+        inbounds/outbound запуск Xray стоит столько же, сколько на один.
+        """
+        return max(4, min(200, int(cls.get("check_batch_size", "48"))))
+
+    @classmethod
+    def tcp_prefilter(cls) -> bool:
+        """Проверять TCP-доступность server:port до запуска Xray."""
+        return cls.get("tcp_prefilter", "true") == "true"
+
+    @classmethod
+    def tcp_prefilter_timeout(cls) -> float:
+        """Таймаут TCP-префильтра, секунды (дробный)."""
+        try:
+            return max(0.5, min(5.0, float(cls.get("tcp_prefilter_timeout", "2"))))
+        except (TypeError, ValueError):
+            return 2.0
+
+    @classmethod
+    def ping_samples(cls) -> int:
+        """Сколько проб делать при проверке (медиана пишется в latency)."""
+        return max(1, min(7, int(cls.get("ping_samples", "3"))))
+
+    @classmethod
+    def failed_backoff(cls) -> bool:
+        """True — мёртвые профили перепроверяются с нарастающей паузой."""
+        return cls.get("failed_backoff", "true") == "true"
+
+    @classmethod
+    def speed_stage_budget_sec(cls) -> int:
+        """Общий бюджет стадии замера скорости, секунд (0 — без ограничения)."""
+        try:
+            return max(0, min(3600, int(cls.get("speed_stage_budget_sec", "120"))))
+        except (TypeError, ValueError):
+            return 120
 
     @classmethod
     def xray_startup_retries(cls) -> int:
-        """Количество попыток дождаться старта Xray (каждая 0.1с)."""
-        return max(5, min(50, int(cls.get("xray_startup_retries"))))
+        """Количество попыток дождаться старта Xray (каждая 0.05 с)."""
+        return max(5, min(200, int(cls.get("xray_startup_retries"))))
 
     @classmethod
     def import_proxy(cls) -> str:

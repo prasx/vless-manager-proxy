@@ -251,9 +251,11 @@
 <div class="settings-section tuning-section" id="sec-check">
   <h2>Проверка прокси</h2>
   <div class="tuning-notice">
-    Любой прогон строго поэтапный: <b>проверка работоспособности всех профилей → пинг рабочих
-    (медиана 3 проб) → замер скорости топ-N рабочих (по одному профилю, окно из настроек ниже)</b>. Замеры скорости
-    идут в самую последнюю очередь и только по рабочим профилям; Import+Check и DB-проверка не запускаются одновременно.
+    Любой прогон строго поэтапный: <b>проверка работоспособности всех профилей (сразу и медиана пинга)
+    → замер скорости топ-N рабочих (по одному профилю, окно из настроек ниже)</b>. Пачка профилей
+    проверяется одним процессом Xray, поэтому прогон упирается в сеть, а не в запуск процессов.
+    Замеры скорости идут в самую последнюю очередь и только по рабочим профилям;
+    Import+Check и DB-проверка не запускаются одновременно.
   </div>
   <div class="tuning-cards">
     <div class="tuning-card">
@@ -269,7 +271,7 @@
       <div class="tuning-item" style="border-bottom:none;padding-top:10px">
         <span class="tuning-label">Авто-очистка</span>
         <input type="checkbox" id="dbCheckAutoCleanup" class="chk-inline">
-        <span class="tuning-comment">удалять нерабочие после проверки</span>
+        <span class="tuning-comment">удалять профили, упавшие трижды подряд</span>
       </div>
     </div>
     <div class="tuning-card">
@@ -282,17 +284,23 @@
         <input type="range" id="checkIntervalImport" class="tuning-range" min="1" max="24" step="0.5" value="3">
         <div class="tuning-range-labels"><span>1 ч</span><span>8 ч</span><span>16 ч</span><span>24 ч</span></div>
       </div>
-      <p class="tuning-card-desc" style="margin-bottom:0;padding-top:8px;border-top:1px solid var(--border)">Импорт источников → проверка → пинг → скорость → конфиг. Ручной импорт тест не запускает.</p>
+      <p class="tuning-card-desc" style="margin-bottom:0;padding-top:8px;border-top:1px solid var(--border)">Импорт источников → проверка → скорость → конфиг. Ручной импорт тест не запускает.</p>
     </div>
   </div>
   <div class="tuning-grid" style="margin-top:14px">
     <div class="tuning-group">
-      <h3>Таймаут одной пробы</h3>
+      <h3>Таймауты</h3>
       <div class="tuning-item">
-        <span class="tuning-label">Проба (проверка/пинг)</span>
+        <span class="tuning-label">Массовая проверка</span>
+        <input type="number" id="probeTimeout" class="input" min="1" max="30" style="width:80px">
+        <span class="tuning-suffix">сек</span>
+        <span class="tuning-comment">на одну пробу при прогоне; 4–5 сек оптимально</span>
+      </div>
+      <div class="tuning-item">
+        <span class="tuning-label">Ручной тест одного</span>
         <input type="number" id="vlessPerProxyTimeout" class="input" min="2" max="30" style="width:80px">
         <span class="tuning-suffix">сек</span>
-        <span class="tuning-comment">таймаут одной попытки на профиль</span>
+        <span class="tuning-comment">щедрый таймаут для кнопки «Тест» у профиля</span>
       </div>
     </div>
     <div class="tuning-group">
@@ -341,6 +349,12 @@
           <span class="tuning-suffix">сек</span>
           <span class="tuning-comment">ранний выход только при заданном пороге «Мин. скорость»</span>
         </div>
+        <div class="tuning-item">
+          <span class="tuning-label">Бюджет стадии</span>
+          <input type="number" id="speedStageBudget" class="input" min="0" max="3600" style="width:80px">
+          <span class="tuning-suffix">сек</span>
+          <span class="tuning-comment">0 — без ограничения; после — остальные профили пропускаются</span>
+        </div>
       </div>
     </div>
   </div>
@@ -349,28 +363,33 @@
 <!-- ─── Производительность ─── -->
 <div class="settings-section tuning-section" id="sec-perf">
   <h2>Производительность</h2>
-  <p class="settings-desc">Параллельность стадий проверки и пинга. Замер скорости всегда последовательный, по одному профилю.</p>
+  <p class="settings-desc">Профили проверяются пачками в одном процессе Xray, пробы идут параллельно. Замер скорости всегда последовательный, по одному профилю.</p>
   <div class="tuning-grid">
     <div class="tuning-group">
       <div class="tuning-item">
-        <span class="tuning-label">Воркеров</span>
-        <input type="number" id="maxWorkers" class="input" min="1" max="30" style="width:80px">
+        <span class="tuning-label">Профилей за раз</span>
+        <input type="number" id="checkBatchSize" class="input" min="4" max="200" style="width:80px">
         <span class="tuning-suffix">шт</span>
-        <span class="tuning-comment">одновременных Xray-процессов в проверке/пинге</span>
-      </div>
-      <div class="tuning-item">
-        <span class="tuning-label">Проба (таймаут)</span>
-        <input type="number" id="probeTimeout" class="input" min="1" max="15" style="width:80px">
-        <span class="tuning-suffix">сек</span>
-        <span class="tuning-comment">2–5 сек оптимально</span>
+        <span class="tuning-comment">одновременных проверок = inbounds в одном процессе Xray</span>
       </div>
       <div class="tuning-item">
         <span class="tuning-label">Ожидание старта Xray</span>
-        <input type="number" id="xrayStartupRetries" class="input" min="5" max="50" style="width:80px">
+        <input type="number" id="xrayStartupRetries" class="input" min="5" max="200" style="width:80px">
         <span class="tuning-suffix">×0.05с</span>
       </div>
     </div>
     <div class="tuning-group">
+      <div class="tuning-item">
+        <span class="tuning-label">TCP-префильтр</span>
+        <input type="checkbox" id="tcpPrefilter" class="chk-inline" checked>
+        <span class="tuning-comment">отсекать закрытый server:port до запуска Xray</span>
+      </div>
+      <div class="tuning-item">
+        <span class="tuning-label">Таймаут префильтра</span>
+        <input type="number" id="tcpPrefilterTimeout" class="input" min="0.5" max="5" step="0.5" style="width:80px">
+        <span class="tuning-suffix">сек</span>
+        <span class="tuning-comment">1–2 сек достаточно</span>
+      </div>
       <div class="tuning-item">
         <span class="tuning-label">Оценка прогона</span>
         <span id="perfEstValue" class="perf-est-value">…</span>

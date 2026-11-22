@@ -244,9 +244,9 @@ def api_add():
         )
         add_log("INFO", f"Added proxy: {parsed['host']}:{parsed['port']}")
         if not parsed.get("country"):
-            from ..utils import enrich_all_unknown_countries
+            from ..utils import schedule_country_enrichment
 
-            threading.Thread(target=enrich_all_unknown_countries, daemon=True).start()
+            schedule_country_enrichment()
         threading.Thread(
             target=lambda: proxy_manager.test_and_update_vless(link), daemon=True
         ).start()
@@ -600,6 +600,13 @@ _INT_RANGES = {
     "max_workers": (1, 256),
     "probe_timeout": (1, 300),
     "xray_startup_retries": (1, 1000),
+    "check_batch_size": (1, 500),
+    "ping_samples": (1, 10),
+    "speed_stage_budget_sec": (0, 3600),
+}
+
+_FLOAT_RANGES = {
+    "tcp_prefilter_timeout": (0.5, 5.0),
 }
 
 
@@ -612,6 +619,15 @@ def _validate_settings(data: dict) -> None:
             val = int(data[key])
         except (ValueError, TypeError):
             raise ValueError(f"{key} must be an integer, got {data[key]!r}")
+        if not low <= val <= high:
+            raise ValueError(f"{key} must be in {low}..{high}, got {val}")
+    for key, (low, high) in _FLOAT_RANGES.items():
+        if key not in data:
+            continue
+        try:
+            val = float(data[key])
+        except (ValueError, TypeError):
+            raise ValueError(f"{key} must be a number, got {data[key]!r}")
         if not low <= val <= high:
             raise ValueError(f"{key} must be in {low}..{high}, got {val}")
 
@@ -922,44 +938,92 @@ def api_test_progress_stream():
 
 @api_bp.route("/performance/recommendations")
 def api_performance_recommendations():
-    """GET /api/performance/recommendations — рекомендации по настройкам производительности."""
+    """GET /api/performance/recommendations — параметры проверки и оценка прогона.
+
+    Считает по реальной схеме: профили проверяются волнами по check_batch_size
+    в одном процессе Xray, перед этим — TCP-префильтр, затем замер скорости
+    топ-N с общим бюджетом. Длительности последнего прогона отдаются фактом
+    (stages[].seconds из /api/test-progress), а не выдуманной моделью.
+    """
     total = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
     working = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working'")[0]["c"]
-    speed_enabled = Settings.get("speed_test_enabled", "true") == "true"
-    speed_max = int(Settings.get("speed_test_max"))
-    workers = Settings.max_workers()
+    failed = db_q("SELECT COUNT(*) c FROM proxies WHERE status='failed'")[0]["c"]
+    due = db_q(
+        "SELECT COUNT(*) c FROM proxies WHERE next_test_at IS NULL OR next_test_at <= ?",
+        (now_utc(),),
+    )[0]["c"]
+
+    batch = Settings.check_batch_size()
     probe_t = Settings.probe_timeout()
-    startup_r = Settings.xray_startup_retries()
-    vless_t = Settings.vless_per_proxy_timeout()
+    prefilter = Settings.tcp_prefilter()
+    tcp_t = Settings.tcp_prefilter_timeout()
+    speed_enabled = Settings.get("speed_test_enabled", "true") == "true"
+    speed_max = int(Settings.get("speed_test_max", "8") or 0)
+    speed_win = Settings.speed_test_duration_sec()
+    speed_budget = Settings.speed_stage_budget_sec()
 
-    startup_time = startup_r * 0.05
-    per_proxy = startup_time + probe_t
-    if speed_enabled and working > 0:
-        speed_proxies = min(speed_max, working)
-        per_proxy += (vless_t + 5) * (speed_proxies / max(1, total))
+    def check_seconds(count: int, batch_size: int, probe: float, with_prefilter: bool) -> float:
+        if count <= 0:
+            return 0.0
+        waves = -(-count // max(1, batch_size))
+        return waves * ((tcp_t if with_prefilter else 0) + probe)
 
-    batches = max(1, total // workers + (1 if total % workers else 0))
-    est_current = batches * per_proxy
+    def speed_seconds(working_count: int, top_n: int, window: int) -> float:
+        if not speed_enabled or top_n <= 0 or working_count <= 0:
+            return 0.0
+        est = min(top_n, working_count) * window
+        return min(est, speed_budget) if speed_budget else est
+
+    check_est = check_seconds(due, batch, probe_t, prefilter)
+    speed_est = speed_seconds(working, speed_max, speed_win)
+    current_est = check_est + speed_est
 
     targets = []
-    for w, pt in [(10, 5), (10, 4), (8, 5), (8, 4), (5, 5), (5, 4)]:
-        b = max(1, total // w + (1 if total % w else 0))
-        est = b * (startup_time + pt)
-        if speed_enabled and working > 0:
-            speed_proxies = min(speed_max, working)
-            est += (vless_t + 5) * (speed_proxies / max(1, total))
-        targets.append({
-            "workers": w,
-            "probe_timeout": pt,
-            "estimated_seconds": round(est),
-            "estimated_label": f"~{est/60:.1f} min",
-        })
+    for b, pt, sc in ((128, 5, 8), (64, 5, 8), (48, 4, 5), (32, 4, 5), (16, 4, 5)):
+        c_est = check_seconds(due, b, pt, prefilter)
+        s_est = speed_seconds(working, sc, speed_win)
+        est = c_est + s_est
+        targets.append(
+            {
+                "batch_size": b,
+                "probe_timeout": pt,
+                "speed_test_max": sc,
+                "estimated_seconds": round(est),
+                "estimated_label": f"~{est / 60:.1f} min",
+            }
+        )
+
+    last = proxy_manager.progress_snapshot()
+    last_stages = [
+        {
+            "key": s.get("key"),
+            "title": s.get("title"),
+            "total": s.get("total"),
+            "seconds": s.get("seconds"),
+            "status": s.get("status"),
+        }
+        for s in last.get("stages", [])
+    ]
 
     return jsonify(
         total=total,
         working=working,
-        current={"workers": workers, "probe_timeout": probe_t, "xray_startup_retries": startup_r, "vless_per_proxy_timeout": vless_t, "estimated_seconds": round(est_current), "estimated_label": f"~{est_current/60:.1f} min"},
+        failed=failed,
+        due=due,
+        current={
+            "check_batch_size": batch,
+            "probe_timeout": probe_t,
+            "tcp_prefilter": prefilter,
+            "tcp_prefilter_timeout": tcp_t,
+            "check_seconds": round(check_est),
+            "speed_seconds": round(speed_est),
+            "estimated_seconds": round(current_est),
+            "estimated_label": f"~{current_est / 60:.1f} min",
+        },
         targets=targets,
+        last_stages=last_stages,
+        last_completed=last.get("last_completed", ""),
+        last_label=last.get("last_label", ""),
     )
 
 

@@ -3,20 +3,27 @@
 Бизнес-логика разделена на независимые стадии, которые выполняются строго
 по очереди в рамках одного эксклюзивного «прогона» (глобальная блокировка):
 
-    1. check  — проверка работоспособности всех профилей прогона (параллельно,
-                до max_workers воркеров). Есть ответ от конфига (HTTP 2xx/3xx
-                через временный Xray) — профиль помечается working, иначе failed.
-    2. ping   — отдельный замер пинга для рабочих профилей: медиана из N проб
-                через туннель (отдельный Xray на профиль), пишется в latency.
-    3. speed  — замер скорости ТОЛЬКО по одному профилю за раз (строго
+    1. check  — проверка работоспособности профилей. Один процесс Xray
+                обслуживает пачку профилей (см. app/checker.py), поэтому
+                прогон упирается в сеть, а не в запуск процессов. Пока туннель
+                жив, сразу снимается медиана из нескольких проб — отдельная
+                стадия пинга с новым запуском Xray больше не нужна.
+    2. speed  — замер скорости ТОЛЬКО по одному профилю за раз (строго
                 последовательно): параллельные замеры скорости дают
                 недостоверные данные, т.к. делят канал между собой.
                 Длительность замера одного профиля задаётся в настройках
-                (speed_test_min_sec — фиксированное окно).
+                (speed_test_min_sec), у стадии есть общий бюджет времени.
 
 Никакие два прогона/замера не могут выполняться одновременно: ручной тест
 одного прокси, «Тест всех», фоновые цепочки и импорт+проверка сериализуются
 общей блокировкой _run_lock. Это гарантирует достоверность замеров скорости.
+
+Поддержание рабочих профилей:
+    * рабочий профиль перепроверяется в каждом прогоне (next_test_at = NULL);
+    * упавший получает паузу, растущую с числом падений подряд
+      (15 мин → 1 ч → 3 ч → 12 ч), и не тратит на себя прогон каждый раз;
+    * автоудаление (если включено) трогает только профили, упавшие трижды
+      подряд, а не все failed после одного неудачного прогона.
 """
 
 import json
@@ -28,19 +35,34 @@ import sys
 import tempfile
 import threading
 import time
-import uuid
+import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from pathlib import Path
 
-from .db import db_q, Settings
-from .utils import add_log, now_utc, moscow_str, set_correlation_id
 from . import importer
+from .checker import (
+    BatchXrayChecker,
+    PortReserver,
+    build_outbound,
+    tcp_reachable,
+    validate_link,
+)
+from .db import Settings, db_q
 from .importer import import_sources, save_source_status
-from .vless import parse_vless, stream_settings
+from .utils import (
+    add_log,
+    moscow_str,
+    now_utc,
+    schedule_country_enrichment,
+    set_correlation_id,
+)
+from .vless import parse_vless
 
-# Сколько проб делает отдельный замер пинга (в latency идёт медиана)
-PING_SAMPLES = 3
+# Пауза перед следующей проверкой упавшего профиля по числу падений подряд.
+FAIL_BACKOFF_SEC = (900, 3600, 10800, 43200)  # 15 мин, 1 ч, 3 ч, 12 ч
 
 # Fallback-файлы для замера скорости (когда основной speed_test_url недоступен).
 # Только достаточно крупные файлы и глобально доступные CDN-хосты:
@@ -52,21 +74,16 @@ _SPEED_FALLBACK_URLS = (
 )
 
 
-def _median(values):
-    """Медиана списка чисел (пустой список → 0)."""
-    if not values:
-        return 0
-    s = sorted(values)
-    n = len(s)
-    if n % 2:
-        return s[n // 2]
-    return int((s[n // 2 - 1] + s[n // 2]) / 2)
+def _backoff_seconds(fail_count: int) -> int:
+    """Пауза до следующей проверки для профиля, упавшего fail_count раз подряд."""
+    idx = max(0, min(fail_count - 1, len(FAIL_BACKOFF_SEC) - 1))
+    return FAIL_BACKOFF_SEC[idx]
 
 
 class ProxyManager:
     """Тестирование прокси, обновление статусов, фоновый циклический чекер."""
 
-    def __init__(self):
+    def __init__(self, checker: BatchXrayChecker | None = None):
         # Эксклюзивная блокировка прогона: только один замер за раз.
         self._run_lock = threading.Lock()
         self._last_run_db = 0.0
@@ -75,13 +92,19 @@ class ProxyManager:
         self._cancel = threading.Event()
         self._xray_children: dict[int, subprocess.Popen] = {}
         self._xray_children_lock = threading.Lock()
+        self._ports = PortReserver()
+        self._checker = checker or BatchXrayChecker(port_reserver=self._ports)
         self._check_stats = (0, 0)  # (ok, total) стадии check — для итоговой строки
         self._run_reasons: dict[str, int] = {}  # причины отказов текущего прогона
+        # Какой URL замера скорости сработал в этом прогоне (см. _measure_kbps).
+        self._speed_url: str = ""
+        # Сколько раз URL замера не дал данных в этом прогоне (см. _speed_urls).
+        self._speed_failed: dict[str, int] = {}
         self.progress = {
             "running": False,
             "label": "",
-            "phase": "",            # import/check/ping/speed
-            "stages": [],           # [{key,title,total,done,ok,status}]
+            "phase": "",            # import/check/speed
+            "stages": [],           # [{key,title,total,done,ok,status,seconds}]
             "total": 0, "done": 0, "ok": 0,   # счётчики ТЕКУЩЕЙ стадии
             "current": "",
             "cancel_requested": False,
@@ -108,6 +131,10 @@ class ProxyManager:
         sys.exit(0)
 
     def kill_all_xray_children(self):
+        try:
+            self._checker.kill_current()
+        except Exception:
+            pass
         with self._xray_children_lock:
             for pid, proc in list(self._xray_children.items()):
                 try:
@@ -124,166 +151,83 @@ class ProxyManager:
                         pass
             self._xray_children.clear()
 
-    @staticmethod
-    def _free_port():
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            return s.getsockname()[1]
+    # ─── Xray для одного прокси (замер скорости, одиночный тест) ───
 
-    # ─── VLESS / ping helpers ───
-
-    @staticmethod
-    def _describe_probe_error(e) -> str:
-        """Превращает исключение HTTP-пробы в короткую человекочитаемую причину."""
-        if isinstance(e, urllib.error.HTTPError):
-            return f"http {e.code}"
-        reason = e.reason if isinstance(e, urllib.error.URLError) else e
-        msg = str(reason)
-        low = msg.lower()
-        if "timed out" in low or "timeout" in low:
-            return "timeout"
-        if "refused" in low:
-            return "connection refused"
-        if "reset" in low or "disconnected" in low or "aborted" in low:
-            return "connection reset"
-        if "getaddrinfo" in low or "name or service not known" in low:
-            return "dns lookup failed"
-        if "tls" in low or "ssl" in low or "certificate" in low:
-            return "tls error"
-        return (msg or type(e).__name__)[:100]
-
-    @staticmethod
-    def _probe(http_port, timeout):
-        """HTTP-проба через локальный HTTP-прокси (Xray уже запущен).
-        Возвращает (ok, latency_ms, error).
-        Даёт второй шанс, если первый отказ был подозрительно быстрым —
-        такие отказы чаще всего транзиентные (blip сети, переиспользование соединения).
-        """
-        probe_url = Settings.probe_url()
-        proxy_url = f"http://127.0.0.1:{http_port}"
-        proxy_handler = urllib.request.ProxyHandler(
-            {"http": proxy_url, "https": proxy_url}
-        )
-        opener = urllib.request.build_opener(proxy_handler)
-        req_timeout = max(2, timeout - 1)
-        retry_cutoff = max(0.9, req_timeout * 0.5)
-        err = ""
-        for attempt in (1, 2):
-            req_start = time.time()
-            try:
-                resp = opener.open(probe_url, timeout=req_timeout)
-                ok = resp.status < 400
-                lat = int((time.time() - req_start) * 1000)
-                return ok, lat, ""
-            except Exception as e:
-                err = ProxyManager._describe_probe_error(e)
-                elapsed = time.time() - req_start
-                if attempt == 1 and elapsed < retry_cutoff:
-                    add_log(
-                        "DEBUG",
-                        f"Probe transient fail ({elapsed*1000:.0f}ms) — retrying: {err}",
-                    )
-                    continue
-                add_log("DEBUG", f"Probe failed after {elapsed*1000:.0f}ms: {err}")
-                return False, 0, err
-        return False, 0, err
-
-    # ─── Xray proxy helpers ───
-
-    @staticmethod
-    def _xray_config(parsed, http_port, socks_port):
-        """Собирает конфиг Xray для одного прокси."""
-        config = {
+    def _xray_config(self, parsed, http_port):
+        """Собирает минимальный конфиг Xray для одного прокси (http-inbound)."""
+        return {
             "log": {"loglevel": "none"},
             "inbounds": [
-                {
-                    "port": socks_port,
-                    "listen": "127.0.0.1",
-                    "protocol": "socks",
-                    "settings": {"udp": True},
-                    "tag": "socks-in",
-                },
                 {
                     "port": http_port,
                     "listen": "127.0.0.1",
                     "protocol": "http",
                     "settings": {},
                     "tag": "http-in",
-                },
-            ],
-            "outbounds": [
-                {
-                    "protocol": "vless",
-                    "tag": "proxy",
-                    "settings": {
-                        "vnext": [
-                            {
-                                "address": parsed["server"],
-                                "port": parsed["port"],
-                                "users": [{"id": parsed["uid"], "encryption": "none"}],
-                            }
-                        ]
-                    },
-                    "streamSettings": stream_settings(parsed),
                 }
             ],
+            "outbounds": [build_outbound(parsed, "proxy")],
             "routing": {
                 "domainStrategy": "AsIs",
                 "rules": [
-                    {
-                        "type": "field",
-                        "inboundTag": ["socks-in", "http-in"],
-                        "outboundTag": "proxy",
-                    }
+                    {"type": "field", "inboundTag": ["http-in"], "outboundTag": "proxy"}
                 ],
             },
         }
-        flow = parsed.get("flow")
-        if flow:
-            config["outbounds"][0]["settings"]["vnext"][0]["users"][0]["flow"] = flow
-        return config
 
-    @staticmethod
-    def _start_xray(parsed):
+    def _start_xray(self, parsed):
         """Запускает Xray для одного прокси.
         Возвращает (proc, tmp_path, http_port, error) или (None, None, None, error)."""
         xbin = Settings.xray_bin()
         if not Path(xbin).is_file():
             return None, None, None, f"xray binary not found: {xbin}"
-        http_port = ProxyManager._free_port()
-        socks_port = ProxyManager._free_port()
-        config = ProxyManager._xray_config(parsed, http_port, socks_port)
-        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
-        with tmp:
-            json.dump(config, tmp)
-        tmp_path = tmp.name
-        proc = None
-        try:
-            proc = subprocess.Popen(
-                [xbin, "run", "-c", tmp_path],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            proxy_manager._track_xray(proc)
-            retries = Settings.xray_startup_retries()
-            for _ in range(retries):
-                try:
-                    s = socket.create_connection(("127.0.0.1", http_port), timeout=0.3)
-                    s.close()
+        last_err = "xray start failed"
+        for _attempt in range(2):
+            ports = self._ports.reserve(1)
+            if not ports:
+                return None, None, None, "no free local ports"
+            http_port = ports[0]
+            config = self._xray_config(parsed, http_port)
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+            with tmp:
+                json.dump(config, tmp)
+            tmp_path = tmp.name
+            proc = None
+            try:
+                proc = subprocess.Popen(
+                    [xbin, "run", "-c", tmp_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                self._track_xray(proc)
+                if self._wait_port(proc, http_port):
                     return proc, tmp_path, http_port, ""
-                except (OSError, ConnectionRefusedError):
-                    time.sleep(0.05)
-        except Exception:
-            pass
-        ProxyManager._stop_xray(proc, tmp_path)
-        return None, None, None, "xray start failed"
+                last_err = "xray start failed"
+            except Exception as e:  # noqa: BLE001
+                last_err = f"xray start failed: {e}"
+            self._stop_xray(proc, tmp_path)
+        return None, None, None, last_err
 
     @staticmethod
-    def _stop_xray(proc, tmp_path):
+    def _wait_port(proc, port) -> bool:
+        """Ждёт готовности порта Xray. Учитывает xray_startup_retries (шаг 50 мс)."""
+        retries = Settings.xray_startup_retries()
+        deadline = time.monotonic() + max(1.0, retries * 0.05)
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                return False
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                    return True
+            except OSError:
+                time.sleep(0.05)
+        return False
+
+    def _stop_xray(self, proc, tmp_path):
         """Останавливает Xray и удаляет временный файл."""
         if proc:
-            proxy_manager._untrack_xray(proc)
+            self._untrack_xray(proc)
             try:
                 os.killpg(proc.pid, signal.SIGTERM)
             except Exception:
@@ -316,13 +260,18 @@ class ProxyManager:
         """Копия прогресса под блокировкой — для API/SSE."""
         with self._progress_lock:
             p = dict(self.progress)
-            p["stages"] = [dict(s) for s in self.progress["stages"]]
+            p["stages"] = [
+                {k: v for k, v in s.items() if not k.startswith("_")}
+                for s in self.progress["stages"]
+            ]
             return p
 
     def _begin_run(self, label):
         """Начинает новый эксклюзивный прогон (владелец уже держит _run_lock)."""
         self._cancel.clear()
         self._run_reasons = {}
+        self._speed_url = ""
+        self._speed_failed = {}
         with self._progress_lock:
             self.progress.update(
                 running=True,
@@ -356,6 +305,8 @@ class ProxyManager:
                     "done": 0,
                     "ok": 0,
                     "status": "active",
+                    "seconds": 0,
+                    "_started": time.monotonic(),
                 }
             )
 
@@ -375,13 +326,16 @@ class ProxyManager:
                     break
 
     def _end_stage(self):
-        """Завершает текущую стадию (done/сanceled/active→done)."""
+        """Завершает текущую стадию (done/canceled/active→done)."""
         with self._progress_lock:
             p = self.progress
             for st in p["stages"]:
                 if st["status"] == "active":
                     st["status"] = "canceled" if self._cancel.is_set() else "done"
                     st["done"] = st["total"]
+                    started = st.pop("_started", None)
+                    if started:
+                        st["seconds"] = int(time.monotonic() - started)
                     break
             p["current"] = ""
 
@@ -389,7 +343,8 @@ class ProxyManager:
         """Помечает стадию как пропущенную (нечего обрабатывать/отключена)."""
         with self._progress_lock:
             self.progress["stages"].append(
-                {"key": key, "title": title, "total": 0, "done": 0, "ok": 0, "status": "skipped"}
+                {"key": key, "title": title, "total": 0, "done": 0, "ok": 0,
+                 "status": "skipped", "seconds": 0}
             )
 
     def _finish_run(self, label):
@@ -405,14 +360,11 @@ class ProxyManager:
                 cancel_requested=False,
                 started_at=0.0,
             )
+            p["last_completed"] = moscow_str()
             if label:
-                p["last_completed"] = moscow_str()
                 p["last_label"] = label
                 p["last_ok"] = ok_cnt
                 p["last_total"] = total_cnt
-            else:
-                # Аварийное завершение без этапов — показываем как есть
-                p["last_completed"] = moscow_str()
 
     def request_cancel(self):
         """Запросить отмену текущего прогона (безопасно из любого потока)."""
@@ -424,18 +376,28 @@ class ProxyManager:
 
     @staticmethod
     def _update_vless_status(pid, ok, lat_vless, error=""):
+        """Пишет результат проверки: успех сбрасывает backoff, отказ — наращивает."""
         now = now_utc()
         err = (error or "").strip()[:200] or None
         if ok:
             db_q(
-                "UPDATE proxies SET status='working', latency=?, latency_vless=?, failed_since=NULL, last_test_at=?, last_error=NULL WHERE id=?",
-                (lat_vless, lat_vless, now, pid),
+                "UPDATE proxies SET status='working', latency=?, latency_vless=?, "
+                "failed_since=NULL, fail_count=0, next_test_at=NULL, last_ok_at=?, "
+                "last_test_at=?, last_error=NULL WHERE id=?",
+                (lat_vless, lat_vless, now, now, pid),
             )
-        else:
-            db_q(
-                "UPDATE proxies SET status='failed', latency=0, latency_vless=0, speed_kbps=0, failed_since=COALESCE(failed_since, ?), last_test_at=?, last_error=? WHERE id=?",
-                (now, now, err, pid),
-            )
+            return
+        row = db_q("SELECT COALESCE(fail_count, 0) AS fc FROM proxies WHERE id=?", (pid,))
+        fail_count = (row[0]["fc"] if row else 0) + 1
+        next_at = None
+        if Settings.failed_backoff():
+            next_at = now + timedelta(seconds=_backoff_seconds(fail_count))
+        db_q(
+            "UPDATE proxies SET status='failed', latency=0, latency_vless=0, "
+            "speed_kbps=0, failed_since=COALESCE(failed_since, ?), last_test_at=?, "
+            "last_error=?, fail_count=?, next_test_at=? WHERE id=?",
+            (now, now, err, fail_count, next_at, pid),
+        )
 
     @staticmethod
     def _reason_bucket(err) -> str:
@@ -447,118 +409,101 @@ class ProxyManager:
             return "xray binary not found"
         return err[:60]
 
-    # ─── Стадия 1: проверка работоспособности ───
-
-    def _check_one(self, r, timeout):
-        """Работоспособность одного профиля: ответ конфига есть → working.
-        Скорость/пинг здесь НЕ меряются — это отдельные стадии."""
-        if self._cancel.is_set():
-            return r["id"], None
-        parsed = parse_vless(r["link"])
-        ok = False
-        lat = 0
-        err = ""
-        if not parsed:
-            err = "invalid link"
-        else:
-            proc, tmp_path, http_port, start_err = ProxyManager._start_xray(parsed)
-            if proc:
-                ok, lat, err = ProxyManager._probe(http_port, timeout)
-                ProxyManager._stop_xray(proc, tmp_path)
-            else:
-                err = start_err or "xray start failed"
-        self._update_vless_status(r["id"], ok, lat if ok else 0, err if not ok else "")
+    def _record_result(self, pid, ok, lat, err):
+        """Пишет результат одного профиля и двигает прогресс стадии."""
+        self._update_vless_status(pid, ok, lat if ok else 0, "" if ok else err)
         if not ok:
-            key = ProxyManager._reason_bucket(err)
+            key = self._reason_bucket(err)
             with self._progress_lock:
                 self._run_reasons[key] = self._run_reasons.get(key, 0) + 1
-        self._stage_advance(ok, current_text=f"#{r['id']}")
-        return r["id"], ok
+        self._stage_advance(ok, current_text=f"#{pid}")
+
+    # ─── Стадия 1: проверка работоспособности (+ медиана пинга) ───
 
     def _stage_check(self, rows, timeout):
-        """Стадия «Проверка работоспособности» — все профили параллельно.
-        Возвращает (ok, total) по стадии."""
+        """Стадия «Проверка работоспособности».
+
+        Возвращает (ok, total). Внутри: быстрый разбор ссылок, TCP-префильтр
+        и батч-проверка одним процессом Xray на пачку.
+        """
         ok_total = 0
         done_total = 0
-        try:
-            max_workers = Settings.max_workers()
-            with ThreadPoolExecutor(max_workers=max_workers) as tpool:
-                futures = {tpool.submit(self._check_one, r, timeout): r for r in rows}
-                for f in as_completed(futures):
-                    if self._cancel.is_set():
-                        add_log("INFO", "Cancel requested, stopping check stage")
-                        for ff in futures:
-                            ff.cancel()
-                        break
-                    try:
-                        _pid, ok = f.result()
-                    except Exception as e:
-                        add_log("ERROR", f"Check worker failed: {e}")
-                        ok = False
-                    done_total += 1
-                    if ok:
-                        ok_total += 1
-            return ok_total, done_total
-        except Exception as e:
-            add_log("ERROR", f"Check stage crashed: {e}")
-            return ok_total, done_total
 
-    # ─── Стадия 2: замер пинга ───
-
-    @staticmethod
-    def _ping_one_proc(http_port, timeout, samples):
-        """N проб через уже запущенный Xray. Возвращает список latency (ms)."""
-        lats = []
-        for _ in range(samples):
-            if proxy_manager._cancel.is_set():
-                break
-            ok, lat, _err = ProxyManager._probe(http_port, timeout)
+        def handle(key, ok, lat=0, err=""):
+            nonlocal ok_total, done_total
+            self._record_result(key, ok, lat, err)
+            done_total += 1
             if ok:
-                lats.append(lat)
-        return lats
+                ok_total += 1
 
-    def _ping_one(self, r, timeout):
-        """Замер пинга одного профиля: медиана из PING_SAMPLES проб."""
+        # 1. Разбор и структурная валидация: битые ссылки не оправляют батч в Xray.
+        items: list[tuple[int, dict]] = []
+        for r in rows:
+            if self._cancel.is_set():
+                break
+            parsed = parse_vless(r["link"])
+            bad = validate_link(parsed)
+            if bad:
+                handle(r["id"], False, 0, bad)
+            else:
+                items.append((r["id"], parsed))
+
         if self._cancel.is_set():
-            return r["id"], 0
-        parsed = parse_vless(r["link"])
-        if not parsed:
-            return r["id"], 0
-        proc, tmp_path, http_port, _err = ProxyManager._start_xray(parsed)
-        med = 0
-        if proc:
-            try:
-                lats = ProxyManager._ping_one_proc(http_port, timeout, PING_SAMPLES)
-                med = _median(lats)
-            finally:
-                ProxyManager._stop_xray(proc, tmp_path)
-        if med:
-            # В latency/latency_vless идёт медиана — стабильный пинг
-            db_q("UPDATE proxies SET latency=?, latency_vless=? WHERE id=?", (med, med, r["id"]))
-        else:
-            add_log("DEBUG", f"Ping #{r['id']}: all {PING_SAMPLES} probes failed (kept check latency)")
-        self._stage_advance(med > 0, current_text=f"#{r['id']}")
-        return r["id"], med
+            return ok_total, done_total
 
-    def _stage_ping(self, working_rows, timeout):
-        """Стадия «Замер пинга» — только рабочие профили, параллельно."""
+        # 2. TCP-префильтр: мёртвый server:port отсекается за 1–2 с без Xray.
+        if Settings.tcp_prefilter() and items:
+            items = self._tcp_prefilter(items, handle)
+        if not items or self._cancel.is_set():
+            return ok_total, done_total
+
+        # 3. Батч-проверка: один Xray на пачку, пробы параллельно.
+        batch_size = Settings.check_batch_size()
+        samples = Settings.ping_samples()
+        add_log(
+            "DEBUG",
+            f"Check: {len(items)} после TCP-префильтра, батчи по {batch_size}, "
+            f"таймаут {timeout:.1f}с, медиана из {samples} проб",
+        )
+
+        def on_result(key, result):
+            handle(key, result["ok"], result["latency"], result["error"])
+
         try:
-            max_workers = Settings.max_workers()
-            with ThreadPoolExecutor(max_workers=max_workers) as tpool:
-                futures = {tpool.submit(self._ping_one, r, timeout): r for r in working_rows}
-                for f in as_completed(futures):
-                    if self._cancel.is_set():
-                        for ff in futures:
-                            ff.cancel()
-                        break
-                    try:
-                        f.result()
-                    except Exception as e:
-                        add_log("ERROR", f"Ping worker failed: {e}")
-        except Exception as e:
-            add_log("ERROR", f"Ping stage crashed: {e}")
+            self._checker.check(
+                items,
+                timeout=timeout,
+                batch_size=batch_size,
+                cancel=self._cancel,
+                on_result=on_result,
+                start_concurrency=batch_size,
+            )
+        except Exception as e:  # noqa: BLE001
+            add_log("ERROR", f"Check stage crashed: {e}")
+        return ok_total, done_total
 
-    # ─── Стадия 3: замер скорости (строго по одному) ───
+    def _tcp_prefilter(self, items, handle):
+        """Отсекает заведомо недоступные server:port. Возвращает выживших."""
+        timeout = Settings.tcp_prefilter_timeout()
+        parallel = max(1, min(Settings.check_batch_size(), len(items)))
+
+        def check_one(item):
+            key, parsed = item
+            ok, err = tcp_reachable(parsed["server"], parsed["port"], timeout)
+            return key, parsed, ok, err
+
+        survivors = []
+        with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix="tcp") as pool:
+            for key, parsed, ok, err in pool.map(check_one, items):
+                if self._cancel.is_set():
+                    break
+                if ok:
+                    survivors.append((key, parsed))
+                else:
+                    handle(key, False, 0, err)
+        return survivors
+
+    # ─── Стадия 2: замер скорости (строго по одному) ───
 
     @staticmethod
     def _measure_url_kbps(http_port, url, window_sec, min_kbps, adaptive_sec):
@@ -615,47 +560,77 @@ class ProxyManager:
             return 0
         return int((total * 8) / (elapsed * 1000))
 
-    @classmethod
-    def _measure_kbps(cls, http_port, window_sec):
-        """Замер скорости через HTTP-прокси с фиксированным окном window_sec.
-        Пробует основной speed_test_url, затем крупные fallback-файлы."""
-        window_sec = max(1, int(window_sec))
+    def _speed_urls(self) -> list[str]:
+        """Кандидаты URL замера: рабочий из этого прогона — первым.
+
+        Если какой-то URL уже дважды не дал данных в этом прогоне, он уходит
+        в конец: чаще всего он просто недоступен с exit-нод, и заставлять
+        каждый следующий профиль выжидать на нём полное окно бессмысленно.
+        """
         primary = Settings.get("speed_test_url", "").strip()
-        urls = []
-        if primary:
-            urls.append(primary)
+        candidates: list[str] = []
+        if self._speed_url:
+            candidates.append(self._speed_url)
+        if primary and primary not in candidates:
+            candidates.append(primary)
         for u in _SPEED_FALLBACK_URLS:
-            if u not in urls:
-                urls.append(u)
+            if u not in candidates:
+                candidates.append(u)
+        healthy = [
+            u for u in candidates
+            if u == self._speed_url or self._speed_failed.get(u, 0) < 2
+        ]
+        return healthy or candidates
+
+    def _measure_kbps(self, http_port, window_sec):
+        """Замер скорости через HTTP-прокси с фиксированным окном window_sec.
+
+        URL, с которого в этом прогоне уже качалось, пробуется первым: раньше
+        недоступный основной URL заставлял каждый профиль выжидать полное окно
+        на нём, прежде чем перейти к рабочему CDN.
+        """
+        window_sec = max(1, int(window_sec))
         min_kbps = Settings.min_speed_kbps()
         adaptive_sec = Settings.speed_test_adaptive_sec()
-        for url in urls:
-            kbps = cls._measure_url_kbps(http_port, url, window_sec, min_kbps, adaptive_sec)
+        for url in self._speed_urls():
+            kbps = self._measure_url_kbps(http_port, url, window_sec, min_kbps, adaptive_sec)
             if kbps:
+                self._speed_url = url
+                self._speed_failed.pop(url, None)
                 return kbps
+            self._speed_failed[url] = self._speed_failed.get(url, 0) + 1
         return 0
 
     def _stage_speed(self, speed_rows):
         """Стадия «Замер скорости» — СТРОГО по одному профилю за раз.
         Параллельные замеры скорости дают недостоверные данные (делят канал)."""
         window_sec = Settings.speed_test_duration_sec()
+        budget = Settings.speed_stage_budget_sec()
+        deadline = time.monotonic() + budget if budget else 0.0
         measured = 0
         for r in speed_rows:
             if self._cancel.is_set():
                 add_log("INFO", "Cancel requested, stopping speed stage")
+                break
+            if deadline and time.monotonic() > deadline:
+                add_log(
+                    "WARN",
+                    f"Speed stage: бюджет {budget}с исчерпан — {measured} замеров, "
+                    f"остальные профили пропущены",
+                )
                 break
             parsed = parse_vless(r["link"])
             host = r.get("host") or (parsed.get("server") if parsed else f"#{r['id']}")
             if not parsed:
                 self._stage_advance(False, current_text=f"#{r['id']} {host}: invalid link")
                 continue
-            proc, tmp_path, http_port, _err = ProxyManager._start_xray(parsed)
+            proc, tmp_path, http_port, _err = self._start_xray(parsed)
             if not proc:
                 self._stage_advance(False, current_text=f"#{r['id']} {host}: xray start failed")
                 continue
             try:
                 self._set_current(f"#{r['id']} {host} — замер {window_sec}с…")
-                kbps = ProxyManager._measure_kbps(http_port, window_sec)
+                kbps = self._measure_kbps(http_port, window_sec)
                 if kbps:
                     measured += 1
                     db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (kbps, r["id"]))
@@ -665,7 +640,7 @@ class ProxyManager:
                 self._stage_advance(kbps > 0,
                                     current_text=f"#{r['id']} {host}: {kbps}kbps" if kbps else f"#{r['id']} {host}: 0 kbps")
             finally:
-                ProxyManager._stop_xray(proc, tmp_path)
+                self._stop_xray(proc, tmp_path)
         if speed_rows and measured == 0:
             add_log(
                 "WARN",
@@ -678,13 +653,15 @@ class ProxyManager:
 
     def _execute_pipeline(self, rows, label, *, apply_config=False, apply_blocking=False,
                           cleanup_failed=False, import_srcs=None, enrich_after_check=False,
-                          rows_after_import=False):
+                          rows_after_import=False, timeout=None):
         """Выполняет поэтапный конвейер. Владелец УЖЕ держит _run_lock.
 
         import_srcs: list[dict] источников для стадии импорта (опционально,
         только для Import+Check) — каждый источник: {'id','type','url','name'}.
         rows_after_import: True — профили для проверки выбираются из БД уже
         ПОСЛЕ стадии импорта (чтобы тестировать свежеимпортированные).
+        timeout: таймаут пробы. По умолчанию — probe_timeout (быстрая проверка),
+        для ручного теста одного прокси передаётся vless_per_proxy_timeout.
         Возвращает (ok, total) стадии check.
         """
         cid = uuid.uuid4().hex[:12]
@@ -700,10 +677,10 @@ class ProxyManager:
                 def on_import_result(res):
                     """Прогресс стадии: один опрошенный источник — один шаг."""
                     advanced.add(res.get("id"))
-                    label = res.get("name") or f"#{res.get('id')}"
+                    label_ = res.get("name") or f"#{res.get('id')}"
                     self._stage_advance(
                         res.get("status") in importer.REACHED_STATUSES,
-                        current_text=f"источник: {label} ({res.get('status_label') or res['status']})",
+                        current_text=f"источник: {label_} ({res.get('status_label') or res['status']})",
                     )
 
                 try:
@@ -717,10 +694,10 @@ class ProxyManager:
                         if res.get("id") not in advanced:
                             # Пропущенные предохранителем или бюджетом — тоже шаг
                             # стадии: без этого прогресс стоит и закрывается скачком.
-                            label = res.get("name") or f"#{res.get('id')}"
+                            label_ = res.get("name") or f"#{res.get('id')}"
                             self._stage_advance(
                                 False,
-                                current_text=f"источник: {label} (пропущен)",
+                                current_text=f"источник: {label_} (пропущен)",
                             )
                     self._set_current("")
                 finally:
@@ -730,12 +707,12 @@ class ProxyManager:
                     return self._check_stats
 
             if rows_after_import:
-                rows = db_q("SELECT id, link, host FROM proxies")
+                rows = self._due_rows()
             if rows:
                 rows = [dict(r) for r in rows]
 
-            # ── Стадия 1: проверка работоспособности ──
-            timeout = Settings.vless_per_proxy_timeout()
+            # ── Стадия 1: проверка работоспособности (+ медиана пинга) ──
+            timeout = float(timeout if timeout is not None else Settings.probe_timeout())
             if not rows:
                 self._skip_stage("check", "Проверка работоспособности")
             else:
@@ -750,27 +727,14 @@ class ProxyManager:
                     summary += " · не работают: " + ", ".join(parts)
                 add_log("INFO", f"Check done · {summary} · {moscow_str()}")
                 if enrich_after_check:
-                    from .utils import enrich_all_unknown_countries
-                    enrich_all_unknown_countries()
+                    schedule_country_enrichment()
                 if self._cancel.is_set():
                     self._finish_run(label)
                     return self._check_stats
 
-            # ── Стадия 2: пинг рабочих профилей прогона ──
+            # ── Стадия 2: скорость — строго по одному профилю ──
             row_ids = [r["id"] for r in rows if r.get("id")]
             working = self._working_rows(row_ids) if row_ids else []
-            if working:
-                self._begin_stage("ping", "Замер пинга", len(working))
-                add_log("INFO", f"Ping stage ({label}): {len(working)} working proxies (median of {PING_SAMPLES})")
-                self._stage_ping(working, timeout)
-                self._end_stage()
-                if self._cancel.is_set():
-                    self._finish_run(label)
-                    return self._check_stats
-            else:
-                self._skip_stage("ping", "Замер пинга")
-
-            # ── Стадия 3: скорость — строго по одному профилю ──
             if self._speed_enabled_for(working):
                 speed_rows = self._speed_rows(row_ids)
                 if speed_rows:
@@ -786,10 +750,7 @@ class ProxyManager:
 
             # ── Пост-обработка ──
             if cleanup_failed and not self._cancel.is_set():
-                deleted = db_q("SELECT COUNT(*) c FROM proxies WHERE status='failed'")[0]["c"]
-                if deleted:
-                    db_q("DELETE FROM proxies WHERE status='failed'")
-                    add_log("INFO", f"Auto-cleanup: deleted {deleted} failed proxies")
+                self._cleanup_failed()
 
             if apply_config and not self._cancel.is_set():
                 from .xray_configurator import xray_configurator
@@ -798,15 +759,26 @@ class ProxyManager:
 
             self._finish_run(label)
             return self._check_stats
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             add_log("ERROR", f"Pipeline {label} crashed: {e}")
             self._finish_run(label)
             return self._check_stats
 
+    def _cleanup_failed(self):
+        """Автоудаление только тех профилей, что упали несколько раз подряд."""
+        deleted = db_q(
+            "SELECT COUNT(*) c FROM proxies WHERE status='failed' AND COALESCE(fail_count, 0) >= 3"
+        )[0]["c"]
+        if deleted:
+            db_q(
+                "DELETE FROM proxies WHERE status='failed' AND COALESCE(fail_count, 0) >= 3"
+            )
+            add_log("INFO", f"Auto-cleanup: deleted {deleted} failed proxies (3+ fails)")
+
     def _speed_enabled_for(self, working) -> bool:
         if Settings.get("speed_test_enabled", "true") != "true":
             return False
-        if int(Settings.get("speed_test_max", "15")) <= 0:
+        if int(Settings.get("speed_test_max", "8")) <= 0:
             return False
         if not working:
             return False
@@ -826,7 +798,7 @@ class ProxyManager:
 
     def _speed_rows(self, row_ids):
         """Топ-N рабочих профилей прогона по пингу для замера скорости."""
-        speed_max = int(Settings.get("speed_test_max", "15"))
+        speed_max = int(Settings.get("speed_test_max", "8"))
         if speed_max <= 0:
             return []
         placeholders = ",".join("?" * len(row_ids))
@@ -837,6 +809,15 @@ class ProxyManager:
                 row_ids + [speed_max],
             )
         ]
+
+    def _due_rows(self):
+        """Профили, которым пора на проверку (упавшие ждут своей паузы)."""
+        now = now_utc()
+        return db_q(
+            "SELECT id, link, host FROM proxies "
+            "WHERE next_test_at IS NULL OR next_test_at <= ? ORDER BY id ASC",
+            (now,),
+        )
 
     def _reason_summary(self):
         """Сводка причин отказов ТЕКУЩЕГО прогона (из стадии check)."""
@@ -851,7 +832,7 @@ class ProxyManager:
     def start_test_all(self) -> bool:
         """Запускает полный конвейер для всех прокси (в фоне).
         True — запущен, False — уже идёт другой замер или нет прокси."""
-        rows = db_q("SELECT id, link, host FROM proxies")
+        rows = db_q("SELECT id, link, host FROM proxies ORDER BY id ASC")
         if not rows:
             add_log("WARN", "Test all: no proxies to test")
             return False
@@ -886,7 +867,7 @@ class ProxyManager:
                     apply_config=apply_config,
                     apply_blocking=apply_blocking,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 add_log("ERROR", f"Pipeline {label} crashed: {e}")
             finally:
                 try:
@@ -909,7 +890,10 @@ class ProxyManager:
             add_log("WARN", f"Another test is running — single test #{pid} skipped")
             return {"busy": True}
         try:
-            self._execute_pipeline([row], "single", apply_config=False)
+            self._execute_pipeline(
+                [row], "single", apply_config=False,
+                timeout=float(Settings.vless_per_proxy_timeout()),
+            )
             after = db_q(
                 "SELECT status, latency, latency_vless, speed_kbps, last_error FROM proxies WHERE id=?",
                 (pid,),
@@ -968,7 +952,7 @@ class ProxyManager:
                 elif due_db:
                     self._last_run_db = now
                     threading.Thread(target=self._run_db_chain, daemon=True).start()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 add_log("ERROR", f"Background checker crashed: {e}")
 
     def failover_checker(self):
@@ -1005,7 +989,7 @@ class ProxyManager:
                         f"Failover: only {active}/{expected} node outbounds active — triggering rebuild",
                     )
                     xray_configurator.apply_all(blocking=False)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 add_log("ERROR", f"Failover checker crashed: {e}")
 
     def _run_import_chain(self):
@@ -1033,7 +1017,7 @@ class ProxyManager:
             # import+check протестировал все прокси — db-check не нужен
             self._last_run_db = time.time()
             add_log("INFO", "Import+check cycle completed")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             add_log("ERROR", f"Import+check cycle crashed: {e}")
         finally:
             try:
@@ -1042,21 +1026,29 @@ class ProxyManager:
                 pass
 
     def _run_db_chain(self):
-        """Проверка прокси из БД (без импорта) → сборка конфига."""
+        """Проверка прокси из БД (без импорта) → сборка конфига.
+
+        Берутся только профили, которым пора по backoff: при 1500 профилях
+        из которых 1490 мёртвых, прогон не тратит на них время каждый раз.
+        """
+        rows = self._due_rows()
+        if not rows:
+            add_log("INFO", "DB check: нет профилей, которым пора на проверку — пропуск")
+            self._last_run_db = time.time()
+            return
         if not self._run_lock.acquire(blocking=False):
             add_log("WARN", "DB check skipped: another measurement in progress")
             return
         try:
-            rows = db_q("SELECT id, link, host FROM proxies")
             self._execute_pipeline(
-                rows,
+                [dict(r) for r in rows],
                 "db-check",
                 enrich_after_check=True,
                 apply_config=Settings.get("apply_after_test", "true") == "true",
                 cleanup_failed=Settings.get("db_check_auto_cleanup", "false") == "true",
             )
             add_log("INFO", "DB check cycle completed")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             add_log("ERROR", f"DB check cycle crashed: {e}")
         finally:
             try:
