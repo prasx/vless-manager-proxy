@@ -12,24 +12,9 @@
   </div>
 </header>
 
-{# Навигация сгруппирована по смыслу: соединение → маршрутизация → проверка качества →
-   обслуживание. Порядок ссылок совпадает с порядком секций ниже, иначе подсветка
-   активного раздела и переходы по якорям разъезжаются. #}
-<nav class="settings-nav" id="settingsNav" aria-label="Разделы настроек">
-  <a href="#sec-xray">Xray</a>
-  <a href="#sec-network">Сеть</a>
-  <a href="#sec-sniffing">Сниффинг</a>
-  <span class="settings-nav-sep" aria-hidden="true"></span>
-  <a href="#sec-filter">Конфиг и фильтры</a>
-  <a href="#sec-geo">Правила GeoSite</a>
-  <a href="#sec-balancer">Балансировщик</a>
-  <span class="settings-nav-sep" aria-hidden="true"></span>
-  <a href="#sec-check">Проверка прокси</a>
-  <a href="#sec-speed">Тест скорости</a>
-  <a href="#sec-perf">Производительность</a>
-  <span class="settings-nav-sep" aria-hidden="true"></span>
-  <a href="#sec-system">Логи и бэкап</a>
-</nav>
+{# Разделы идут единым потоком без залипающего меню: десять якорей в две строки
+   отнимали первый экран, а подсветка активного раздела на длинной странице
+   всё равно не успевала за скроллом. #}
 
 <div class="data-error" id="settingsError" role="status" hidden>
   <span id="settingsErrorText"></span>

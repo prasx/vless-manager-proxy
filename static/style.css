@@ -739,38 +739,7 @@ dialog.modal::backdrop { background: var(--overlay); }
 .app-footer a { color: var(--text-muted); text-decoration: none; }
 .app-footer a:hover { color: var(--text-primary); }
 
-/* ─── Настройки: навигация и секции ─── */
-.settings-nav {
-  position: sticky;
-  top: 0;
-  z-index: 80;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin: 0 0 16px;
-  padding: 8px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.settings-nav a {
-  padding: 4px 8px;
-  font-size: 0.78rem;
-  line-height: 1.6;
-  color: var(--text-muted);
-  text-decoration: none;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  transition: color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
-}
-.settings-nav a:hover { color: var(--text-primary); border-color: var(--border); background: var(--bg-secondary); }
-.settings-nav a.active { color: var(--green); border-color: var(--green); background: var(--tint-green); }
-.settings-nav-sep {
-  width: 1px;
-  align-self: stretch;
-  margin: 4px 4px;
-  background: var(--border);
-}
+/* ─── Настройки: секции ─── */
 .settings-section {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -1044,7 +1013,7 @@ dialog.modal::backdrop { background: var(--overlay); }
 .bar > span { display: block; height: 100%; background: var(--green); }
 
 @media (pointer: coarse) {
-  .btn, .btn-sm, .nav a, .settings-nav a, .tab, .conn-filter { min-height: 44px; }
+  .btn, .btn-sm, .nav a, .tab, .conn-filter { min-height: 44px; }
   input:not([type="checkbox"]):not([type="range"]), select { min-height: 44px; }
   .chk-custom, .chk-safe input { width: 20px; height: 20px; }
   .chk-label, .chk-safe { padding: 8px 0; }
@@ -1060,7 +1029,7 @@ dialog.modal::backdrop { background: var(--overlay); }
 }
 
 
-/* ===== ??????? ===== */
+/* ===== Дашборд ===== */
 /* Дашборд: фигуры, состояние Xray, фильтры и таблица прокси. */
 
 /* ─── Фигуры ─── */
@@ -1201,7 +1170,6 @@ dialog.modal::backdrop { background: var(--overlay); }
 .desktop-table { display: none; }
 @media (min-width: 900px) {
   .desktop-table { display: table; }
-  .mobile-list { display: none; }
 }
 .desktop-table th.chk,
 .desktop-table td.chk { width: 40px; text-align: center; }
@@ -1283,8 +1251,15 @@ dialog.modal::backdrop { background: var(--overlay); }
 }
 .mobile-card .mc-status .cell-err { max-width: 100%; font-size: 0.75rem; }
 
+/* Таблица и карточки — две ветки одного списка: на десктопе видна только
+   таблица, на телефоне только карточки. Правило спрятать карточки должно
+   стоять после их базового display, иначе оно проигрывает по порядку. */
+@media (min-width: 900px) {
+  .mobile-list { display: none; }
+}
 
-/* ===== ????????? ===== */
+
+/* ===== Источники ===== */
 /* Источники: состав конфига, таблица источников, добавление. */
 
 .text-bad { color: var(--red); }
@@ -1640,7 +1615,7 @@ dialog.modal::backdrop { background: var(--overlay); }
 .dg-step.bad { color: var(--red); border-color: var(--red); }
 
 
-/* ===== ???? ===== */
+/* ===== Логи ===== */
 /* Логи: фильтр уровня и таблица сообщений. */
 
 .filters {

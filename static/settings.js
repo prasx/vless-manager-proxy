@@ -865,35 +865,6 @@ async function importBackup(event) {
   event.target.value = '';
 }
 
-// ─── Подсветка активного раздела в залипающем меню ───
-function initSettingsNav() {
-  const nav = $('settingsNav');
-  if (!nav) return;
-  const links = $$('#settingsNav a[href^="#"]');
-  const targets = links
-    .map(a => document.querySelector(a.getAttribute('href')))
-    .filter(Boolean);
-  if (!targets.length) return;
-  const OFFSET = 88;
-
-  function update() {
-    const pos = window.scrollY + OFFSET;
-    let current = targets[0].id;
-    for (const section of targets) {
-      if (section.getBoundingClientRect().top + window.scrollY <= pos) current = section.id;
-    }
-    // Последний раздел может быть короче экрана — у самого низа страницы
-    // подсвечиваем его, иначе он не подсвечивается никогда.
-    const atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
-    if (atBottom) current = targets[targets.length - 1].id;
-    links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + current));
-  }
-
-  window.addEventListener('scroll', update, { passive: true });
-  window.addEventListener('resize', update);
-  update();
-}
-
 // ─── Инициализация ───
 _rangeDb = setupRange('checkIntervalDb', 'checkIntervalDbLabel');
 _rangeImport = setupRange('checkIntervalImport', 'checkIntervalImportLabel');
@@ -903,7 +874,6 @@ $('speedTestEnabled').addEventListener('change', updateSpeedTestDependants);
 });
 $('tcpPrefilter').addEventListener('change', updatePerfEstimate);
 
-initSettingsNav();
 refreshAll();
 setInterval(() => {
   api('GET', '/api/xray/status').then(s => { if (!s.error) renderXrayStatus(s); });
