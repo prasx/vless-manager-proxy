@@ -19,7 +19,10 @@ ETC_XRAY_CONFIG = Path("/etc/xray/config.json")  # systemd-конфиг Xray
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")  # Для отображения времени в UI
 UTC_TZ = ZoneInfo("UTC")  # Для хранения в БД
 
-# ─── Порты Xray ───────────────────────────────────────
+# ─── Порты Xray (значения по умолчанию) ───────────────
+# Реальные значения живут в настройках БД (`socks_port`, `http_port`,
+# `api_port`) и меняются в UI. Эти константы — заводские значения и fallback
+# для новых установок; модули читают порты через Settings.*_port().
 SOCKS_PORT = 1080  # SOCKS5 inbound (для клиентов)
 HTTP_PORT = 1081  # HTTP inbound
 API_PORT = 10085  # gRPC API Xray (add/remove outbound)

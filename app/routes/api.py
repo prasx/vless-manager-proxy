@@ -15,7 +15,7 @@ from ..utils import add_log, moscow_str, now_utc, list_active_connections, close
 from config import SUBSCRIBE_FILE
 from ..vless import parse_vless
 from ..proxy_manager import proxy_manager
-from .. import importer
+from .. import importer, netcheck
 from ..importer import import_url, import_source, import_sources, save_source_status
 from ..xray_configurator import xray_configurator
 from ..subscribe import update_subscribe_cache
@@ -260,13 +260,32 @@ def api_add():
 def api_test(pid):
     """POST /api/test/<id> — полный поэтапный тест одного прокси
     (работоспособность → пинг → скорость). Эксклюзивный: если уже идёт
-    другой замер — вернёт busy."""
+    другой замер — вернёт busy.
+
+    Тело JSON опционально: {"speed_url": "http://…"} — проверить конкретный
+    файл замера через этот профиль (диагностика «качается ли файл у узла»).
+    """
     rows = db_q("SELECT id FROM proxies WHERE id=?", (pid,))
     if not rows:
         return jsonify(error="Not found"), 404
-    res = proxy_manager.measure_single(pid)
+    payload = request.get_json(silent=True) or {}
+    speed_url = str(payload.get("speed_url") or "").strip()
+    res = proxy_manager.measure_single(pid, speed_url=speed_url)
     if res.get("busy"):
-        return jsonify(error="Идёт другой тест — замеры не запускаются параллельно"), 409
+        where = res.get("running_label") or res.get("phase") or "фоновая проверка"
+        progress = f"{res.get('done', 0)}/{res.get('total', 0)}"
+        return jsonify(
+            error=(
+                f"Идёт другой тест ({where}, {progress}) — замеры не запускаются "
+                "параллельно; дождитесь завершения или отмените (/api/test-cancel)"
+            ),
+            busy=True,
+            running_label=res.get("running_label", ""),
+            phase=res.get("phase", ""),
+            done=res.get("done", 0),
+            total=res.get("total", 0),
+            current=res.get("current", ""),
+        ), 409
     if res.get("error") and res.get("status") != "working":
         status = "failed"
         detail = f" — {res['error']}"
@@ -280,10 +299,20 @@ def api_test(pid):
             if peak:
                 detail += f", max {peak}kbps"
         detail += ")"
+        if not speed and res.get("speed_error"):
+            detail += f" · скорость: {str(res['speed_error'])[:160]}"
     add_log("INFO", f"Tested proxy #{pid} → {status}{detail}")
-    return jsonify(status=res.get("status", "failed"), latency=res.get("latency", 0),
-                   speed=res.get("speed", 0), speed_max=res.get("speed_max", 0),
-                   error=None if res.get("status") == "working" else res.get("error"))
+    return jsonify(
+        status=res.get("status", "failed"),
+        latency=res.get("latency", 0),
+        speed=res.get("speed", 0),
+        speed_max=res.get("speed_max", 0),
+        speed_url=res.get("speed_url", ""),
+        speed_error=res.get("speed_error", ""),
+        speed_errors=res.get("speed_errors", {}),
+        xray_log=res.get("xray_log", ""),
+        error=None if res.get("status") == "working" else res.get("error"),
+    )
 
 
 @api_bp.route("/delete/<int:pid>", methods=["DELETE"])
@@ -585,6 +614,71 @@ def api_import_diagnose():
     )
 
 
+# ─── URL проверки и файла замера ───
+
+
+@api_bp.route("/urls/candidates")
+def api_urls_candidates():
+    """GET /api/urls/candidates — каталоги URL проверки и файла замера.
+
+    UI показывает их в блоке «Тест URL» и подсвечивает текущий выбор.
+    """
+    last = netcheck.probe_url_last_test()
+    return jsonify(
+        probe={
+            "current": Settings.probe_url(),
+            "candidates": netcheck.probe_url_catalog(),
+        },
+        speed={
+            "current": Settings.get("speed_test_url", ""),
+            "candidates": netcheck.speed_url_catalog(),
+        },
+        last_test=last,
+        auto=Settings.probe_url_auto(),
+    )
+
+
+@api_bp.route("/urls/test", methods=["GET", "POST"])
+def api_urls_test():
+    """GET/POST /api/urls/test — тест лучших ссылок для остальных проверок.
+
+    Параметры: `kind` = probe | speed | all, `apply` (по умолчанию true),
+    `timeout` (2..30 с), `urls` — свой список кандидатов (строка/массив).
+    Проверяет кандидатов напрямую из панели (DNS/TCP/TLS/HTTP) и применяет
+    лучшего в настройки; отчёт отдаётся в UI таблицей.
+    """
+    data = request.get_json(silent=True) or {}
+    kind = str(data.get("kind") or request.args.get("kind") or "probe").lower()
+    apply_raw = data.get("apply", request.args.get("apply", "true"))
+    apply = str(apply_raw).strip().lower() not in ("0", "false", "no", "off")
+    try:
+        timeout = float(data.get("timeout") or request.args.get("timeout") or 6)
+    except (TypeError, ValueError):
+        timeout = 6.0
+    timeout = max(2.0, min(30.0, timeout))
+    urls = data.get("urls") or request.args.getlist("url")
+    if isinstance(urls, str):
+        urls = [urls]
+    if urls:
+        urls = [str(u).strip() for u in urls if str(u).strip()]
+
+    if kind == "all":
+        probe_report = netcheck.test_and_apply("probe", urls or None, timeout=timeout, apply=apply)
+        speed_report = netcheck.test_and_apply("speed", None, timeout=timeout, apply=apply)
+        report = {"probe": probe_report, "speed": speed_report}
+    else:
+        report = netcheck.test_and_apply(kind, urls or None, timeout=timeout, apply=apply)
+
+    # probe_url участвует в observatory Xray — после смены пересобираем конфиг
+    # тем же путём, что и сохранение настроек.
+    applied_probe = report.get("applied") if kind != "all" else report["probe"].get("applied")
+    if applied_probe:
+        threading.Thread(
+            target=lambda: xray_configurator.apply_all(blocking=True), daemon=True
+        ).start()
+    return jsonify(**report)
+
+
 # ─── Настройки ───
 
 _REBUILD_KEYS = {
@@ -594,6 +688,9 @@ _REBUILD_KEYS = {
     "require_speed",
     "sniffing_enabled", "sniffing_dest_override", "sniffing_route_only",
     "geosite_rules", "proxy_listen",
+    # Порты входят в конфиг Xray (inbounds + API): меняются только вместе с
+    # пересборкой конфига и перезапуском демона.
+    "socks_port", "http_port", "api_port",
 }
 
 
@@ -650,16 +747,24 @@ _INT_RANGES = {
     "check_interval_db": (1, 604800),
     "check_interval_import": (1, 2592000),
     "max_workers": (1, 256),
-    "probe_timeout": (1, 300),
+    "probe_timeout": (1, 60),
+    "probe_retries": (0, 3),
     "xray_startup_retries": (1, 1000),
-    "check_batch_size": (1, 500),
+    "check_batch_size": (4, 256),
+    "tcp_prefilter_workers": (4, 512),
     "ping_samples": (1, 10),
-    "speed_stage_budget_sec": (0, 3600),
+    "tcp_prefilter_retries": (0, 3),
+    "speed_stage_budget_sec": (0, 7200),
+    "socks_port": (1, 65535),
+    "http_port": (1, 65535),
+    "api_port": (1, 65535),
 }
 
 _FLOAT_RANGES = {
-    "tcp_prefilter_timeout": (0.5, 5.0),
+    "tcp_prefilter_timeout": (0.5, 10.0),
 }
+
+_PORT_KEYS = ("socks_port", "http_port", "api_port")
 
 
 def _validate_settings(data: dict) -> None:
@@ -682,6 +787,25 @@ def _validate_settings(data: dict) -> None:
             raise ValueError(f"{key} must be a number, got {data[key]!r}")
         if not low <= val <= high:
             raise ValueError(f"{key} must be in {low}..{high}, got {val}")
+
+    # Порты inbound/API должны быть разными: иначе Xray не поднимется, а панель
+    # будет стучаться в чужой порт. Проверяем итоговые значения (сохранённые
+    # плюс присланные), чтобы правка одного порта не конфликтовала с другими.
+    if any(k in data for k in _PORT_KEYS):
+        ports = {}
+        for key in _PORT_KEYS:
+            if key in data:
+                try:
+                    ports[key] = int(data[key])
+                except (ValueError, TypeError):
+                    raise ValueError(f"{key} must be an integer, got {data[key]!r}")
+            else:
+                ports[key] = int(Settings.get(key, "0") or 0)
+        if len(set(ports.values())) != len(ports):
+            raise ValueError(
+                "Порты SOCKS, HTTP и API должны различаться: "
+                + ", ".join(f"{k}={v}" for k, v in ports.items())
+            )
 
 
 # ─── Бекап настроек и источников ───
@@ -763,14 +887,18 @@ def api_xray_status():
     """GET /api/xray/status — статус Xray (running, API, systemd, outbounds, config)."""
     api_ok = xray_configurator.api_ok()
     d = xray_configurator.diagnose()
-    running = api_ok or (d["systemd_active"] and d["ports"].get("1080"))
+    socks_port = Settings.socks_port()
+    running = api_ok or (d["systemd_active"] and d["ports"].get(str(socks_port)))
     live_nodes = sorted(xray_configurator.live_node_tags()) if api_ok else []
     # Тем же селектором, что и генератор конфига (единственная политика допуска).
     sel = xray_configurator.select_nodes(0)
     return jsonify(
         running=bool(running),
         api_accessible=api_ok,
-        api_endpoint="127.0.0.1:10085",
+        api_endpoint=f"127.0.0.1:{Settings.api_port()}",
+        socks_port=socks_port,
+        http_port=Settings.http_port(),
+        api_port=Settings.api_port(),
         systemd_active=d["systemd_active"],
         config_mismatch=d["config_mismatch"],
         active_outbounds=xray_configurator.list_active_outbounds() if api_ok else [],
@@ -911,7 +1039,9 @@ def api_health():
     xr = xray_configurator
     api_ok = xr.api_ok()
     d = xr.diagnose()
-    xray_running = bool(api_ok or (d["systemd_active"] and d["ports"].get("1080")))
+    xray_running = bool(
+        api_ok or (d["systemd_active"] and d["ports"].get(str(Settings.socks_port())))
+    )
     proxy_count = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
     return jsonify(
         status="ok" if db_ok else "error",
@@ -1072,18 +1202,31 @@ def api_performance_recommendations():
 
     batch = Settings.check_batch_size()
     probe_t = Settings.probe_timeout()
+    probe_retries = Settings.probe_retries()
     prefilter = Settings.tcp_prefilter()
     tcp_t = Settings.tcp_prefilter_timeout()
+    tcp_retries = Settings.tcp_prefilter_retries()
+    prefilter_workers = Settings.tcp_prefilter_workers()
     speed_enabled = Settings.get("speed_test_enabled", "true") == "true"
     speed_max = int(Settings.get("speed_test_max", "8") or 0)
     speed_win = Settings.speed_test_duration_sec()
     speed_budget = Settings.speed_stage_budget_sec()
 
-    def check_seconds(count: int, batch_size: int, probe: float, with_prefilter: bool) -> float:
+    # Худшее время: каждая попытка выжидает таймаут, повторы идут с шагом ×1.5.
+    probe_worst = probe_t * (1 + 0.5 * probe_retries)
+    tcp_worst = tcp_t * (1 + 0.5 * tcp_retries)
+
+    def prefilter_seconds(count: int, with_prefilter: bool) -> float:
+        if count <= 0 or not with_prefilter:
+            return 0.0
+        waves = -(-count // max(1, prefilter_workers))
+        return waves * tcp_worst
+
+    def check_seconds(count: int, batch_size: int, probe: float) -> float:
         if count <= 0:
             return 0.0
         waves = -(-count // max(1, batch_size))
-        return waves * ((tcp_t if with_prefilter else 0) + probe)
+        return waves * probe
 
     def speed_seconds(working_count: int, top_n: int, window: int) -> float:
         if not speed_enabled or top_n <= 0 or working_count <= 0:
@@ -1091,15 +1234,17 @@ def api_performance_recommendations():
         est = min(top_n, working_count) * window
         return min(est, speed_budget) if speed_budget else est
 
-    check_est = check_seconds(due, batch, probe_t, prefilter)
+    prefilter_est = prefilter_seconds(due, prefilter)
+    check_est = check_seconds(due, batch, probe_worst)
     speed_est = speed_seconds(working, speed_max, speed_win)
-    current_est = check_est + speed_est
+    current_est = prefilter_est + check_est + speed_est
 
     targets = []
-    for b, pt, sc in ((128, 5, 8), (64, 5, 8), (48, 4, 5), (32, 4, 5), (16, 4, 5)):
-        c_est = check_seconds(due, b, pt, prefilter)
-        s_est = speed_seconds(working, sc, speed_win)
-        est = c_est + s_est
+    for b, pt, sc in ((256, probe_t, speed_max), (128, probe_t, speed_max),
+                      (64, 5, 8), (48, 4, 5), (32, 4, 5)):
+        pw = pt * (1 + 0.5 * probe_retries)
+        est = prefilter_seconds(due, prefilter) + check_seconds(due, b, pw) + \
+            speed_seconds(working, sc, speed_win)
         targets.append(
             {
                 "batch_size": b,
@@ -1130,8 +1275,12 @@ def api_performance_recommendations():
         current={
             "check_batch_size": batch,
             "probe_timeout": probe_t,
+            "probe_retries": probe_retries,
             "tcp_prefilter": prefilter,
             "tcp_prefilter_timeout": tcp_t,
+            "tcp_prefilter_retries": tcp_retries,
+            "tcp_prefilter_workers": prefilter_workers,
+            "prefilter_seconds": round(prefilter_est),
             "check_seconds": round(check_est),
             "speed_seconds": round(speed_est),
             "estimated_seconds": round(current_est),

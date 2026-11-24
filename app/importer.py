@@ -14,8 +14,10 @@ GitHub/GitLab закрыты без прокси) прогон из десятк
 
 import base64
 import hashlib
+import html
 import http.client
 import json
+import re
 import socket
 import ssl
 import subprocess
@@ -59,8 +61,8 @@ STATUS_LABELS = {
 
 IMPORT_TIMEOUT = 20       # таймаут сокетной операции urllib, сек (не общее время скачивания)
 CURL_TIMEOUT = 12         # таймаут curl-фолбэка, сек
-IMPORT_BUDGET_SEC = 90    # бюджет времени на прогон всех источников, сек
-NETWORK_BREAK_AFTER = 2   # столько сетевых сбоев подряд — сеть считаем лежащей
+IMPORT_BUDGET_SEC = 120   # бюджет времени на прогон всех источников, сек
+NETWORK_BREAK_AFTER = 3   # столько сетевых сбоев подряд — повод проверить, жива ли сеть
 
 # Запись в БД и чистка устаревших сериализуются: два одновременных импорта
 # (ручной «Импорт всех» и стадия конвейера) иначе удаляли бы свежие строки
@@ -338,17 +340,81 @@ def fetch_url(url: str, *, use_etag: bool = True, allow_curl: bool = True,
 
 # ─── Разбор и запись в БД ───
 
+# Хвосты, которые остаются у ссылки из HTML/JSON/Markdown/CSV.
+_LINK_TRAILING = ".,;:)]}\"'»”"
+_LINK_SPLIT_RE = re.compile(r"(?i)(?=vless://)")
+_LINK_RE = re.compile(r"(?i)vless://\S+")
+
+
+def _decode_base64_text(text: str) -> str:
+    """Декодирует base64-подписку (в т.ч. URL-safe и без padding). Пусто при сбое."""
+    compact = re.sub(r"\s+", "", text or "")
+    if len(compact) < 64:
+        return ""
+    standard = compact.replace("-", "+").replace("_", "/")
+    pad = "=" * (-len(standard) % 4)
+    try:
+        raw = base64.b64decode(standard + pad, validate=False)
+    except Exception:
+        return ""
+    decoded = raw.decode("utf-8", errors="replace")
+    # Бинарный мусор не должен прикидываться подпиской.
+    return decoded if "vless://" in decoded.lower() else ""
+
+
+def _extract_vless_links(text: str) -> list[str]:
+    """Все vless:// ссылки из произвольного текста, включая склеенные.
+
+    Публичные подписки приходят не только построчно: это может быть HTML-страница,
+    JSON, Markdown-таблица или base64. Раньше разбор требовал, чтобы строка
+    начиналась с `vless://`, поэтому такие источники давали «нет vless-ссылок».
+    HTML-мнемоники (`&amp;`) раскрываются: без этого у reality-узлов не находился
+    `pbk` и они отбрасывались.
+    """
+    out: list[str] = []
+    for part in _LINK_SPLIT_RE.split(html.unescape(text or "")):
+        if not part.lower().startswith("vless://"):
+            continue
+        m = _LINK_RE.match(part)
+        if not m:
+            continue
+        link = m.group(0).strip().rstrip(_LINK_TRAILING)
+        if link.lower().startswith("vless://") and len(link) > len("vless://"):
+            out.append(link)
+    return out
+
+
+def _dedupe_links(links: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for link in links:
+        if link in seen:
+            continue
+        seen.add(link)
+        out.append(link)
+    return out
+
 
 def _split_vless_lines(content: str) -> list[str]:
-    """vless:// ссылки из контента; если их нет — пробуем base64-подписку."""
-    lines = [ln.strip() for ln in content.splitlines() if ln.strip().startswith("vless://")]
-    if lines:
-        return lines
-    try:
-        decoded = base64.b64decode(content, validate=False).decode("utf-8", errors="replace")
-    except Exception:
-        return []
-    return [ln.strip() for ln in decoded.splitlines() if ln.strip().startswith("vless://")]
+    """vless:// ссылки из контента: текст, base64 целиком или base64 построчно."""
+    text = html.unescape(content or "")
+    links = _extract_vless_links(text)
+    if links:
+        return _dedupe_links(links)
+    decoded = _decode_base64_text(text)
+    if decoded:
+        links = _extract_vless_links(decoded)
+        if links:
+            return _dedupe_links(links)
+    # Подписка может быть построчно в base64 (по одной ссылке на строку).
+    for line in text.splitlines():
+        line = line.strip()
+        if len(line) < 64 or "vless://" in line.lower():
+            continue
+        decoded_line = _decode_base64_text(line)
+        if decoded_line:
+            links.extend(_extract_vless_links(decoded_line))
+    return _dedupe_links(links)
 
 
 def _schedule_enrichment() -> None:
@@ -393,9 +459,6 @@ def parse_and_store(content: str, *, source_id=None, label: str = "") -> dict:
     source_links: list[str] = []  # все разобранные ссылки источника (для чистки)
     rows: list[tuple] = []
     for link in lines:
-        if link in seen:
-            continue
-        seen.add(link)
         try:
             parsed = parse_vless(link)
         except Exception:
@@ -403,15 +466,21 @@ def parse_and_store(content: str, *, source_id=None, label: str = "") -> dict:
             parsed = None
         if not parsed:
             continue
+        # В БД — очищенная ссылка (html.unescape), иначе один и тот же узел
+        # придёт дважды: с `&amp;` и с обычным `&`.
+        clean_link = parsed.get("link") or link
+        if clean_link in seen:
+            continue
+        seen.add(clean_link)
         stats["parsed"] += 1
-        source_links.append(link)
+        source_links.append(clean_link)
         sec = parsed.get("security", "none") or "none"
         if safe_only and sec == "none":
             stats["skipped_unencrypted"] += 1
             continue
-        valid_links.append(link)
+        valid_links.append(clean_link)
         rows.append(
-            (link, parsed["host"], parsed["port"], parsed.get("country", ""),
+            (clean_link, parsed["host"], parsed["port"], parsed.get("country", ""),
              "pending", sec, now_utc(), source_id)
         )
 
@@ -552,8 +621,10 @@ def _import_txt(source_id, *, label: str = "") -> dict:
     result = _result(source_id, label, "txt", STATUS_OK)
     rows = db_q("SELECT name, content FROM sources WHERE id=?", (source_id,))
     if not rows:
-        result["status"] = STATUS_ERROR
-        return _fail(result, f"источник #{source_id} не найден")
+        # Источник удалили между снимком списка и импортом — это не ошибка
+        # сети и не повод для ERROR в логах.
+        result["status"] = STATUS_SKIPPED
+        return _fail(result, f"источник #{source_id} уже удалён — пропущен")
     result["name"] = rows[0]["name"] or result["name"]
     content = (rows[0]["content"] or "").strip()
     if not content:
@@ -655,6 +726,27 @@ def summarize(results: list[dict]) -> dict:
     }
 
 
+def _network_alive(timeout: float = 4.0) -> bool:
+    """Жива ли сеть сервера вообще: DNS+TCP до заведомо доступных хостов.
+
+    Нужна предохранителю импорта: раньше два сетевых сбоя подряд (например,
+    заблокированный raw.githack.com) помечали сеть «лежащей» и пропускали все
+    остальные источники — в том числе рабочие GitHub/GitLab. Теперь останавливаем
+    прогон только если недоступны и независимые хосты.
+    """
+    for host, port in (
+        ("1.1.1.1", 443),
+        ("cloudflare.com", 443),
+        ("github.com", 443),
+    ):
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def import_sources(sources: list[dict], *, budget_seconds: int = IMPORT_BUDGET_SEC,
                    network_break_after: int = NETWORK_BREAK_AFTER,
                    allow_curl: bool = True, use_etag: bool = True,
@@ -717,7 +809,19 @@ def import_sources(sources: list[dict], *, budget_seconds: int = IMPORT_BUDGET_S
             curl_probe_done = True
             network_failures += 1
             if network_failures >= network_break_after:
-                network_down = True
+                # Частый случай: заблокирован конкретный хост (githack/rawcdn),
+                # а сеть и остальные источники работают. Проверяем независимые
+                # хосты и, если сеть жива, продолжаем импорт, а не сдаёмся.
+                if _network_alive():
+                    add_log(
+                        "DEBUG",
+                        f"Импорт: {network_failures} источников подряд недоступны, "
+                        "но сеть жива — это блокировки отдельных хостов, продолжаем",
+                    )
+                    network_failures = 0
+                    curl_probe_done = False
+                else:
+                    network_down = True
         elif result["status"] in (STATUS_OK, STATUS_NOT_MODIFIED, STATUS_EMPTY):
             network_failures = 0
 
@@ -754,11 +858,9 @@ def import_sources(sources: list[dict], *, budget_seconds: int = IMPORT_BUDGET_S
 
 def _hint_for(step: str, message: str) -> str:
     """Подсказка по конкретному шагу проверки — что делать дальше."""
-    from config import SOCKS_PORT
-
     own_inbound = (
         f"Если у Xray есть рабочие узлы, подойдёт собственный inbound: "
-        f"socks5://127.0.0.1:{SOCKS_PORT}."
+        f"socks5://127.0.0.1:{Settings.socks_port()}."
     )
     if step == "dns":
         return "DNS не разрешает имя: проверьте DNS сервера и доступность интернета."

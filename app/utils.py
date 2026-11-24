@@ -1,6 +1,7 @@
 """Утилиты: работа со временем, логирование, гео-определение страны."""
 
 import json
+import ssl
 import threading
 import time
 import traceback
@@ -76,6 +77,10 @@ def _flush_log_buffer():
             batch,
         )
         conn.commit()
+    except Exception:
+        # БД могли удалить/закрыть (тесты, остановка процесса): потерять
+        # отложенные логи неприятно, но падать в фоновом таймере — нельзя.
+        pass
     finally:
         conn.close()
     with _log_count_lock:
@@ -113,6 +118,24 @@ def _trim_logs() -> None:
         conn.close()
 
 
+def flush_logs_now() -> None:
+    """Сбрасывает буфер логов синхронно и отменяет отложенный таймер.
+
+    Нужен при остановке процесса и в тестах: иначе таймер дозаписи может
+    сработать уже после смены/удаления файла БД и записать логи не туда.
+    """
+    global _log_flush_timer
+    with _log_buffer_lock:
+        timer = _log_flush_timer
+        _log_flush_timer = None
+    if timer is not None:
+        try:
+            timer.cancel()
+        except Exception:
+            pass
+    _flush_log_buffer()
+
+
 def trim_logs_startup() -> None:
     """Принудительная чистка логов при старте (учитывает настройки)."""
     _trim_logs()
@@ -134,6 +157,17 @@ _GEO_NEG_TTL = 6 * 3600           # неудачу не повторяем 6 ч�
 _GEO_HOST_TTL = 6 * 3600          # DNS-резолв хоста
 _GEO_BATCH = 100
 _GEO_BATCH_MIN_INTERVAL = 4.1     # не чаще 15 батч-запросов в минуту
+# Сколько не трогать ip-api.com после первого таймаута: сервер либо блокирует
+# его, либо он лежит — ждать по 10 с на каждый батч бессмысленно.
+_GEO_IPAPI_COOLDOWN = 600
+_geo_ipapi_down_until = 0.0
+# Резервный сервис определения страны: HTTPS и не блокируется там, где
+# ip-api.com (только HTTP) недоступен. Один IP за запрос, поэтому параллельно.
+_GEO_FALLBACK_URL = "https://api.country.is/{ip}"
+_GEO_FALLBACK_PARALLEL = 10
+_GEO_SSL = ssl.create_default_context()
+_GEO_SSL.check_hostname = False
+_GEO_SSL.verify_mode = ssl.CERT_NONE
 
 _geo_ip_cache: dict[str, tuple[float, str]] = {}
 _geo_neg_cache: dict[str, float] = {}
@@ -183,11 +217,21 @@ def resolve_host(host: str) -> str:
 
 
 def _ipapi_batch(ips: list[str]) -> dict[str, str]:
-    """POST /batch в ip-api.com: до 100 адресов за один запрос."""
-    global _geo_last_request
+    """POST /batch в ip-api.com: до 100 адресов за один запрос.
+
+    На части серверов ip-api.com (только HTTP) недоступен и стабильно отдаёт
+    таймаут. После первого такого таймаута 10 минут ходим сразу в HTTPS-резерв
+    api.country.is: не ждём по 10 секунд на каждый батч и не засоряем логи.
+    """
+    global _geo_last_request, _geo_ipapi_down_until
     if not ips:
         return {}
-    wait = _GEO_BATCH_MIN_INTERVAL - (time.time() - _geo_last_request)
+    now = time.time()
+    with _geo_lock:
+        down_until = _geo_ipapi_down_until
+    if now < down_until:
+        return _country_is_batch(ips)
+    wait = _GEO_BATCH_MIN_INTERVAL - (now - _geo_last_request)
     if wait > 0:
         time.sleep(wait)
     from urllib.request import Request, urlopen
@@ -206,14 +250,55 @@ def _ipapi_batch(ips: list[str]) -> dict[str, str]:
         with urlopen(req, timeout=10) as r:
             data = json.loads(r.read().decode())
     except Exception as e:  # noqa: BLE001
-        add_log("DEBUG", f"ip-api batch failed: {e}")
-        return {}
+        with _geo_lock:
+            _geo_ipapi_down_until = time.time() + _GEO_IPAPI_COOLDOWN
+        add_log(
+            "WARN",
+            f"ip-api.com недоступен ({e}) — {_GEO_IPAPI_COOLDOWN // 60} мин "
+            "определяем страны через HTTPS-резерв api.country.is",
+        )
+        return _country_is_batch(ips)
     out: dict[str, str] = {}
     if isinstance(data, list):
         for item in data:
             query = item.get("query") or ""
             if item.get("status") == "success" and item.get("countryCode"):
                 out[query] = item["countryCode"]
+    return out
+
+
+def _country_is_batch(ips: list[str]) -> dict[str, str]:
+    """Резервное определение страны через HTTPS api.country.is (по одному IP).
+
+    Возвращает {ip: CC} только для успешных ответов: вызывающий код сам
+    помечает остальные как негативный кеш.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from urllib.request import Request, urlopen
+
+    def lookup(ip: str) -> tuple[str, str]:
+        try:
+            req = Request(
+                _GEO_FALLBACK_URL.format(ip=ip),
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            with urlopen(req, timeout=6, context=_GEO_SSL) as r:
+                data = json.loads(r.read().decode())
+            cc = str(data.get("country") or "").upper()
+            return ip, cc if len(cc) == 2 else ""
+        except Exception:
+            return ip, ""
+
+    out: dict[str, str] = {}
+    if not ips:
+        return out
+    workers = max(2, min(_GEO_FALLBACK_PARALLEL, len(ips)))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="geo-fallback") as pool:
+        for ip, cc in pool.map(lookup, ips):
+            if cc:
+                out[ip] = cc
+    if out:
+        add_log("DEBUG", f"api.country.is определил страны для {len(out)}/{len(ips)} IP")
     return out
 
 
@@ -378,8 +463,7 @@ def _get_conntrack_map():
     import os
     import re
     import subprocess
-    from config import SOCKS_PORT, HTTP_PORT
-    proxy_ports_str = [str(SOCKS_PORT), str(HTTP_PORT)]
+    proxy_ports_str = [str(Settings.socks_port()), str(Settings.http_port())]
     result = {}
     if os.name == "nt":
         return result
@@ -421,8 +505,7 @@ def list_active_connections(proxy_ports: list[int] | None = None) -> list[dict]:
     """Возвращает детальный список TCP-соединений через прокси-порты.
     Каждый элемент: {pid, process, local, local_port, remote, remote_port, status, direction, bytes_in, bytes_out}"""
     if proxy_ports is None:
-        from config import SOCKS_PORT, HTTP_PORT
-        proxy_ports = [SOCKS_PORT, HTTP_PORT]
+        proxy_ports = [Settings.socks_port(), Settings.http_port()]
     import os
     import subprocess
 

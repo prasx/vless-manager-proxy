@@ -15,7 +15,19 @@ from .utils import add_log
 from .subscribe import update_subscribe_cache
 from .vless import stream_settings, sanitize_flow
 from .selection import config_rows, node_tag
-from config import SOCKS_PORT, HTTP_PORT, API_PORT, API_LISTEN
+from config import API_LISTEN
+
+# Кэши диагностики: страница настроек опрашивает /api/xray/status каждые 5 с,
+# и каждый такой запрос дёргал systemctl/ss и писал WARN в логи (на Windows без
+# systemd это давало десятки записей в минуту). Значения меняются редко.
+_SYSTEMD_CFG_TTL = 120.0
+_SYSTEMD_ACTIVE_TTL = 10.0
+_SS_LISTEN_TTL = 15.0
+_DIAG_TTL = 8.0
+_diag_cache: dict = {"systemd_cfg": (0.0, None), "active": (0.0, None)}
+_diag_cache_lock = threading.Lock()
+_ss_cache: dict[int, tuple[float, str | None]] = {}
+_ss_cache_lock = threading.Lock()
 
 
 def _ensure_duration(val: str, default: str = "10s") -> str:
@@ -39,6 +51,8 @@ class XrayConfigurator:
         self._state_ready = False
         self._stats_cache = {"data": None, "ts": 0.0}
         self._stats_cache_lock = threading.Lock()
+        self._diag_result_cache = {"data": None, "ts": 0.0}
+        self._diag_result_lock = threading.Lock()
 
     # ─── Inbounds / Base config helpers ───
 
@@ -59,7 +73,7 @@ class XrayConfigurator:
             }
 
         socks_in = {
-            "port": SOCKS_PORT,
+            "port": Settings.socks_port(),
             "listen": listen,
             "protocol": "socks",
             "settings": {"udp": True},
@@ -69,7 +83,7 @@ class XrayConfigurator:
             socks_in["sniffing"] = sniffing
 
         http_in = {
-            "port": HTTP_PORT,
+            "port": Settings.http_port(),
             "listen": listen,
             "protocol": "http",
             "settings": {},
@@ -97,7 +111,7 @@ class XrayConfigurator:
         )
         api_inbound = {
             "listen": API_LISTEN,
-            "port": API_PORT,
+            "port": Settings.api_port(),
             "protocol": "dokodemo-door",
             "settings": {"address": API_LISTEN},
             "tag": "api",
@@ -234,7 +248,7 @@ class XrayConfigurator:
             + [
                 {
                     "listen": API_LISTEN,
-                    "port": API_PORT,
+                    "port": Settings.api_port(),
                     "protocol": "dokodemo-door",
                     "settings": {"address": API_LISTEN},
                     "tag": "api",
@@ -370,7 +384,7 @@ class XrayConfigurator:
                     "api",
                     "statsquery",
                     "-s",
-                    f"{API_LISTEN}:{API_PORT}",
+                    f"{API_LISTEN}:{Settings.api_port()}",
                 ],
                 capture_output=True,
                 text=True,
@@ -388,7 +402,7 @@ class XrayConfigurator:
     def api_ok(self):
         """Проверяет, отвечает ли Xray API (использует кэш statsquery)."""
         try:
-            s = socket.create_connection((API_LISTEN, API_PORT), timeout=2)
+            s = socket.create_connection((API_LISTEN, Settings.api_port()), timeout=2)
             s.close()
         except Exception:
             return False
@@ -408,29 +422,75 @@ class XrayConfigurator:
         return sorted(tags)
 
     @staticmethod
-    def _remove_outbound(tag):
-        """Удаляет один outbound по тегу через Xray API (26.x: rmo)."""
+    def _remove_outbounds(tags) -> set[str]:
+        """Удаляет node-outbound по тегам через Xray API (`rmo`).
+
+        Синтаксис `xray api rmo <tag> [tag...]` — позиционный. Код раньше
+        передавал `--tag`, и КАЖДОЕ удаление падало с «flag provided but not
+        defined: -tag»: старые узлы оставались в Xray, а добавление новых тегов
+        падало с «existing tag found». Отсюда был вечный цикл «частично
+        применено → пересборка → рестарт Xray». Теги принимаются пачкой:
+        один вызов CLI вместо десятков.
+        """
+        tags = [t for t in dict.fromkeys(tags or []) if t]
+        if not tags:
+            return set()
+        removed: set[str] = set()
+        cmd = [
+            Settings.xray_bin(),
+            "api",
+            "rmo",
+            "-s",
+            f"{API_LISTEN}:{Settings.api_port()}",
+            *tags,
+        ]
         try:
             r = subprocess.run(
-                [
-                    Settings.xray_bin(),
-                    "api",
-                    "rmo",
-                    "-s",
-                    f"{API_LISTEN}:{API_PORT}",
-                    "--tag",
-                    tag,
-                ],
-                capture_output=True,
-                timeout=10,
+                cmd, capture_output=True, timeout=max(10, min(60, 3 * len(tags)))
             )
-            if r.returncode != 0:
-                add_log(
-                    "DEBUG",
-                    f"Remove outbound {tag} failed (code {r.returncode}): {r.stderr.decode(errors='replace')[:200]}",
+            if r.returncode == 0:
+                return set(tags)
+            add_log(
+                "DEBUG",
+                f"Remove outbounds failed (code {r.returncode}): "
+                f"{r.stderr.decode(errors='replace')[:300]}",
+            )
+        except Exception as e:  # noqa: BLE001
+            add_log("DEBUG", f"Failed to remove outbounds {tags}: {e}")
+            return set()
+
+        # Старые версии Xray могли не понимать несколько тегов за раз:
+        # пробуем по одному, чтобы хотя бы часть удалилась.
+        for tag in tags:
+            try:
+                r = subprocess.run(
+                    [
+                        Settings.xray_bin(),
+                        "api",
+                        "rmo",
+                        "-s",
+                        f"{API_LISTEN}:{Settings.api_port()}",
+                        tag,
+                    ],
+                    capture_output=True,
+                    timeout=10,
                 )
-        except Exception as e:
-            add_log("DEBUG", f"Failed to remove outbound {tag}: {e}")
+                if r.returncode == 0:
+                    removed.add(tag)
+                else:
+                    add_log(
+                        "DEBUG",
+                        f"Remove outbound {tag} failed (code {r.returncode}): "
+                        f"{r.stderr.decode(errors='replace')[:200]}",
+                    )
+            except Exception as e:  # noqa: BLE001
+                add_log("DEBUG", f"Failed to remove outbound {tag}: {e}")
+        return removed
+
+    @staticmethod
+    def _remove_outbound(tag) -> bool:
+        """Совместимость: удаляет один outbound, возвращает успех."""
+        return bool(XrayConfigurator._remove_outbounds([tag]))
 
     @staticmethod
     def add_outbound(ob):
@@ -447,7 +507,7 @@ class XrayConfigurator:
                     "api",
                     "ado",
                     "-s",
-                    f"{API_LISTEN}:{API_PORT}",
+                    f"{API_LISTEN}:{Settings.api_port()}",
                     tmp_path,
                 ],
                 capture_output=True,
@@ -570,21 +630,35 @@ class XrayConfigurator:
         to_remove = sorted(known - desired_tags)
         to_add = [ob for ob in desired_obs if ob["tag"] not in known]
 
+        # Сначала удаляем лишние: иначе `ado` падает с «existing tag found»,
+        # если тег остался в Xray после прошлых неудачных удалений.
+        removed = self._remove_outbounds(to_remove) if to_remove else set()
+
         added: list[str] = []
         failed: list[str] = []
         for ob in to_add:
-            (added if self.add_outbound(ob) else failed).append(ob["tag"])
-        for tag in to_remove:
-            self._remove_outbound(tag)
+            if self.add_outbound(ob):
+                added.append(ob["tag"])
+                continue
+            # Тег мог остаться в работающем Xray (память панели разошлась с
+            # реальностью): убираем его и пробуем добавить ещё раз.
+            if self._remove_outbounds([ob["tag"]]):
+                removed.add(ob["tag"])
+                if self.add_outbound(ob):
+                    added.append(ob["tag"])
+                    # Тег снова в Xray — значит, он не «удалён».
+                    removed.discard(ob["tag"])
+                    continue
+            failed.append(ob["tag"])
 
-        applied = (known | set(added)) - set(to_remove)
+        applied = (known | set(added)) - removed
         if applied != known or failed:
             Settings.set_applied_node_tags(applied)
         return {
             "added": len(added),
             "attempted": len(to_add),
             "failed": failed,
-            "removed": len(to_remove),
+            "removed": len(removed),
             "total": len(desired_obs),
         }
 
@@ -595,12 +669,14 @@ class XrayConfigurator:
 
         blocking=True — ждать освобождения _apply_lock (для финального apply после тестов).
         blocking=False — пропустить, если другой apply уже выполняется.
+        Возвращает True, если конфиг реально пересобран и применён.
         """
         if not self._apply_lock.acquire(blocking=blocking):
             add_log("WARN", "Config rebuild already in progress — skipping")
-            return
+            return False
         try:
             self._apply_all_impl()
+            return True
         finally:
             self._apply_lock.release()
 
@@ -609,7 +685,14 @@ class XrayConfigurator:
         try:
             self._apply_all_impl_safe()
         except Exception as e:
-            add_log("ERROR", f"Config rebuild failed: {e}")
+            hint = ""
+            if isinstance(e, PermissionError):
+                hint = (
+                    f" — нет прав на запись файла конфига. Проверьте владельца/права "
+                    f"на {xray_config_path()} (панель должна писать туда, откуда "
+                    f"Xray читает конфиг)"
+                )
+            add_log("ERROR", f"Config rebuild failed: {e}{hint}")
 
     def _apply_all_impl_safe(self):
         cfg_path = xray_config_path()
@@ -744,6 +827,12 @@ class XrayConfigurator:
     @staticmethod
     def _detect_systemd_config():
         """Извлекает путь к конфигу Xray из systemd unit (ExecStart)."""
+        now = time.monotonic()
+        with _diag_cache_lock:
+            ts, cached = _diag_cache["systemd_cfg"]
+        if ts and now - ts < _SYSTEMD_CFG_TTL:
+            return cached
+        value = None
         try:
             r = subprocess.run(
                 ["systemctl", "show", "xray", "-p", "ExecStart", "--value"],
@@ -751,23 +840,35 @@ class XrayConfigurator:
                 text=True,
                 timeout=3,
             )
-            if r.returncode != 0:
-                return None
-            text = r.stdout.strip()
-            for flag in ("-config", "-c"):
-                if flag not in text:
-                    continue
-                parts = text.replace("=", " ").split()
-                for i, p in enumerate(parts):
-                    if p == flag and i + 1 < len(parts):
-                        return parts[i + 1]
+            if r.returncode == 0:
+                text = r.stdout.strip()
+                for flag in ("-config", "-c"):
+                    if flag not in text:
+                        continue
+                    parts = text.replace("=", " ").split()
+                    for i, p in enumerate(parts):
+                        if p == flag and i + 1 < len(parts):
+                            value = parts[i + 1]
+                            break
+                    if value:
+                        break
         except Exception as e:
-            add_log("WARN", f"Failed to detect systemd xray config path: {e}")
-        return None
+            # Windows/не-systemd окружения: это норма, а не ошибка — WARN
+            # каждые 5 секунд только засорял логи.
+            add_log("DEBUG", f"Failed to detect systemd xray config path: {e}")
+        with _diag_cache_lock:
+            _diag_cache["systemd_cfg"] = (now, value)
+        return value
 
     @staticmethod
     def _systemd_active():
         """Проверяет, активен ли systemd-сервис xray."""
+        now = time.monotonic()
+        with _diag_cache_lock:
+            ts, cached = _diag_cache["active"]
+        if ts and now - ts < _SYSTEMD_ACTIVE_TTL:
+            return bool(cached)
+        active = False
         try:
             r = subprocess.run(
                 ["systemctl", "is-active", "xray"],
@@ -775,24 +876,35 @@ class XrayConfigurator:
                 text=True,
                 timeout=3,
             )
-            return r.stdout.strip() == "active"
+            active = r.stdout.strip() == "active"
         except Exception as e:
             add_log("DEBUG", f"Failed to check systemd active: {e}")
-            return False
+        with _diag_cache_lock:
+            _diag_cache["active"] = (now, active)
+        return active
 
     @staticmethod
     def _ss_listen(port):
         """Проверяет, слушает ли процесс указанный TCP-порт (через ss)."""
+        now = time.monotonic()
+        with _ss_cache_lock:
+            cached = _ss_cache.get(port)
+        if cached and now - cached[0] < _SS_LISTEN_TTL:
+            return cached[1]
+        line_value = None
         try:
             r = subprocess.run(
                 ["ss", "-lntp"], capture_output=True, text=True, timeout=3
             )
             for line in (r.stdout or "").splitlines():
                 if f":{port}" in line:
-                    return line.strip()
+                    line_value = line.strip()
+                    break
         except Exception as e:
             add_log("DEBUG", f"Failed to check port {port}: {e}")
-        return None
+        with _ss_cache_lock:
+            _ss_cache[port] = (now, line_value)
+        return line_value
 
     def _config_inbound_listeners(self, path=None):
         """Читает входящие соединения (socks/http) из JSON-конфига."""
@@ -815,23 +927,39 @@ class XrayConfigurator:
             return []
 
     def diagnose(self):
-        """Собирает диагностическую информацию о состоянии Xray."""
+        """Собирает диагностическую информацию о состоянии Xray.
+
+        Результат кэшируется на несколько секунд: страница настроек опрашивает
+        статус каждые 5 с, и без кэша каждый опрос запускал systemctl/ss.
+        """
+        now = time.monotonic()
+        with self._diag_result_lock:
+            cached = self._diag_result_cache["data"]
+            if cached is not None and now - self._diag_result_cache["ts"] < _DIAG_TTL:
+                return dict(cached)
         mgr = str(xray_config_path().resolve())
         systemd_cfg = self._detect_systemd_config()
         inbounds = self._config_inbound_listeners()
+        socks_port = Settings.socks_port()
+        http_port = Settings.http_port()
+        api_port = Settings.api_port()
         has_socks = any(
-            ib.get("port") == 1080 and ib.get("protocol") == "socks" for ib in inbounds
+            ib.get("port") == socks_port and ib.get("protocol") == "socks"
+            for ib in inbounds
         )
-        return {
+        result = {
             "manager_config_path": mgr,
             "systemd_config_path": systemd_cfg,
             "config_mismatch": bool(systemd_cfg and systemd_cfg != mgr),
             "systemd_active": self._systemd_active(),
             "config_inbounds": inbounds,
             "socks_in_config": has_socks,
-            "ports": {str(p): self._ss_listen(p) for p in (1080, 1081, 10085)},
+            "ports": {str(p): self._ss_listen(p) for p in (socks_port, http_port, api_port)},
             "proxy_listen": Settings.proxy_listen(),
         }
+        with self._diag_result_lock:
+            self._diag_result_cache = {"data": dict(result), "ts": now}
+        return result
 
 
 xray_configurator = XrayConfigurator()

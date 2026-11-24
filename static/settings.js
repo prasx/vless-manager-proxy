@@ -382,8 +382,12 @@ async function loadSettings() {
   $('xrayBin').value = s.xray_bin || 'xray';
   $('xrayConfigPath').value = s.xray_config_path || '';
   $('proxyListen').value = s.proxy_listen || '0.0.0.0';
+  $('socksPort').value = s.socks_port || '1080';
+  $('httpPort').value = s.http_port || '1081';
+  $('apiPort').value = s.api_port || '10085';
   $('maxActiveProxies').value = s.max_active_proxies || '30';
-  $('probeUrl').value = s.probe_url || 'https://www.gstatic.com/generate_204';
+  $('probeUrl').value = s.probe_url || 'http://cp.cloudflare.com/generate_204';
+  $('probeUrlAuto').checked = s.probe_url_auto !== 'false';
   const oldVal = s.check_interval || '3600';
   const dbRaw = s.check_interval_db || oldVal;
   const impRaw = s.check_interval_import || '10800';
@@ -399,7 +403,7 @@ async function loadSettings() {
   $('dbCheckAutoCleanup').checked = s.db_check_auto_cleanup === 'true';
   $('speedTestEnabled').checked = s.speed_test_enabled !== 'false';
   $('speedTestMax').value = s.speed_test_max || '15';
-  $('speedTestUrl').value = s.speed_test_url || 'http://speedtest.selectel.ru/10MB';
+  $('speedTestUrl').value = s.speed_test_url || 'https://speed.cloudflare.com/__down?bytes=10000000';
   $('speedTestMinSec').value = s.speed_test_min_sec || '10';
   $('applyAfterTest').checked = s.apply_after_test !== 'false';
   $('minSpeedMbps').value = s.min_speed_mbps || '0';
@@ -416,12 +420,15 @@ async function loadSettings() {
   $('sniffQuic').checked = destOverride.includes('quic');
   $('sniffFtp').checked = destOverride.includes('ftp');
   $('geoEnabled').checked = s.geo_enabled !== 'false';
-  $('checkBatchSize').value = s.check_batch_size || '64';
-  $('probeTimeout').value = s.probe_timeout || '5';
+  $('checkBatchSize').value = s.check_batch_size || '128';
+  $('tcpPrefilterWorkers').value = s.tcp_prefilter_workers || '128';
+  $('probeTimeout').value = s.probe_timeout || '8';
+  $('probeRetries').value = s.probe_retries != null ? s.probe_retries : '1';
   $('xrayStartupRetries').value = s.xray_startup_retries || '15';
   $('tcpPrefilter').checked = s.tcp_prefilter !== 'false';
-  $('tcpPrefilterTimeout').value = s.tcp_prefilter_timeout || '2';
-  $('speedStageBudget').value = s.speed_stage_budget_sec || '120';
+  $('tcpPrefilterTimeout').value = s.tcp_prefilter_timeout || '3';
+  $('tcpPrefilterRetries').value = s.tcp_prefilter_retries != null ? s.tcp_prefilter_retries : '1';
+  $('speedStageBudget').value = s.speed_stage_budget_sec || '600';
 
   setLoadError('xray', status.error ? `не удалось получить статус Xray: ${status.error}` : '');
   if (!status.error) {
@@ -478,7 +485,13 @@ const FIELD_LABELS = {
   maxActiveProxies: 'Макс. активных прокси',
   checkBatchSize: 'Профилей за раз',
   probeTimeout: 'Таймаут массовой проверки',
+  probeRetries: 'Повторы пробы',
   tcpPrefilterTimeout: 'Таймаут TCP-префильтра',
+  tcpPrefilterRetries: 'Повторы TCP-префильтра',
+  tcpPrefilterWorkers: 'Параллельных TCP-проверок',
+  socksPort: 'Порт SOCKS',
+  httpPort: 'Порт HTTP',
+  apiPort: 'Порт API Xray',
   vlessPerProxyTimeout: 'Таймаут ручного теста',
   handshakeTimeout: 'Таймаут рукопожатия',
   connIdle: 'Таймаут простоя',
@@ -522,16 +535,22 @@ function validateSettings() {
   const errors = [];
   const numFields = [
     { id: 'maxActiveProxies', min: 1, max: 500 },
-    { id: 'checkBatchSize', min: 4, max: 200 },
-    { id: 'probeTimeout', min: 1, max: 30 },
-    { id: 'tcpPrefilterTimeout', min: 0.5, max: 5 },
+    { id: 'checkBatchSize', min: 4, max: 256 },
+    { id: 'tcpPrefilterWorkers', min: 4, max: 512 },
+    { id: 'probeTimeout', min: 1, max: 60 },
+    { id: 'probeRetries', min: 0, max: 3 },
+    { id: 'tcpPrefilterTimeout', min: 0.5, max: 10 },
+    { id: 'tcpPrefilterRetries', min: 0, max: 3 },
+    { id: 'socksPort', min: 1, max: 65535 },
+    { id: 'httpPort', min: 1, max: 65535 },
+    { id: 'apiPort', min: 1, max: 65535 },
     { id: 'vlessPerProxyTimeout', min: 2, max: 30 },
     { id: 'handshakeTimeout', min: 1, max: 30 },
     { id: 'connIdle', min: 30, max: 3600 },
     { id: 'speedTestMax', min: 1, max: 100 },
     { id: 'speedTestAdaptiveSec', min: 1, max: 10 },
     { id: 'speedTestMinSec', min: 1, max: 300 },
-    { id: 'speedStageBudget', min: 0, max: 3600 },
+    { id: 'speedStageBudget', min: 0, max: 7200 },
     { id: 'logTrimEvery', min: 10, max: 99999 },
     { id: 'logKeep', min: 100, max: 99999 },
     { id: 'xrayStartupRetries', min: 5, max: 200 },
@@ -556,6 +575,25 @@ function validateSettings() {
       errors.push(`${fieldLabel(f.id)}: допустимый диапазон ${f.min}-${f.max}`);
       markInvalid(f.id);
     }
+  }
+  // Порты SOCKS/HTTP/API должны различаться: иначе Xray не поднимется,
+  // а панель будет стучаться в чужой порт.
+  const portIds = ['socksPort', 'httpPort', 'apiPort'];
+  const portVals = portIds.map(id => parseInt($(id).value, 10));
+  if (portVals.every(v => v >= 1 && v <= 65535)) {
+    const seen = new Map();
+    portIds.forEach((id, i) => {
+      const val = portVals[i];
+      if (seen.has(val)) {
+        errors.push(
+          `Порты должны различаться: ${fieldLabel(seen.get(val))} и ${fieldLabel(id)} ` +
+          `совпадают (${val})`
+        );
+        markInvalid(id);
+      } else {
+        seen.set(val, id);
+      }
+    });
   }
   const requiredFields = [
     { id: 'xrayBin', msg: 'Путь к бинарнику Xray не может быть пустым' },
@@ -612,8 +650,12 @@ async function saveSettings() {
     xray_bin: $('xrayBin').value.trim(),
     xray_config_path: $('xrayConfigPath').value.trim(),
     proxy_listen: $('proxyListen').value.trim() || '0.0.0.0',
+    socks_port: $('socksPort').value.trim() || '1080',
+    http_port: $('httpPort').value.trim() || '1081',
+    api_port: $('apiPort').value.trim() || '10085',
     max_active_proxies: $('maxActiveProxies').value.trim() || '30',
-    probe_url: $('probeUrl').value.trim() || 'https://www.gstatic.com/generate_204',
+    probe_url: $('probeUrl').value.trim() || 'http://cp.cloudflare.com/generate_204',
+    probe_url_auto: $('probeUrlAuto').checked ? 'true' : 'false',
     check_interval_db: String(Math.round(parseFloat($('checkIntervalDb').value || '0.5') * 3600)),
     check_interval_import: String(Math.round(parseFloat($('checkIntervalImport').value || '3') * 3600)),
     vless_per_proxy_timeout: $('vlessPerProxyTimeout').value.trim() || '3',
@@ -621,7 +663,7 @@ async function saveSettings() {
     log_keep: $('logKeep').value.trim() || '2000',
     speed_test_enabled: $('speedTestEnabled').checked ? 'true' : 'false',
     speed_test_max: $('speedTestMax').value.trim() || '15',
-    speed_test_url: $('speedTestUrl').value.trim() || 'http://speedtest.selectel.ru/10MB',
+    speed_test_url: $('speedTestUrl').value.trim() || 'https://speed.cloudflare.com/__down?bytes=10000000',
     speed_test_min_sec: $('speedTestMinSec').value.trim() || '10',
     db_check_auto_cleanup: $('dbCheckAutoCleanup').checked ? 'true' : 'false',
     apply_after_test: $('applyAfterTest').checked ? 'true' : 'false',
@@ -651,12 +693,15 @@ async function saveSettings() {
     blocked_countries: collectBlockedCountries(),
     geosite_rules: JSON.stringify(geositeRules),
     // Performance
-    check_batch_size: $('checkBatchSize').value.trim() || '64',
-    probe_timeout: $('probeTimeout').value.trim() || '5',
+    check_batch_size: $('checkBatchSize').value.trim() || '128',
+    probe_timeout: $('probeTimeout').value.trim() || '8',
+    probe_retries: $('probeRetries').value.trim() || '1',
     xray_startup_retries: $('xrayStartupRetries').value.trim() || '15',
     tcp_prefilter: $('tcpPrefilter').checked ? 'true' : 'false',
-    tcp_prefilter_timeout: $('tcpPrefilterTimeout').value.trim() || '2',
-    speed_stage_budget_sec: $('speedStageBudget').value.trim() || '120',
+    tcp_prefilter_timeout: $('tcpPrefilterTimeout').value.trim() || '3',
+    tcp_prefilter_retries: $('tcpPrefilterRetries').value.trim() || '1',
+    tcp_prefilter_workers: $('tcpPrefilterWorkers').value.trim() || '128',
+    speed_stage_budget_sec: $('speedStageBudget').value.trim() || '600',
   };
 
   let r;
@@ -672,7 +717,7 @@ async function saveSettings() {
 
 // ─── Сброс тюнинга к заводским значениям ───
 //
-// Пути Xray, адрес прослушивания, URL проверки, прокси импорта, страны и
+// Пути Xray, адрес прослушивания, порты, URL проверки, прокси импорта, страны и
 // правила GeoSite не сбрасываются: это привязка к окружению и содержимое,
 // а не тюнинг. Список совпадает со значениями по умолчанию в app/db.py.
 const RESET_NUMBERS = {
@@ -685,10 +730,13 @@ const RESET_NUMBERS = {
   speedTestMax: '8',
   speedTestMinSec: '10',
   speedTestAdaptiveSec: '2',
-  speedStageBudget: '120',
-  checkBatchSize: '64',
-  tcpPrefilterTimeout: '2',
-  probeTimeout: '5',
+  speedStageBudget: '600',
+  checkBatchSize: '128',
+  tcpPrefilterWorkers: '128',
+  tcpPrefilterTimeout: '3',
+  tcpPrefilterRetries: '1',
+  probeTimeout: '8',
+  probeRetries: '1',
   xrayStartupRetries: '15',
   logTrimEvery: '500',
   logKeep: '2000',
@@ -700,6 +748,7 @@ const RESET_CHECKBOXES = {
   applyAfterTest: true,
   safeOnlyImport: false,
   requireSpeed: false,
+  probeUrlAuto: true,
   tcpPrefilter: true,
   sniffingEnabled: true,
   sniffingRouteOnly: true,
@@ -712,10 +761,10 @@ const RESET_CHECKBOXES = {
 function resetSettings() {
   if (!confirm(
     'Вернуть тюнинг-параметры к значениям по умолчанию?\n\n' +
-    'Затронуты: интервалы проверок, таймауты, воркеры, тест скорости, ' +
-    'балансировщик, сниффинг, чистка логов.\n' +
-    'Пути Xray, адрес прослушивания, URL проверки, прокси импорта, страны и ' +
-    'правила GeoSite не меняются.')) return;
+    'Затронуты: интервалы проверок, таймауты, пачка и воркеры проверки, тест ' +
+    'скорости, балансировщик, сниффинг, чистка логов.\n' +
+    'Пути Xray, адрес прослушивания, порты, URL проверки, прокси импорта, ' +
+    'страны и правила GeoSite не меняются.')) return;
 
   for (const [id, value] of Object.entries(RESET_NUMBERS)) {
     const el = $(id);
@@ -725,7 +774,7 @@ function resetSettings() {
     const el = $(id);
     if (el) el.checked = value;
   }
-  $('speedTestUrl').value = 'http://speedtest.selectel.ru/10MB';
+  $('speedTestUrl').value = 'https://speed.cloudflare.com/__down?bytes=10000000';
   $('balancerStrategy').value = 'random';
   setRangeValue(_rangeDb, 0.5);
   setRangeValue(_rangeImport, 3);
@@ -737,9 +786,128 @@ function resetSettings() {
 }
 
 function resetProbeUrl() {
-  $('probeUrl').value = 'https://www.gstatic.com/generate_204';
+  $('probeUrl').value = 'http://cp.cloudflare.com/generate_204';
   recomputeDirty();
   toast('URL проверки сброшен к значению по умолчанию');
+}
+
+// ─── Тест URL проверки и файла замера ───
+//
+// «Тест лучших ссылок для остальных проверок»: прогоняем кандидатов напрямую
+// из панели, лучшего применяем в настройки и пересобираем конфиг Xray. Если
+// своя строка в поле не пуста, она тоже участвует в тесте.
+
+function urlTestButtonBusy(btn, busy, label) {
+  if (!btn) return;
+  btn.disabled = busy;
+  btn.textContent = busy ? 'Проверяем…' : (label || 'Тест URL');
+}
+
+function renderUrlTestResult(elId, report, kind) {
+  const el = $(elId);
+  if (!el) return;
+  const rows = report.results || [];
+  if (!rows.length) {
+    el.hidden = false;
+    el.innerHTML = '<div class="url-test-note warn">Кандидатов нет: проверьте поле URL или список кандидатов.</div>';
+    return;
+  }
+  const body = rows.map(r => {
+    const dead = !r.ok;
+    const chosen = !dead && r.url === report.best;
+    const meta = [];
+    if (r.status) meta.push('HTTP ' + r.status);
+    if (r.ms != null) meta.push(r.ms + ' мс');
+    if (kind === 'speed' && r.kbps) meta.push(r.kbps + ' kbps');
+    const cls = ['url-test-row', dead ? 'dead' : 'alive', chosen ? 'chosen' : '']
+      .filter(Boolean).join(' ');
+    const badge = chosen ? ' <span class="badge badge-green">выбран</span>' : '';
+    const verdict = dead ? 'недоступен' : 'доступен';
+    let html = `<div class="${cls}">` +
+      `<span class="url-test-mark" aria-hidden="true">${dead ? '✕' : '✓'}</span>` +
+      `<span class="sr-only">${verdict}</span>` +
+      `<span class="url-test-url">${escapeHtml(r.url)}</span>` +
+      `<span class="url-test-meta">${escapeHtml(meta.join(' · '))}${badge}</span>`;
+    if (dead && r.error) {
+      html += `<span class="url-test-err">${escapeHtml(String(r.error).slice(0, 180))}</span>`;
+    }
+    return html + '</div>';
+  }).join('');
+
+  let note = '';
+  if (report.applied) {
+    note = `<div class="url-test-note ok">Применено: ${escapeHtml(report.applied)}</div>`;
+  } else if (report.best && report.best === report.current) {
+    note = `<div class="url-test-note ok">Оставлен текущий URL: ${escapeHtml(report.current)}</div>`;
+  } else if (report.best) {
+    note = `<div class="url-test-note warn">Лучший: ${escapeHtml(report.best)} — нажмите «Сохранить настройки»</div>`;
+  } else {
+    note = '<div class="url-test-note dead">Живых кандидатов нет — проверьте сеть сервера</div>';
+  }
+  el.hidden = false;
+  el.innerHTML = body + note;
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function testProbeUrls(btn) {
+  urlTestButtonBusy(btn, true);
+  try {
+    const typed = $('probeUrl').value.trim();
+    const body = { kind: 'probe', apply: true, timeout: 8 };
+    if (typed) body.urls = [typed];
+    const r = await api('POST', '/api/urls/test', body);
+    if (r.error) { toast(r.error, 'error'); return; }
+    renderUrlTestResult('probeUrlTestResult', r, 'probe');
+    if (r.applied) {
+      $('probeUrl').value = r.applied;
+      toast('URL проверки: выбран лучший из кандидатов', 'success');
+      markClean();
+      setTimeout(loadSettings, 1500);
+    } else if (r.best && r.best === r.current) {
+      toast('Текущий URL проверки отвечает — оставляем его', 'success');
+    } else if (r.best) {
+      $('probeUrl').value = r.best;
+      toast('Живой URL найден, нажмите «Сохранить настройки»', 'success');
+      recomputeDirty();
+    } else {
+      toast('Ни один кандидат не ответил — проверьте сеть сервера', 'error');
+    }
+  } finally {
+    urlTestButtonBusy(btn, false);
+  }
+}
+
+async function testSpeedUrls(btn) {
+  urlTestButtonBusy(btn, true);
+  try {
+    const typed = $('speedTestUrl').value.trim();
+    const body = { kind: 'speed', apply: true, timeout: 12 };
+    if (typed) body.urls = [typed];
+    const r = await api('POST', '/api/urls/test', body);
+    if (r.error) { toast(r.error, 'error'); return; }
+    renderUrlTestResult('speedUrlTestResult', r, 'speed');
+    if (r.applied) {
+      $('speedTestUrl').value = r.applied;
+      toast('Файл замера: выбран лучший из кандидатов', 'success');
+      markClean();
+      setTimeout(loadSettings, 1500);
+    } else if (r.best && r.best === r.current) {
+      toast('Текущий файл замера отвечает — оставляем его', 'success');
+    } else if (r.best) {
+      $('speedTestUrl').value = r.best;
+      toast('Живой файл замера найден, нажмите «Сохранить настройки»', 'success');
+      recomputeDirty();
+    } else {
+      toast('Ни один файл замера не ответил — проверьте сеть сервера', 'error');
+    }
+  } finally {
+    urlTestButtonBusy(btn, false, 'Тест URL');
+  }
 }
 
 // ─── Демон Xray ───
@@ -814,23 +982,29 @@ function updatePerfEstimate() {
   const estVal = $('perfEstValue');
   const estDetail = $('perfEstDetail');
   if (!estVal || !estDetail) return;
-  const batch = Math.max(1, parseInt($('checkBatchSize').value) || 64);
-  const probeT = Math.max(1, parseInt($('probeTimeout').value) || 5);
+  const batch = Math.max(1, parseInt($('checkBatchSize').value) || 128);
+  const workers = Math.max(1, parseInt($('tcpPrefilterWorkers').value) || 128);
+  const probeT = Math.max(1, parseInt($('probeTimeout').value) || 8);
+  const probeR = Math.max(0, parseInt($('probeRetries').value) || 0);
   const prefilter = $('tcpPrefilter').checked;
-  const tcpT = Math.max(0.5, parseFloat($('tcpPrefilterTimeout').value) || 2);
+  const tcpT = Math.max(0.5, parseFloat($('tcpPrefilterTimeout').value) || 3);
+  const tcpR = Math.max(0, parseInt($('tcpPrefilterRetries').value) || 0);
   if (_profileCount <= 0) {
     estVal.textContent = '…';
     estDetail.textContent = 'загрузка данных…';
     return;
   }
-  // Худший случай: каждый профиль выжидает свой таймаут. Один процесс Xray
-  // обслуживает всю пачку, поэтому стоимость волны = таймаут префильтра + таймаут пробы.
-  const waves = Math.ceil(_profileCount / batch);
-  const perWave = (prefilter ? tcpT : 0) + probeT;
-  const estSec = waves * perWave;
+  // Худший случай: каждая попытка выжидает таймаут, повторы идут с шагом ×1.5.
+  // Префильтр работает своим пулом сокетов, проверка — волнами по batch.
+  const tcpWorst = prefilter ? tcpT * (1 + 0.5 * tcpR) : 0;
+  const probeWorst = probeT * (1 + 0.5 * probeR);
+  const prefilterWaves = Math.ceil(_profileCount / workers);
+  const probeWaves = Math.ceil(_profileCount / batch);
+  const estSec = prefilterWaves * tcpWorst + probeWaves * probeWorst;
   estVal.textContent = `~${(estSec / 60).toFixed(1)} мин`;
-  estVal.title = 'оценка сверху: как будто все профили отвечают только по таймауту';
-  estDetail.textContent = `${_profileCount} профилей, ${batch} за раз, ${waves} волн, таймаут ${probeT} с`;
+  estVal.title = 'оценка сверху: все профили отвечают только по таймауту, с учётом повторов';
+  estDetail.textContent = `${_profileCount} профилей: префильтр ${prefilterWaves} волн × ${workers}, ` +
+    `проверка ${probeWaves} волн × ${batch}; таймауты ${probeT}с (+${probeR}) и ${tcpT}с (+${tcpR})`;
 }
 
 // ─── Резервная копия ───
@@ -872,8 +1046,10 @@ async function importBackup(event) {
 _rangeDb = setupRange('checkIntervalDb', 'checkIntervalDbLabel');
 _rangeImport = setupRange('checkIntervalImport', 'checkIntervalImportLabel');
 $('speedTestEnabled').addEventListener('change', updateSpeedTestDependants);
-['checkBatchSize', 'probeTimeout', 'tcpPrefilterTimeout'].forEach(id => {
-  $(id).addEventListener('input', updatePerfEstimate);
+['checkBatchSize', 'tcpPrefilterWorkers', 'probeTimeout', 'probeRetries',
+ 'tcpPrefilterTimeout', 'tcpPrefilterRetries'].forEach(id => {
+  const el = $(id);
+  if (el) el.addEventListener('input', updatePerfEstimate);
 });
 $('tcpPrefilter').addEventListener('change', updatePerfEstimate);
 

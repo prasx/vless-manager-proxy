@@ -40,6 +40,11 @@ class TempDBTestCase(unittest.TestCase):
         init_db()
 
     def tearDown(self):
+        # Сбрасываем буфер логов, пока активна временная БД: иначе отложенный
+        # таймер запишет логи в реальную proxies.db уже после подмены.
+        from app.utils import flush_logs_now
+
+        flush_logs_now()
         conn = getattr(app_db._tls, "conn", None)
         if conn is not None:
             try:
@@ -269,16 +274,54 @@ class TestOutboundTags(TempDBTestCase):
         known = {"node1", "node2"}
         with mock.patch.object(xr, "known_node_tags", return_value=set(known)), \
                 mock.patch.object(xr, "add_outbound", return_value=True) as add, \
-                mock.patch.object(xr, "_remove_outbound") as remove:
+                mock.patch.object(
+                    xr, "_remove_outbounds", return_value={"node1"}
+                ) as remove:
             res = xr._sync_outbounds([{"tag": "node2"}, {"tag": "node3"}])
 
         add.assert_called_once()
         self.assertEqual(add.call_args[0][0]["tag"], "node3")
-        remove.assert_called_once_with("node1")
+        remove.assert_called_once_with(["node1"])
         self.assertEqual(res["added"], 1)
         self.assertEqual(res["attempted"], 1)
         self.assertEqual(res["removed"], 1)
         self.assertEqual(set(Settings.applied_node_tags()), {"node2", "node3"})
+
+    def test_diff_sync_retries_add_after_failed_remove(self):
+        """Тег остался в Xray → удаляем его и добавляем заново, а не падаем."""
+        from app.xray_configurator import XrayConfigurator
+
+        xr = XrayConfigurator()
+        add_results = [False, True]
+        with mock.patch.object(xr, "known_node_tags", return_value=set()), \
+                mock.patch.object(xr, "add_outbound", side_effect=add_results) as add, \
+                mock.patch.object(
+                    xr, "_remove_outbounds", return_value={"node9"}
+                ) as remove:
+            res = xr._sync_outbounds([{"tag": "node9"}])
+
+        self.assertEqual(add.call_count, 2)
+        remove.assert_called_once_with(["node9"])
+        self.assertEqual(res["added"], 1)
+        # Тег всё-таки добавлен, поэтому он не считается удалённым.
+        self.assertEqual(res["removed"], 0)
+        self.assertEqual(res["failed"], [])
+        self.assertEqual(set(Settings.applied_node_tags()), {"node9"})
+
+    def test_apply_all_returns_applied_flag(self):
+        """apply_all сообщает, применился ли конфиг: нужно для промежуточных apply."""
+        from app.xray_configurator import XrayConfigurator
+
+        xr = XrayConfigurator()
+        with mock.patch.object(xr, "_apply_all_impl"):
+            self.assertTrue(xr.apply_all(blocking=False))
+        xr._apply_lock.acquire()
+        try:
+            with mock.patch.object(xr, "_apply_all_impl") as impl:
+                self.assertFalse(xr.apply_all(blocking=False))
+                impl.assert_not_called()
+        finally:
+            xr._apply_lock.release()
 
     def test_diff_sync_is_noop_when_everything_applied(self):
         from app.xray_configurator import XrayConfigurator
@@ -286,13 +329,39 @@ class TestOutboundTags(TempDBTestCase):
         xr = XrayConfigurator()
         with mock.patch.object(xr, "known_node_tags", return_value={"node7"}), \
                 mock.patch.object(xr, "add_outbound") as add, \
-                mock.patch.object(xr, "_remove_outbound") as remove:
+                mock.patch.object(xr, "_remove_outbounds") as remove:
             res = xr._sync_outbounds([{"tag": "node7"}])
 
         add.assert_not_called()
         remove.assert_not_called()
         self.assertEqual(res["attempted"], 0)
         self.assertEqual(res["removed"], 0)
+
+
+class TestPortsInConfig(TempDBTestCase):
+    """Порты inbound'ов берутся из настроек, а не из констант config.py."""
+
+    def test_generated_config_uses_configured_ports(self):
+        from app.xray_configurator import XrayConfigurator
+
+        Settings.set("geo_enabled", "false")
+        Settings.set("socks_port", "11080")
+        Settings.set("http_port", "11081")
+        Settings.set("api_port", "11085")
+        Settings.invalidate()
+
+        cfg = XrayConfigurator().generate_full_config()
+        by_port = {ib.get("port"): ib.get("protocol") for ib in cfg["inbounds"]}
+        self.assertEqual(by_port.get(11080), "socks")
+        self.assertEqual(by_port.get(11081), "http")
+        self.assertEqual(by_port.get(11085), "dokodemo-door")
+
+    def test_bad_port_falls_back_to_default(self):
+        Settings.set("socks_port", "not-a-port")
+        Settings.set("http_port", "70000")
+        Settings.invalidate()
+        self.assertEqual(Settings.socks_port(), 1080)
+        self.assertEqual(Settings.http_port(), 1081)
 
 
 class TestSubscribeUsesSelection(TempDBTestCase):

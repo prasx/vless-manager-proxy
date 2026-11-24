@@ -139,12 +139,14 @@ function updatePagination() {
   const info = $('#logPaginationInfo');
   if (!bar || !btn || !info) return;
 
+  // Единый способ скрытия — атрибут hidden (см. `[hidden] { display: none
+  // !important; }` в style.css). style.display с !important не работает.
   if (allLogs.length >= totalLogs || totalLogs <= PAGE_SIZE) {
-    bar.style.display = 'none';
+    bar.hidden = true;
     return;
   }
 
-  bar.style.display = 'flex';
+  bar.hidden = false;
   const remaining = totalLogs - allLogs.length;
   const next = Math.min(PAGE_SIZE, remaining);
   btn.textContent = `Показать ещё ${next} (${allLogs.length}/${totalLogs})`;

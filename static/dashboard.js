@@ -406,12 +406,16 @@ function updatePagination() {
   const info = $('#paginationInfo');
   if (!bar || !btn || !info) return;
 
+  // Управляем АТРИБУТОМ hidden, а не style.display: в style.css есть
+  // `[hidden] { display: none !important; }`, и `!important` перебивал
+  // инлайновый `style.display = 'flex'` — кнопка «Показать ещё» существовала,
+  // но пагинация никогда не показывалась.
   if (allProxies.length >= totalCount || totalCount <= PAGE_SIZE) {
-    bar.style.display = 'none';
+    bar.hidden = true;
     return;
   }
 
-  bar.style.display = 'flex';
+  bar.hidden = false;
   const remaining = totalCount - allProxies.length;
   const next = Math.min(PAGE_SIZE, remaining);
   btn.textContent = `Показать ещё ${next} (${allProxies.length}/${totalCount})`;
@@ -615,7 +619,12 @@ async function testOne(id) {
   if (r.error) return toast(r.error, 'error');
   if (r.status === 'working') {
     const speedStr = r.speed ? `, ${formatSpeed(r.speed)}` : '';
-    toast(`прокси #${id} работает: ${r.latency}мс${speedStr}`, 'success');
+    if (!r.speed && r.speed_error) {
+      toast(`прокси #${id} работает: ${r.latency}мс; скорость не измерилась — ${r.speed_error}`,
+            'error');
+    } else {
+      toast(`прокси #${id} работает: ${r.latency}мс${speedStr}`, 'success');
+    }
   }
   else toast(`прокси #${id} не работает${r.error ? ': ' + r.error : ''}`);
   loadData();

@@ -1,5 +1,6 @@
 """Парсинг VLESS ссылок и построение streamSettings."""
 
+import html
 import re
 from typing import Optional
 from urllib.parse import urlparse, parse_qs, unquote
@@ -8,6 +9,27 @@ _VALID_FLOWS: frozenset = frozenset({"xtls-rprx-vision", "xtls-rprx-direct"})
 _UUID_RE: re.Pattern = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
 )
+
+# Транспорты Xray и их псевдонимы из клиентских подписок. `raw` — новое имя
+# TCP в части клиентов; `splithttp` — старое имя XHTTP; `gun` — gRPC.
+_NETWORK_ALIASES = {
+    "raw": "tcp",
+    "splithttp": "xhttp",
+    "gun": "grpc",
+}
+_KNOWN_NETWORKS = frozenset(
+    {"tcp", "ws", "grpc", "kcp", "h2", "http", "xhttp", "quic", "httpupgrade"}
+)
+_SECURITY_ALIASES = {
+    "": "none",
+    "false": "none",
+    "0": "none",
+    "no": "none",
+    "null": "none",
+    "xtls": "tls",
+}
+
+_NET_RE: re.Pattern = re.compile(r"[a-z][a-z0-9_-]*")
 
 
 def sanitize_flow(flow: Optional[str]) -> str:
@@ -22,6 +44,38 @@ def sanitize_flow(flow: Optional[str]) -> str:
     if flow.startswith("xtls-rprx-direct"):
         return "xtls-rprx-direct"
     return ""
+
+
+def normalize_network(value: Optional[str]) -> str:
+    """Приводит `type` из ссылки к имени транспорта Xray.
+
+    В подписках встречается мусор, приклеенный к транспорту:
+    `type=tcp%23%F0%9F…` (ремарка следующей ссылки), `type=raw`,
+    `type=httpupgrade`. Берём ведущий токен и раскрываем псевдонимы, иначе
+    валидный узел отбрасывался как «unsupported transport».
+    """
+    if not value:
+        return "tcp"
+    text = unquote(str(value)).strip().lower()
+    m = _NET_RE.match(text)
+    if not m:
+        return "tcp"
+    net = m.group(0)
+    return _NETWORK_ALIASES.get(net, net)
+
+
+def normalize_security(value: Optional[str]) -> str:
+    """Приводит `security` к tls/reality/none (false/0/xtls из подписок)."""
+    text = unquote(str(value or "")).strip().lower()
+    text = _SECURITY_ALIASES.get(text, text)
+    if text in ("tls", "reality", "none"):
+        return text
+    return "none"
+
+
+def is_known_network(value: Optional[str]) -> bool:
+    """Умеет ли stream_settings собрать этот транспорт."""
+    return normalize_network(value) in _KNOWN_NETWORKS
 
 
 def sanitize_short_id(sid: Optional[str]) -> str:
@@ -42,6 +96,12 @@ def _vless_param(parsed: dict, *keys: str) -> str:
     return ""
 
 
+def _clean_param(value: str) -> str:
+    """Снимает мусор, приклеенный к значению параметра подписки."""
+    text = unquote(str(value or "")).strip()
+    return text.split("#")[0].split("&")[0].strip()
+
+
 def parse_vless(link: str) -> Optional[dict]:
     """Разбирает vless:// строку в словарь с параметрами.
 
@@ -49,8 +109,14 @@ def parse_vless(link: str) -> Optional[dict]:
     Битый порт (`vless://uuid@host:99999`) — тоже невалидная ссылка: urlparse
     бросает на нём ValueError, и без перехвата одна строка в подписке роняла
     импорт целого источника пятисоткой.
+
+    Ссылки из публичных подписок часто содержат HTML-мнемоники (`&amp;`) —
+    без `html.unescape` параметры `pbk`/`sid`/`sni` не находились, и валидные
+    reality-узлы отбрасывались как «invalid reality publicKey».
     """
-    link = link.strip()
+    if not link:
+        return None
+    link = html.unescape(str(link).strip())
     if not link.lower().startswith("vless://"):
         return None
     try:
@@ -60,7 +126,7 @@ def parse_vless(link: str) -> Optional[dict]:
         return None
     if not uid or not server or port is None:
         return None
-    uid = unquote(str(uid)).split("#")[0].split("&")[0].strip()
+    uid = _clean_param(uid)
     if not _UUID_RE.match(uid):
         return None
     result: dict = {
@@ -71,16 +137,28 @@ def parse_vless(link: str) -> Optional[dict]:
         "link": link,
     }
     for k, vals in parse_qs(parsed.query, keep_blank_values=True).items():
-        result[k] = unquote(vals[0]) if vals else ""
+        # `amp;pbk` и подобное — следы `&amp;` в старых подписках; после
+        # html.unescape их быть не должно, но чистим и ключ.
+        key = k[4:] if k.lower().startswith("amp;") else k
+        if key in result and key != "host":
+            continue
+        result[key] = _clean_param(vals[0]) if vals else ""
     # ?host= в VLESS — обычно WS/HTTP Host, не адрес подключения
     if result.get("host") != server:
         result["headerHost"] = result["host"]
     result["host"] = server
     result["server"] = server
+
+    result["type"] = normalize_network(result.get("type"))
+    result["security"] = normalize_security(result.get("security"))
     if "flow" in result:
         result["flow"] = sanitize_flow(result["flow"])
     if "sid" in result:
         result["sid"] = sanitize_short_id(result["sid"])
+    if "pbk" in result:
+        result["pbk"] = _clean_param(result["pbk"])
+    elif "publicKey" in result:
+        result["publicKey"] = _clean_param(result["publicKey"])
     fragment = unquote(parsed.fragment) if parsed.fragment else ""
     country_m = re.search(r"^([A-Z]{2})\b", fragment) or re.search(
         r"[#\s]([A-Z]{2})\b", fragment
@@ -142,14 +220,18 @@ def _reality_server_name(parsed: dict) -> str:
     )
 
 
+def _truthy(value: Optional[str]) -> bool:
+    return (unquote(str(value or "")).strip().lower() in ("1", "true", "yes"))
+
+
 def stream_settings(parsed: dict) -> dict:
     """Строит streamSettings из распарсенной VLESS ссылки.
 
-    Поддерживает: tcp, ws, grpc, kcp, h2/http, xhttp.
-    Безопасность: tls, reality, none.
+    Поддерживает: tcp/raw, ws, grpc, kcp, h2/http, httpupgrade, xhttp
+    (включая псевдоним splithttp). Безопасность: tls, reality, none.
     """
-    net = parsed.get("type", "tcp")
-    sec = parsed.get("security", "none")
+    net = normalize_network(parsed.get("type"))
+    sec = normalize_security(parsed.get("security"))
     s: dict = {"network": net}
     hdr_host = parsed.get("headerHost") or _vless_param(parsed, "host")
     if net == "ws":
@@ -161,7 +243,7 @@ def stream_settings(parsed: dict) -> dict:
         if ws:
             s["wsSettings"] = ws
     elif net == "grpc":
-        g = {"multiMode": False}
+        g = {"multiMode": str(parsed.get("mode", "")).lower() == "multi"}
         if parsed.get("serviceName"):
             g["serviceName"] = parsed["serviceName"]
         s["grpcSettings"] = g
@@ -172,19 +254,28 @@ def stream_settings(parsed: dict) -> dict:
         if parsed.get("headerType"):
             k["header"] = {"type": parsed["headerType"]}
         s["kcpSettings"] = k
-    elif net == "h2" or net == "http":
+    elif net in ("h2", "http"):
         h2 = {}
         if parsed.get("path"):
             h2["path"] = parsed["path"]
         if hdr_host:
             h2["host"] = [hdr_host]
         s["httpSettings"] = h2
+    elif net == "httpupgrade":
+        hu = {}
+        if parsed.get("path"):
+            hu["path"] = parsed["path"]
+        if hdr_host:
+            hu["host"] = hdr_host
+        s["httpupgradeSettings"] = hu
     elif net == "xhttp":
         xh = {}
         if parsed.get("path"):
             xh["path"] = parsed["path"]
         if hdr_host:
             xh["host"] = hdr_host
+        if parsed.get("mode"):
+            xh["mode"] = parsed["mode"]
         if xh:
             s["xhttpSettings"] = xh
     if sec == "tls":
@@ -194,6 +285,8 @@ def stream_settings(parsed: dict) -> dict:
             tls["alpn"] = parsed["alpn"].split(",")
         if parsed.get("fp"):
             tls["fingerprint"] = parsed["fp"]
+        if _truthy(parsed.get("insecure")) or _truthy(parsed.get("allowInsecure")):
+            tls["allowInsecure"] = True
         s["tlsSettings"] = tls
     elif sec == "reality":
         s["security"] = "reality"

@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from config import DATABASE, ETC_XRAY_CONFIG, DEFAULT_XRAY_CONFIG
+from config import SOCKS_PORT, HTTP_PORT, API_PORT
 
 
 def _sqlite_connect() -> sqlite3.Connection:
@@ -78,6 +79,11 @@ _SCHEMA = {
         ("latency_vless", "INTEGER DEFAULT 0"),
         ("speed_kbps", "INTEGER DEFAULT 0"),
         ("speed_max_kbps", "INTEGER DEFAULT 0"),
+        # Когда скорость последний раз пытались измерить (успешно или нет) и
+        # сколько раз подряд не получилось: по этим полям замеры ротируются,
+        # чтобы «плохие» по скорости узлы не занимали первые места каждый прогон.
+        ("speed_tested_at", "TIMESTAMP"),
+        ("speed_fail_count", "INTEGER DEFAULT 0"),
         ("source_id", "INTEGER"),
         ("last_test_at", "TIMESTAMP"),
         ("last_error", "TEXT"),
@@ -125,10 +131,30 @@ SETTING_DEFAULTS = {
     "xray_bin": "/usr/local/bin/xray",
     "xray_config_path": "",  # подставляется из default_xray_config_path() при init_db
     "proxy_listen": "0.0.0.0",
+    # Порты inbound'ов Xray. Задаются в UI; смена требует перезапуска Xray
+    # (inbounds и API переезжают на новые порты).
+    "socks_port": str(SOCKS_PORT),
+    "http_port": str(HTTP_PORT),
+    "api_port": str(API_PORT),
     "max_active_proxies": "30",
     "safe_only_import": "false",
     "blocked_countries": "",
-    "probe_url": "https://www.gstatic.com/generate_204",
+    # URL проверки: лёгкий plain-HTTP generate_204 у Cloudflare. Он реже
+    # блокируется, чем gstatic, и не требует второго TLS-рукопожатия внутри
+    # туннеля — проба отвечает быстрее и меньше узлов ложно считаются мёртвыми.
+    "probe_url": "http://cp.cloudflare.com/generate_204",
+    # Список кандидатов через перевод строки/запятую или JSON-массив.
+    # Пусто — встроенный каталог из app/netcheck.py (Cloudflare, Google,
+    # Firefox, GNOME, Microsoft). См. кнопку «Тест URL» в настройках.
+    "probe_url_candidates": "",
+    # Автоподбор URL проверки по результатам теста (можно отключить).
+    "probe_url_auto": "true",
+    # Последний ручной тест кандидатов (JSON для UI). Служебное состояние.
+    "probe_url_last_test": "",
+    # URL, который недавно реально отвечал ЧЕРЕЗ туннели (JSON: url+ts).
+    # Прямая проверка из панели не должна перебивать доказанный туннельный URL:
+    # панель может быть заблокирована, а exit-ноды — нет. Служебное состояние.
+    "probe_url_verified": "",
     # Интервалы и тюнинг
     "check_interval_db": "1800",
     "check_interval_import": "10800",
@@ -140,7 +166,13 @@ SETTING_DEFAULTS = {
     "observatory_probe_interval": "10s",
     "speed_test_enabled": "true",
     "speed_test_max": "8",
-    "speed_test_url": "https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/jquery-speedtest/10MB.txt",
+    # Файл замера: Cloudflare отдаёт ровно запрошенное число байт и стабильно
+    # доступен с большинства exit-нод. Google Code Archive и ftp.bit.nl
+    # отваливались, из-за чего стадия скорости оставалась без данных.
+    "speed_test_url": "https://speed.cloudflare.com/__down?bytes=10000000",
+    # Запасные файлы замера: строки/запятые или JSON-массив. Пусто — каталог
+    # app/netcheck.py. Недоступный файл пропускается в пределах прогона.
+    "speed_test_url_candidates": "",
     "speed_test_min_sec": "10",
     "apply_after_test": "true",
     "balancer_strategy": "random",
@@ -163,17 +195,30 @@ SETTING_DEFAULTS = {
     "sniffing_route_only": "true",
     # Performance tuning
     "max_workers": "15",
-    "probe_timeout": "5",
+    # Таймаут одной пробы через туннель. Медленные/защищённые узлы не успевают
+    # за 5 с, поэтому по умолчанию чуть больше — качество проверки важнее.
+    "probe_timeout": "8",
     "xray_startup_retries": "15",
     "db_check_auto_cleanup": "false",
     "import_proxy": "",
-    # Как проверять: сколько прокси пихать в один процесс Xray и когда сдаваться
-    "check_batch_size": "64",
+    # Как проверять: сколько прокси пихать в один процесс Xray и когда сдаваться.
+    # 128 — оптимум для большинства VPS: волна проверок идёт вдвое быстрее, чем
+    # на 64, а память/CPU одного процесса Xray остаются умеренными.
+    "check_batch_size": "128",
+    # Параллельных TCP-проверок до запуска Xray (независимо от пачки: это
+    # просто сокеты SYN, лишний запас ускоряет префильтр на больших базах).
+    "tcp_prefilter_workers": "128",
     "tcp_prefilter": "true",
-    "tcp_prefilter_timeout": "2",
+    # Префильтр пропускает медленные/защищённые серверы: SYN может идти долго.
+    "tcp_prefilter_timeout": "3",
+    # Сколько дополнительных попыток делать, прежде чем признать профиль мёртвым.
+    "tcp_prefilter_retries": "1",
+    "probe_retries": "1",
     "ping_samples": "3",
     "failed_backoff": "true",
-    "speed_stage_budget_sec": "120",
+    # Бюджет стадии скорости: 10 мин хватает на speed_test_max профилей по
+    # 10 секунд. Меньший бюджет обрезал замеры на самых быстрых профилях.
+    "speed_stage_budget_sec": "600",
 }
 
 
@@ -233,6 +278,56 @@ _MIGRATIONS = [
             "'https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/jquery-speedtest/10MB.txt' "
             "WHERE key='speed_test_url' AND value="
             "'https://speed.cloudflare.com/__down?bytes=10000000'",
+        ],
+    },
+    {
+        # Проверка перестала доходить до стадии скорости: gstatic/ftp.bit.nl
+        # блокировались или отваливались, а таймауты были слишком жёсткими для
+        # медленных узлов. Переводим старые дефолты на менее блокируемые URL и
+        # более терпеливые таймауты. Пользовательские значения не трогаем.
+        "version": 6,
+        "description": (
+            "URL проверки и замера на менее блокируемые сервисы, "
+            "более терпеливые таймауты пробы и TCP-префильтра"
+        ),
+        "sql": [
+            "UPDATE settings SET value='http://cp.cloudflare.com/generate_204' "
+            "WHERE key='probe_url' AND value IN "
+            "('https://www.gstatic.com/generate_204', "
+            "'https://connectivitycheck.gstatic.com/generate_204', "
+            "'https://www.google.com/generate_204')",
+            "UPDATE settings SET value="
+            "'https://speed.cloudflare.com/__down?bytes=10000000' "
+            "WHERE key='speed_test_url' AND value IN "
+            "('https://ftp.bit.nl/speedtest/10mb.bin', "
+            "'https://storage.googleapis.com/google-code-archive-downloads/"
+            "v2/code.google.com/jquery-speedtest/10MB.txt', "
+            "'http://speedtest.selectel.ru/10MB', "
+            "'http://speedtest.tele2.net/10MB', "
+            "'http://cachefly.cachefly.net/100mb.test')",
+            "UPDATE settings SET value='8' "
+            "WHERE key='probe_timeout' AND value='5'",
+            "UPDATE settings SET value='3' "
+            "WHERE key='tcp_prefilter_timeout' AND value='2'",
+            # Бюджета 120с хватало лишь на 12 замеров из 30: остальные профили
+            # не получали скорость и выпадали из «только замеренных».
+            "UPDATE settings SET value='600' "
+            "WHERE key='speed_stage_budget_sec' AND value='120'",
+        ],
+    },
+    {
+        # Проверка шла долго: пачка 64 профиля на процесс Xray недогружала
+        # сеть, а префильтр работал в 64 сокета. 128 + отдельные воркеры
+        # префильтра заметно сокращают прогон; пользовательские значения не
+        # трогаем (меняем только прежний дефолт 64).
+        "version": 7,
+        "description": (
+            "Пачка проверки 64 → 128 профилей, отдельная параллельность "
+            "TCP-префильтра (tcp_prefilter_workers)"
+        ),
+        "sql": [
+            "UPDATE settings SET value='128' "
+            "WHERE key='check_batch_size' AND value='64'",
         ],
     },
 ]
@@ -382,6 +477,30 @@ class Settings:
         return cls.get("proxy_listen", "0.0.0.0")
 
     @classmethod
+    def _port(cls, key: str, fallback: int) -> int:
+        """Порт из настроек с защитой от мусора и недопустимых значений."""
+        try:
+            value = int(str(cls.get(key, str(fallback))).strip())
+        except (TypeError, ValueError):
+            return fallback
+        return value if 1 <= value <= 65535 else fallback
+
+    @classmethod
+    def socks_port(cls) -> int:
+        """Порт SOCKS5 inbound (клиенты панели)."""
+        return cls._port("socks_port", SOCKS_PORT)
+
+    @classmethod
+    def http_port(cls) -> int:
+        """Порт HTTP inbound (клиенты панели и проверка)."""
+        return cls._port("http_port", HTTP_PORT)
+
+    @classmethod
+    def api_port(cls) -> int:
+        """Порт gRPC API Xray (горячее применение outbound)."""
+        return cls._port("api_port", API_PORT)
+
+    @classmethod
     def max_active_proxies(cls) -> int:
         """Максимальное количество активных прокси в конфиге."""
         return int(cls.get("max_active_proxies", "30"))
@@ -401,6 +520,20 @@ class Settings:
     def probe_url(cls) -> str:
         """URL для проверки работоспособности прокси (observatory)."""
         return cls.get("probe_url")
+
+    @classmethod
+    def probe_retries(cls) -> int:
+        """Сколько дополнительных попыток пробы делать до приговора «мёртв».
+
+        Медленные и защищённые узлы отвечают не с первой попытки: один повтор
+        с увеличенным таймаутом поднимает процент найденных живых профилей.
+        """
+        return max(0, min(3, int(cls.get("probe_retries", "1"))))
+
+    @classmethod
+    def probe_url_auto(cls) -> bool:
+        """True — подбирать URL проверки по результатам теста кандидатов."""
+        return (cls.get("probe_url_auto", "true") or "").strip().lower() == "true"
 
     @classmethod
     def check_interval_db(cls) -> int:
@@ -520,16 +653,26 @@ class Settings:
         Это таймаут стадии проверки: рабочий туннель отвечает на
         generate_204 за 0.3–2 с, всё, что дольше, для эксплуатации нерабочее.
         """
-        return max(1, min(30, int(cls.get("probe_timeout"))))
+        return max(1, min(60, int(cls.get("probe_timeout"))))
 
     @classmethod
     def check_batch_size(cls) -> int:
         """Сколько профилей проверять в одном процессе Xray.
 
-        Один процесс на пачку вместо процесса на каждый прокси: на 48
-        inbounds/outbound запуск Xray стоит столько же, сколько на один.
+        Один процесс на пачку вместо процесса на каждый прокси: запуск Xray
+        стоит столько же на 64 inbounds, сколько на один, поэтому большая
+        пачка ускоряет прогон почти линейно, пока хватает CPU/сети.
         """
-        return max(4, min(200, int(cls.get("check_batch_size", "48"))))
+        return max(4, min(256, int(cls.get("check_batch_size", "128"))))
+
+    @classmethod
+    def tcp_prefilter_workers(cls) -> int:
+        """Сколько TCP-проверок делать параллельно до запуска Xray.
+
+        Это независимый от пачки пул сокетов: префильтр проверяет тысячи
+        адресов, и 64 воркера держали прогон заметно дольше сети.
+        """
+        return max(4, min(512, int(cls.get("tcp_prefilter_workers", "128"))))
 
     @classmethod
     def tcp_prefilter(cls) -> bool:
@@ -540,9 +683,18 @@ class Settings:
     def tcp_prefilter_timeout(cls) -> float:
         """Таймаут TCP-префильтра, секунды (дробный)."""
         try:
-            return max(0.5, min(5.0, float(cls.get("tcp_prefilter_timeout", "2"))))
+            return max(0.5, min(10.0, float(cls.get("tcp_prefilter_timeout", "3"))))
         except (TypeError, ValueError):
-            return 2.0
+            return 3.0
+
+    @classmethod
+    def tcp_prefilter_retries(cls) -> int:
+        """Дополнительные попытки TCP-префильтра для медленных серверов.
+
+        SYN к защищённым/удалённым узлам может идти дольше одного таймаута;
+        без повтора такие профили выпадали из проверки как «tcp timeout».
+        """
+        return max(0, min(3, int(cls.get("tcp_prefilter_retries", "1"))))
 
     @classmethod
     def ping_samples(cls) -> int:
@@ -558,9 +710,9 @@ class Settings:
     def speed_stage_budget_sec(cls) -> int:
         """Общий бюджет стадии замера скорости, секунд (0 — без ограничения)."""
         try:
-            return max(0, min(3600, int(cls.get("speed_stage_budget_sec", "120"))))
+            return max(0, min(7200, int(cls.get("speed_stage_budget_sec", "600"))))
         except (TypeError, ValueError):
-            return 120
+            return 600
 
     @classmethod
     def xray_startup_retries(cls) -> int:

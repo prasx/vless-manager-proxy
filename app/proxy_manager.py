@@ -36,13 +36,14 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 
-from . import importer
+from . import importer, netcheck
 from .checker import (
     BatchXrayChecker,
     PortReserver,
@@ -64,15 +65,15 @@ from .vless import parse_vless
 # Пауза перед следующей проверкой упавшего профиля по числу падений подряд.
 FAIL_BACKOFF_SEC = (900, 3600, 10800, 43200)  # 15 мин, 1 ч, 3 ч, 12 ч
 
+# Пауза между «промежуточными» применениями конфига во время замера скорости.
+# Замер идёт по одному профилю; между профилями дешевле применить новые данные,
+# чтобы рабочие узлы появлялись в конфиге и подписке, не дожидаясь конца стадии.
+INCREMENTAL_APPLY_SEC = 20.0
+
 # Fallback-файлы для замера скорости (когда основной speed_test_url недоступен).
-# Только достаточно крупные файлы и глобально доступные CDN-хосты:
-# российские зеркала (selectel/tele2) недоступны с иностранных exit-нод.
-_SPEED_FALLBACK_URLS = (
-    "https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/jquery-speedtest/10MB.txt",
-    "https://speed.cloudflare.com/__down?bytes=10000000",
-    "http://cachefly.cachefly.net/100mb.test",
-    "https://proof.ovh.net/files/100Mb.dat",
-)
+# Основной каталог живёт в app/netcheck.py; здесь — запасные, чтобы стадия
+# скорости не осталась без данных, если пользователь задал один мёртвый URL.
+_SPEED_FALLBACK_URLS = tuple(netcheck.SPEED_URL_CANDIDATES[1:])
 
 
 def _backoff_seconds(fail_count: int) -> int:
@@ -104,6 +105,15 @@ class ProxyManager:
         self._speed_url: str = ""
         # Сколько раз URL замера не дал данных в этом прогоне (см. _speed_urls).
         self._speed_failed: dict[str, int] = {}
+        # Причина отказа каждого URL замера за прогон: логируем один раз на URL,
+        # чтобы понять, почему «замеры недоступны» (TLS, CONNECT, 403, DNS…).
+        self._speed_error_reasons: dict[str, str] = {}
+        # Файл лога текущего скоростного Xray (для причины отказа в логе).
+        self._last_speed_log: str = ""
+        # Причина отказа последнего замера (для ручного теста одного профиля).
+        self._last_speed_xray_tail: str = ""
+        # URL для ручного теста скорости одного профиля (перекрывает настройку).
+        self._speed_url_override: str = ""
         self.progress = {
             "running": False,
             "label": "",
@@ -160,7 +170,9 @@ class ProxyManager:
     def _xray_config(self, parsed, http_port):
         """Собирает минимальный конфиг Xray для одного прокси (http-inbound)."""
         return {
-            "log": {"loglevel": "none"},
+            # warning: если exit-нода не отдала ответ, в логе Xray будет причина
+            # («failed to read response from host: …») — она попадает в panel-лог.
+            "log": {"loglevel": "warning"},
             "inbounds": [
                 {
                     "port": http_port,
@@ -196,22 +208,48 @@ class ProxyManager:
             with tmp:
                 json.dump(config, tmp)
             tmp_path = tmp.name
+            # Лог Xray (warning) в файл: если замер не получился, в нём будет
+            # причина («failed to read response from host: connection reset»),
+            # а не только «no data». stdout+stderr — в один файл.
+            log = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".log", delete=False, prefix="xray-speed-"
+            )
+            log_path = log.name
             proc = None
             try:
                 proc = subprocess.Popen(
                     [xbin, "run", "-c", tmp_path],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
                 self._track_xray(proc)
+                self._last_speed_log = log_path
                 if self._wait_port(proc, http_port):
                     return proc, tmp_path, http_port, ""
                 last_err = "xray start failed"
             except Exception as e:  # noqa: BLE001
                 last_err = f"xray start failed: {e}"
+            finally:
+                log.close()
             self._stop_xray(proc, tmp_path)
+            try:
+                os.unlink(log_path)
+            except Exception:
+                pass
         return None, None, None, last_err
+
+    def _speed_log_tail(self, limit: int = 220) -> str:
+        """Последняя строка лога скоростного Xray — причина отказа."""
+        path = getattr(self, "_last_speed_log", "") or ""
+        if not path:
+            return ""
+        try:
+            text = Path(path).read_text(errors="replace").strip()
+        except Exception:
+            return ""
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        return lines[-1][:limit] if lines else ""
 
     @staticmethod
     def _wait_port(proc, port) -> bool:
@@ -249,6 +287,13 @@ class ProxyManager:
                 os.unlink(tmp_path)
             except Exception:
                 pass
+        log_path = getattr(self, "_last_speed_log", "") or ""
+        if log_path:
+            try:
+                os.unlink(log_path)
+            except Exception:
+                pass
+            self._last_speed_log = ""
 
     def _track_xray(self, proc):
         with self._xray_children_lock:
@@ -276,6 +321,7 @@ class ProxyManager:
         self._run_reasons = {}
         self._speed_url = ""
         self._speed_failed = {}
+        self._speed_error_reasons = {}
         with self._progress_lock:
             self.progress.update(
                 running=True,
@@ -447,6 +493,19 @@ class ProxyManager:
             if ok:
                 ok_total += 1
 
+        # 0. Перед прогоном проверяем сам URL проверки: если он мёртв из панели
+        #    или давно не тестировался — подбираем лучший из каталога. Это
+        #    дешёвая страховка от «все профили мёртвые» из-за одного URL.
+        probe_urls = netcheck.probe_url_candidates()
+        if Settings.probe_url_auto():
+            try:
+                current = netcheck.ensure_probe_url(timeout=min(6, max(2, timeout)))
+                probe_urls = netcheck.probe_url_candidates()
+                if current and current not in probe_urls:
+                    probe_urls.insert(0, current)
+            except Exception as e:  # noqa: BLE001 — подбор URL не должен ронять прогон
+                add_log("DEBUG", f"Probe URL pre-check failed: {e}")
+
         # 1. Разбор и структурная валидация: битые ссылки не оправляют батч в Xray.
         items: list[tuple[int, dict]] = []
         for r in rows:
@@ -474,7 +533,8 @@ class ProxyManager:
         add_log(
             "DEBUG",
             f"Check: {len(items)} после TCP-префильтра, батчи по {batch_size}, "
-            f"таймаут {timeout:.1f}с, медиана из {samples} проб",
+            f"таймаут {timeout:.1f}с, повторов {Settings.probe_retries()}, "
+            f"медиана из {samples} проб, URL пробы: {', '.join(probe_urls[:3])}",
         )
 
         def on_result(key, result):
@@ -488,19 +548,86 @@ class ProxyManager:
                 cancel=self._cancel,
                 on_result=on_result,
                 start_concurrency=batch_size,
+                probe_urls=probe_urls,
             )
         except Exception as e:  # noqa: BLE001
             add_log("ERROR", f"Check stage crashed: {e}")
+        self._log_probe_url_result(probe_urls)
         return ok_total, done_total
 
+    def _log_probe_url_result(self, probe_urls) -> None:
+        """Пишет, какой URL проверки реально отвечал, и переключает на лучший.
+
+        «Тест лучших ссылок для остальных проверок»: если основной URL ни разу
+        не ответил через туннели, а другой кандидат ответил — запоминаем его в
+        настройках, и следующие прогоны (и observatory Xray) идут через него.
+        """
+        stats = getattr(self._checker, "last_probe_stats", None)
+        if stats is None or stats.total() < 10:
+            return
+        best = stats.best()
+        primary = probe_urls[0] if probe_urls else Settings.probe_url()
+        summary = stats.summary()
+        if summary:
+            add_log("INFO", f"URL проверки: {summary}")
+        # Запоминаем URL, доказавший работу через туннели: прямая проверка из
+        # панели не должна перебивать его на следующем прогоне. Приоритет —
+        # текущий URL настроек, если он отвечал.
+        if stats.ok_count(primary):
+            netcheck.remember_tunnel_verified_url(primary)
+        elif best:
+            netcheck.remember_tunnel_verified_url(best)
+        if best and best != primary and stats.ok_count(primary) == 0:
+            try:
+                Settings.set("probe_url", best)
+                # Фиксируем выбор как «недавно проверенный»: иначе следующий
+                # прогон снова уйдёт в прямой тест из панели и может вернуть URL,
+                # который через туннели не отвечает.
+                netcheck.remember_probe_url_test(
+                    [{"url": best, "ok": True, "status": 204, "ms": 0, "error": ""}]
+                )
+            except Exception as e:  # noqa: BLE001
+                add_log("DEBUG", f"Could not switch probe_url: {e}")
+                return
+            add_log(
+                "WARN",
+                f"URL проверки {primary} не ответил ни разу за {stats.total()} проб — "
+                f"переключён на {best}. Следующие проверки пойдут через него.",
+            )
+
     def _tcp_prefilter(self, items, handle):
-        """Отсекает заведомо недоступные server:port. Возвращает выживших."""
+        """Отсекает заведомо недоступные server:port. Возвращает выживших.
+
+        Медленные и защищённые серверы не всегда отвечают на SYN с первого
+        раза: после таймаута/недоступности делаем ещё попытку с увеличенным
+        таймаутом. Раньше такие узлы выпадали как «tcp timeout», не доходя до
+        проверки через Xray — именно поэтому часть живых профилей не попадала
+        в замер скорости.
+        """
         timeout = Settings.tcp_prefilter_timeout()
-        parallel = max(1, min(Settings.check_batch_size(), len(items)))
+        retries = Settings.tcp_prefilter_retries()
+        parallel = max(1, min(Settings.tcp_prefilter_workers(), len(items)))
+        add_log(
+            "DEBUG",
+            f"TCP-префильтр: {len(items)} адресов, {parallel} параллельно, "
+            f"таймаут {timeout:.1f}с, повторов {retries}",
+        )
 
         def check_one(item):
             key, parsed = item
             ok, err = tcp_reachable(parsed["server"], parsed["port"], timeout)
+            attempt = 0
+            while (
+                not ok
+                and err in ("tcp timeout", "tcp unreachable")
+                and attempt < retries
+            ):
+                attempt += 1
+                # Последующие попытки терпеливее: SYN/retransmit у защищённых
+                # узлов может занимать несколько секунд.
+                ok, err = tcp_reachable(
+                    parsed["server"], parsed["port"], timeout * (1 + attempt)
+                )
             return key, parsed, ok, err
 
         survivors = []
@@ -517,12 +644,15 @@ class ProxyManager:
     # ─── Стадия 2: замер скорости (строго по одному) ───
 
     @staticmethod
-    def _measure_url_kbps(http_port, url, window_sec, min_kbps, adaptive_sec):
+    def _measure_url_kbps(http_port, url, window_sec, min_kbps, adaptive_sec,
+                          extra_headers=None):
         """Скачивает URL через HTTP-прокси ровно window_sec секунд.
 
-        Возвращает (средняя_kbps, максимальная_kbps). Средняя — за всё окно,
-        максимальная — лучшие 0.5 секунды: именно она показывает, сколько
-        канал реально отдаёт на пике, а не размазанное среднее.
+        Возвращает (средняя_kbps, максимальная_kbps, ошибка). Средняя — за всё
+        окно, максимальная — лучшие 0.5 секунды: именно она показывает, сколько
+        канал реально отдаёт на пике, а не размазанное среднее. Ошибка
+        заполняется, если запрос вообще не удался — по ней видно, почему замер
+        недоступен (TLS, CONNECT, 403, DNS и т.п.), а не только «no data».
 
         Окно замера фиксированное: файл может закончиться раньше — тогда он
         открывается заново, пока не наберётся время замера (или не наступит
@@ -541,6 +671,7 @@ class ProxyManager:
         sample_t = started
         sample_total = 0
         req_timeout = min(max(window_sec + 2, 6), 45)
+        error = ""
 
         def take_sample(now: float) -> None:
             """Фиксирует пик по последнему окну 0.5 с (мелкие окна — шум)."""
@@ -556,15 +687,18 @@ class ProxyManager:
             sample_total = total
 
         try:
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-            )
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            if extra_headers:
+                headers.update(extra_headers)
+            req = urllib.request.Request(url, headers=headers)
             resp = opener.open(req, timeout=req_timeout)
             while True:
                 try:
                     buf = resp.read(131072)
-                except Exception:
+                except Exception as e:  # noqa: BLE001
+                    error = error or f"обрыв чтения: {type(e).__name__}: {e}"
                     break  # поток оборвался — считаем то, что успели
                 if not buf:
                     # Файл исчерпан раньше окна — качаем снова
@@ -573,7 +707,8 @@ class ProxyManager:
                     try:
                         resp = opener.open(req, timeout=req_timeout)
                         continue
-                    except Exception:
+                    except Exception as e:  # noqa: BLE001
+                        error = error or f"переоткрытие: {type(e).__name__}: {e}"
                         break
                 total += len(buf)
                 now = time.time()
@@ -587,38 +722,184 @@ class ProxyManager:
                         cur = int((total * 8) / (elapsed * 1000))
                         if cur >= min_kbps * 1.3:
                             peak = max(peak, cur)
-                            return cur, peak
-        except Exception:
-            pass
+                            return cur, peak, ""
+        except urllib.error.HTTPError as e:  # noqa: PERF203
+            # Xray HTTP-inbound отвечает 503 с текстом причины, если не смог
+            # открыть соединение к цели. Этот текст — главная улика, почему
+            # файл замера «недоступен с exit-нод».
+            body = ""
+            try:
+                body = e.read(300).decode("utf-8", "replace").strip()
+            except Exception:
+                pass
+            error = f"HTTP {e.code}: {body or e.reason}"[:300]
+        except Exception as e:  # noqa: BLE001 — причина нужна в логе, а не только «0»
+            error = f"{type(e).__name__}: {e}"
         elapsed = time.time() - started
         if total <= 0 or elapsed <= 0:
-            return 0, 0
+            return 0, 0, error or "0 байт за окно"
         # Последние неполные 0.5 с тоже могут быть пиком.
         take_sample(time.time())
         avg = int((total * 8) / (elapsed * 1000))
-        return avg, max(peak, avg)
+        return avg, max(peak, avg), ""
 
     def _speed_urls(self) -> list[str]:
         """Кандидаты URL замера: рабочий из этого прогона — первым.
 
-        Если какой-то URL уже дважды не дал данных в этом прогоне, он уходит
-        в конец: чаще всего он просто недоступен с exit-нод, и заставлять
+        Основной URL идёт из настроек, затем каталог app/netcheck.py и запасные
+        CDN. Если какой-то URL уже дважды не дал данных в этом прогоне, он
+        уходит в конец: чаще всего он просто недоступен с exit-нод, и заставлять
         каждый следующий профиль выжидать на нём полное окно бессмысленно.
         """
-        primary = Settings.get("speed_test_url", "").strip()
         candidates: list[str] = []
+        if self._speed_url_override:
+            candidates.append(self._speed_url_override)
         if self._speed_url:
             candidates.append(self._speed_url)
-        if primary and primary not in candidates:
-            candidates.append(primary)
-        for u in _SPEED_FALLBACK_URLS:
-            if u not in candidates:
+        for u in netcheck.speed_url_candidates() + list(_SPEED_FALLBACK_URLS):
+            if u and u not in candidates:
                 candidates.append(u)
         healthy = [
             u for u in candidates
-            if u == self._speed_url or self._speed_failed.get(u, 0) < 2
+            if u in (self._speed_url_override, self._speed_url)
+            or self._speed_failed.get(u, 0) < 2
         ]
-        return healthy or candidates
+        result = healthy or candidates
+
+        def rank(u: str) -> int:
+            if u in (self._speed_url_override, self._speed_url):
+                return 0
+            # HTTP-файлы раньше HTTPS: у многих exit-нод TLS режется, и
+            # HTTPS-попытки впустую съедают бюджет профиля.
+            return 1 if u.startswith("http://") else 2
+
+        return sorted(result, key=rank)
+
+    @staticmethod
+    def _ip_endpoint(url: str):
+        """Параметры запроса к файлу по IP с исходным Host.
+
+        У exit-нод DNS часто «отравлен»: домен резолвится в заглушку. Резолвим
+        домен на сервере панели и обращаемся к IP, а исходный домен передаём
+        в заголовке Host (через CONNECT-туннель, чтобы Xray не подменил Host
+        на IP).
+        """
+        try:
+            parts = urllib.parse.urlsplit(url)
+        except Exception:  # noqa: BLE001
+            return None
+        host = parts.hostname
+        if parts.scheme != "http" or not host:
+            return None
+        try:
+            ip = socket.gethostbyname(host)
+        except Exception:  # noqa: BLE001
+            return None
+        if not ip or ip == host:
+            return None
+        path = parts.path or "/"
+        if parts.query:
+            path += "?" + parts.query
+        return {
+            "ip": ip,
+            "host": host,
+            "port": parts.port or 80,
+            "path": path,
+        }
+
+    @staticmethod
+    def _measure_connect_kbps(http_port, endpoint, window_sec, min_kbps, adaptive_sec):
+        """Замер через CONNECT-туннель с корректным Host (обход DNS exit-ноды).
+
+        Обычный HTTP-прокси Xray подменяет заголовок Host на IP из URL, поэтому
+        виртуальные хосты ломаются. Здесь соединение открывается CONNECT'ом до
+        IP, а HTTP-запрос с настоящим Host шлём уже внутри туннеля.
+        """
+        window_sec = max(1, int(window_sec))
+        ip = endpoint["ip"]
+        host = endpoint["host"]
+        port = int(endpoint["port"])
+        path = endpoint["path"]
+        started = time.time()
+        deadline = started + window_sec
+        total = 0
+        sample_t = started
+        sample_total = 0
+        peak = 0
+        req_timeout = min(max(window_sec + 3, 8), 45)
+        sock = None
+        error = ""
+        try:
+            sock = socket.create_connection(("127.0.0.1", http_port), timeout=req_timeout)
+            sock.settimeout(req_timeout)
+
+            def read_headers() -> bytes:
+                data = b""
+                while b"\r\n\r\n" not in data:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        raise OSError("пустой ответ")
+                    data += chunk
+                    if len(data) > 65536:
+                        raise OSError("слишком длинные заголовки")
+                return data
+
+            sock.sendall(
+                f"CONNECT {ip}:{port} HTTP/1.1\r\nHost: {ip}:{port}\r\n\r\n".encode()
+            )
+            header = read_headers()
+            status_line = header.split(b"\r\n", 1)[0].decode("utf-8", "replace")
+            if " 200" not in status_line:
+                return 0, 0, f"CONNECT: {status_line[:100]}"
+            sock.sendall(
+                (
+                    f"GET {path} HTTP/1.1\r\nHost: {host}\r\n"
+                    "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
+                    "Accept: */*\r\nConnection: close\r\n\r\n"
+                ).encode()
+            )
+            data = read_headers()
+            head, _, rest = data.partition(b"\r\n\r\n")
+            status_line = head.split(b"\r\n", 1)[0].decode("utf-8", "replace")
+            if " 200" not in status_line:
+                return 0, 0, f"HTTP: {status_line[:100]}"
+            total += len(rest)
+            # total == 0 — тело могло прийти следующим пакетом чуть позже окна:
+            # делаем хотя бы одну попытку чтения (recv ограничен таймаутом).
+            while time.time() < deadline or total == 0:
+                try:
+                    chunk = sock.recv(65536)
+                except OSError as e:
+                    error = f"обрыв чтения: {type(e).__name__}: {e}"
+                    break
+                if not chunk:
+                    break
+                total += len(chunk)
+                now = time.time()
+                dt = now - sample_t
+                if dt >= 0.5:
+                    delta = total - sample_total
+                    if delta > 0:
+                        peak = max(peak, int((delta * 8) / (dt * 1000)))
+                    sample_t, sample_total = now, total
+                if min_kbps > 0 and now - started >= max(1, adaptive_sec):
+                    cur = int((total * 8) / ((now - started) * 1000))
+                    if cur >= min_kbps * 1.3:
+                        peak = max(peak, cur)
+                        return cur, peak, ""
+        except Exception as e:  # noqa: BLE001
+            error = f"{type(e).__name__}: {e}"
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+        elapsed = time.time() - started
+        if total <= 0 or elapsed <= 0:
+            return 0, 0, error or "0 байт за окно"
+        avg = int((total * 8) / (elapsed * 1000))
+        return avg, max(peak, avg), ""
 
     def _measure_kbps(self, http_port, window_sec):
         """Замер скорости через HTTP-прокси.
@@ -626,30 +907,122 @@ class ProxyManager:
         Возвращает (средняя_kbps, максимальная_kbps). URL, с которого в этом
         прогоне уже качалось, пробуется первым: раньше недоступный основной URL
         заставлял каждый профиль выжидать полное окно на нём, прежде чем
-        перейти к рабочему CDN.
+        перейти к рабочему CDN. Причину отказа каждого URL запоминаем один раз
+        за прогон — по ней в логе видно, почему «замеры скорости недоступны».
         """
         window_sec = max(1, int(window_sec))
         min_kbps = Settings.min_speed_kbps()
         adaptive_sec = Settings.speed_test_adaptive_sec()
+        # Бюджет на ОДИН профиль: если exit-нода молча дропает соединения, то
+        # перебор всех URL по 10-12 с даёт 70–100 с на профиль, и стадия
+        # успевает проверить 5 узлов вместо 50. Ограничиваем перебор.
+        profile_started = time.monotonic()
+        profile_budget = max(12.0, min(45.0, window_sec * 2 + 10))
+        tls_blocked = False
         for url in self._speed_urls():
-            avg, peak = self._measure_url_kbps(
+            if time.monotonic() - profile_started > profile_budget:
+                add_log(
+                    "DEBUG",
+                    f"Speed: бюджет {profile_budget:.0f}с на профиль исчерпан — "
+                    "остальные URL не пробую",
+                )
+                break
+            if tls_blocked and url.startswith("https://"):
+                # У exit-ноды уже рвётся TLS — не тратим бюджет на остальные https.
+                continue
+            avg, peak, error = self._measure_url_kbps(
                 http_port, url, window_sec, min_kbps, adaptive_sec
             )
             if avg:
                 self._speed_url = url
                 self._speed_failed.pop(url, None)
+                self._speed_error_reasons.pop(url, None)
                 return avg, peak
+            if "SSL" in error or "TLS" in error:
+                tls_blocked = True
+            # Домен не открылся — пробуем тот же файл по IP через CONNECT-туннель
+            # (обход подмены DNS у exit-ноды; Host передаём настоящий).
+            if time.monotonic() - profile_started <= profile_budget:
+                endpoint = self._ip_endpoint(url)
+                if endpoint:
+                    add_log(
+                        "DEBUG",
+                        f"Speed: {url.split('/')[2] if '://' in url else url} не открылся "
+                        f"напрямую ({error[:100]}); пробую по IP {endpoint['ip']} "
+                        f"с Host: {endpoint['host']}",
+                    )
+                    avg2, peak2, error2 = self._measure_connect_kbps(
+                        http_port, endpoint, window_sec, min_kbps, adaptive_sec
+                    )
+                    if avg2:
+                        add_log(
+                            "INFO",
+                            f"Speed: файл замера доступен с этой exit-ноды только "
+                            f"по IP (DNS домена не резолвится/подменяется): "
+                            f"{url.split('/')[2]}",
+                        )
+                        self._speed_url = url
+                        self._speed_failed.pop(url, None)
+                        self._speed_error_reasons.pop(url, None)
+                        return avg2, peak2
+                    add_log("DEBUG", f"Speed: по IP тоже не вышло — {error2[:160]}")
+                    error = error2 or error
+                    # Пустой ответ/сброс после CONNECT — узел не выпускает трафик
+                    # на этот IP. Остальные файлы через него тоже не пойдут:
+                    # не тратим остаток бюджета профиля.
+                    if any(
+                        m in (error2 or "").lower()
+                        for m in ("пустой ответ", "connection reset", "обрыв")
+                    ):
+                        self._speed_failed[url] = self._speed_failed.get(url, 0) + 1
+                        self._speed_error_reasons.setdefault(url, error2)
+                        add_log(
+                            "DEBUG",
+                            "Speed: узел закрывает соединение после CONNECT — "
+                            "похоже, egress заблокирован, пропускаю остальные файлы",
+                        )
+                        break
             self._speed_failed[url] = self._speed_failed.get(url, 0) + 1
+            if url not in self._speed_error_reasons:
+                reason = error or "0 байт за окно"
+                self._speed_error_reasons[url] = reason
+                add_log(
+                    "WARN",
+                    f"Speed URL недоступен: {url.split('/')[2] if '://' in url else url} — "
+                    f"{reason[:200]}",
+                )
         return 0, 0
 
-    def _stage_speed(self, speed_rows):
+    def _stage_speed(self, speed_rows, apply_incremental=False):
         """Стадия «Замер скорости» — СТРОГО по одному профилю за раз.
-        Параллельные замеры скорости дают недостоверные данные (делят канал)."""
+
+        Параллельные замеры скорости дают недостоверные данные (делят канал).
+        Если включён `apply_incremental`, между замерами (то есть без нагрузки
+        на измеряемый канал) конфиг и подписка обновляются: пользователь видит
+        первые рабочие узлы через десятки секунд, а не после всей стадии.
+        """
         window_sec = Settings.speed_test_duration_sec()
         budget = Settings.speed_stage_budget_sec()
         deadline = time.monotonic() + budget if budget else 0.0
         measured = 0
-        for r in speed_rows:
+        self._speed_error_reasons = {}
+        self._last_speed_xray_tail = ""
+        last_apply = time.monotonic()
+        changed_since_apply = False
+        zero_streak = 0
+        zero_warned = False
+
+        def maybe_apply():
+            nonlocal last_apply, changed_since_apply
+            if not (apply_incremental and changed_since_apply):
+                return
+            if time.monotonic() - last_apply < INCREMENTAL_APPLY_SEC:
+                return
+            if self._apply_incremental(f"замерено {measured} профилей"):
+                last_apply = time.monotonic()
+                changed_since_apply = False
+
+        for index, r in enumerate(speed_rows, start=1):
             if self._cancel.is_set():
                 add_log("INFO", "Cancel requested, stopping speed stage")
                 break
@@ -660,23 +1033,54 @@ class ProxyManager:
                     f"остальные профили пропущены",
                 )
                 break
+            # Применяем накопленные результаты перед стартом следующего замера:
+            # так обновление конфига не влияет на сам замер скорости.
+            maybe_apply()
             parsed = parse_vless(r["link"])
             host = r.get("host") or (parsed.get("server") if parsed else f"#{r['id']}")
             if not parsed:
                 self._stage_advance(False, current_text=f"#{r['id']} {host}: invalid link")
                 continue
+            # Начало замера видно в логах: если профиль «завис», по логу понятно,
+            # на каком именно это произошло (DEBUG, не ошибка).
+            add_log(
+                "DEBUG",
+                f"Speed {index}/{len(speed_rows)}: #{r['id']} {host} — старт замера",
+            )
             proc, tmp_path, http_port, _err = self._start_xray(parsed)
             if not proc:
                 self._stage_advance(False, current_text=f"#{r['id']} {host}: xray start failed")
+                changed_since_apply = True
                 continue
             try:
+                # Диагностика на первом профиле: проходит ли туннель URL проверки.
+                # Если нет — проблема в самом туннеле, а не в файле замера; если
+                # да, но файлы замера дают 503 — exit-нода не открывает цель.
+                if index == 1:
+                    try:
+                        from .checker import probe_once
+
+                        ok_probe, _lat, perr, _el = probe_once(
+                            http_port,
+                            min(6.0, float(Settings.probe_timeout())),
+                            Settings.probe_url(),
+                        )
+                        add_log(
+                            "DEBUG" if ok_probe else "WARN",
+                            "Speed: туннель первого профиля "
+                            + ("проходит URL проверки" if ok_probe else f"НЕ проходит URL проверки: {perr}"),
+                        )
+                    except Exception as e:  # noqa: BLE001 — диагностика не критична
+                        add_log("DEBUG", f"Speed: диагностика туннеля не удалась: {e}")
                 self._set_current(f"#{r['id']} {host} — замер {window_sec}с…")
                 kbps, peak = self._measure_kbps(http_port, window_sec)
                 if kbps:
                     measured += 1
+                    zero_streak = 0
                     db_q(
-                        "UPDATE proxies SET speed_kbps=?, speed_max_kbps=? WHERE id=?",
-                        (kbps, peak, r["id"]),
+                        "UPDATE proxies SET speed_kbps=?, speed_max_kbps=?, "
+                        "speed_tested_at=?, speed_fail_count=0 WHERE id=?",
+                        (kbps, peak, now_utc(), r["id"]),
                     )
                     add_log(
                         "INFO",
@@ -684,7 +1088,29 @@ class ProxyManager:
                         f"{window_sec}s window",
                     )
                 else:
+                    zero_streak += 1
+                    # Неудачная попытка тоже фиксируется: в следующем прогоне
+                    # этот профиль уйдёт в конец очереди, а не будет снова
+                    # первым съедать бюджет стадии.
+                    db_q(
+                        "UPDATE proxies SET speed_tested_at=?, "
+                        "speed_fail_count=COALESCE(speed_fail_count, 0) + 1 WHERE id=?",
+                        (now_utc(), r["id"]),
+                    )
                     add_log("WARN", f"Speed #{r['id']} ({host}): no data in {window_sec}s window")
+                    xray_tail = self._speed_log_tail()
+                    if xray_tail:
+                        self._last_speed_xray_tail = xray_tail
+                        add_log("DEBUG", f"Speed #{r['id']}: Xray: {xray_tail}")
+                    if zero_streak >= 5 and not zero_warned:
+                        zero_warned = True
+                        add_log(
+                            "WARN",
+                            "Speed stage: 5 профилей подряд без данных — файл замера "
+                            "недоступен с части exit-нод. Продолжаю по списку: "
+                            "незамеренные профили получат попытку в следующих прогонах",
+                        )
+                changed_since_apply = True
                 self._stage_advance(
                     kbps > 0,
                     current_text=(
@@ -695,11 +1121,24 @@ class ProxyManager:
             finally:
                 self._stop_xray(proc, tmp_path)
         if speed_rows and measured == 0:
+            reasons = "; ".join(
+                f"{u.split('/')[2] if '://' in u else u}: {r[:120]}"
+                for u, r in list(self._speed_error_reasons.items())[:5]
+            )
+            hint = (
+                " Похоже, exit-ноды не пропускают файл замера (TLS/CONNECT/блокировка "
+                "хостинга). Возьмите HTTP-файл, доступный из стран ваших exit-нод: "
+                "из РФ — http://mirror.yandex.ru/debian/ls-lR.gz или "
+                "http://speedtest.selectel.ru/10MB; из ЕС — "
+                "http://ftp.bit.nl/speedtest/10mb.bin, и укажите его в «URL замера»."
+            )
             add_log(
                 "WARN",
                 f"Speed stage: 0/{len(speed_rows)} measurements succeeded — "
                 f"проверьте speed_test_url ({Settings.get('speed_test_url')}) "
-                f"и доступность CDN с exit-нод",
+                f"и доступность CDN с exit-нод."
+                + (f" Причины: {reasons}." if reasons else "")
+                + hint,
             )
 
     # ─── Конвейер прогона ───
@@ -721,6 +1160,15 @@ class ProxyManager:
         set_correlation_id(cid)
         self._begin_run(label)
         self._check_stats = (0, 0)
+        # Пульс прогона: раз в 2 минуты пишем стадию/прогресс. Если прогон
+        # «завис», в логах видно, на каком месте и в какой стадии это случилось.
+        heartbeat_stop = threading.Event()
+        threading.Thread(
+            target=self._pipeline_heartbeat,
+            args=(label, heartbeat_stop),
+            daemon=True,
+            name="pipeline-heartbeat",
+        ).start()
         try:
             # ── Стадия 0 (опционально): импорт источников ──
             if import_srcs:
@@ -788,13 +1236,25 @@ class ProxyManager:
             # ── Стадия 2: скорость — строго по одному профилю ──
             row_ids = [r["id"] for r in rows if r.get("id")]
             working = self._working_rows(row_ids) if row_ids else []
+
+            # Быстрый результат для пользователя: если политика допуска не
+            # требует замера, применяем конфиг сразу после проверки — рабочие
+            # узлы уже в конфиге и подписке, а скорость дозамерится на ходу.
+            if (
+                apply_config
+                and not self._cancel.is_set()
+                and working
+                and not Settings.require_speed()
+            ):
+                self._apply_incremental("после проверки, до замеров скорости")
+
             if self._speed_enabled_for(working):
                 speed_rows = self._speed_rows(row_ids)
                 if speed_rows:
                     self._begin_stage("speed", "Замер скорости", len(speed_rows))
                     add_log("INFO", f"Speed stage ({label}): {len(speed_rows)} proxies, ONE AT A TIME, "
                                     f"{Settings.speed_test_duration_sec()}s each")
-                    self._stage_speed(speed_rows)
+                    self._stage_speed(speed_rows, apply_incremental=apply_config)
                     self._end_stage()
                 else:
                     self._skip_stage("speed", "Замер скорости")
@@ -813,9 +1273,46 @@ class ProxyManager:
             self._finish_run(label)
             return self._check_stats
         except Exception as e:  # noqa: BLE001
-            add_log("ERROR", f"Pipeline {label} crashed: {e}")
+            # Остановка панели во время прогона — не ошибка конвейера: пул
+            # потоков уже не принимает задачи. Не пугаем пользователя ERROR'ом.
+            if "interpreter shutdown" in str(e).lower() or sys.is_finalizing():
+                add_log("INFO", f"Pipeline {label} остановлен: завершение процесса")
+            else:
+                add_log("ERROR", f"Pipeline {label} crashed: {e}")
             self._finish_run(label)
             return self._check_stats
+        finally:
+            heartbeat_stop.set()
+
+    def _pipeline_heartbeat(self, label: str, stop: threading.Event) -> None:
+        """Пишет в лог, что прогон жив и где он находится (раз в 2 минуты)."""
+        while not stop.wait(120):
+            try:
+                p = self.progress_snapshot()
+                if not p.get("running"):
+                    continue
+                elapsed_min = int((time.time() - (p.get("started_at") or 0)) / 60)
+                add_log(
+                    "INFO",
+                    f"Прогон «{label}» идёт: стадия {p.get('phase') or '—'}, "
+                    f"{p.get('done', 0)}/{p.get('total', 0)}, "
+                    f"текущий: {p.get('current') or '—'}, прошло ~{elapsed_min} мин",
+                )
+            except Exception:  # noqa: BLE001 — пульс не должен ломать прогон
+                pass
+
+    def _apply_incremental(self, reason: str) -> bool:
+        """Промежуточное применение конфига и подписки во время прогона.
+
+        Не блокирует прогон: если пересборка уже идёт, просто пропускаем —
+        следующая попытка будет между следующими замерами.
+        """
+        from .xray_configurator import xray_configurator
+
+        if xray_configurator.apply_all(blocking=False):
+            add_log("INFO", f"Конфиг и подписка обновлены на ходу ({reason})")
+            return True
+        return False
 
     def _cleanup_failed(self):
         """Автоудаление только тех профилей, что упали несколько раз подряд."""
@@ -850,7 +1347,15 @@ class ProxyManager:
         ]
 
     def _speed_rows(self, row_ids):
-        """Топ-N рабочих профилей прогона по пингу для замера скорости."""
+        """Топ-N рабочих профилей прогона по пингу для замера скорости.
+
+        Очерёдность: сначала **никогда не замерявшиеся**, потом уже пытавшиеся
+        (старые попытки — первыми), затем замеренные (для освежения значений).
+        Раньше первые места по пингу стабильно занимали одни и те же узлы: если
+        файл замера у них недоступен, они оставались «незамеренными» и каждый
+        прогон снова съедали бюджет стадии. Теперь неудачная попытка сдвигает
+        профиль назад — за прогоны очередь реально двигается.
+        """
         speed_max = int(Settings.get("speed_test_max", "8"))
         if speed_max <= 0:
             return []
@@ -858,7 +1363,20 @@ class ProxyManager:
         return [
             dict(r)
             for r in db_q(
-                f"SELECT id, link, host FROM proxies WHERE id IN ({placeholders}) AND status='working' AND latency_vless > 0 ORDER BY latency_vless ASC, id ASC LIMIT ?",
+                f"SELECT id, link, host FROM proxies WHERE id IN ({placeholders}) "
+                f"AND status='working' AND latency_vless > 0 "
+                f"ORDER BY CASE "
+                f"  WHEN COALESCE(speed_kbps, 0) > 0 THEN 2 "
+                f"  WHEN COALESCE(speed_fail_count, 0) > 0 THEN 1 "
+                f"  ELSE 0 END ASC, "
+                # Среди ни разу не замерявшихся — случайная выборка, а не
+                # строго самый низкий пинг: иначе каждый прогон упирается в
+                # одни и те же узлы (часто одного «фильтрующего» оператора),
+                # и до узлов с нормальным egress очередь не доходит.
+                f"CASE WHEN COALESCE(speed_kbps, 0) = 0 "
+                f"     AND COALESCE(speed_fail_count, 0) = 0 THEN RANDOM() ELSE 0 END, "
+                f"COALESCE(speed_tested_at, '') ASC, "
+                f"latency_vless ASC, id ASC LIMIT ?",
                 row_ids + [speed_max],
             )
         ]
@@ -982,16 +1500,30 @@ class ProxyManager:
         t.start()
         return True
 
-    def measure_single(self, pid: int) -> dict:
+    def measure_single(self, pid: int, speed_url: str = "") -> dict:
         """Полный конвейер для ОДНОГО прокси (синхронно, эксклюзивно).
-        Возвращает {busy:True} если идёт другой замер, иначе результат."""
+
+        speed_url — проверить именно этот URL замера (для диагностики:
+        «скачивается ли файл через этот конкретный профиль»).
+        Возвращает {busy:True} если идёт другой замер, иначе результат.
+        """
         rows = db_q("SELECT id, link, host FROM proxies WHERE id=?", (pid,))
         if not rows:
             return {"busy": False, "error": "not found"}
         row = rows[0]
         if not self._run_lock.acquire(blocking=False):
+            snap = self.progress_snapshot()
             add_log("WARN", f"Another test is running — single test #{pid} skipped")
-            return {"busy": True}
+            return {
+                "busy": True,
+                "running_label": snap.get("label") or snap.get("last_label") or "",
+                "phase": snap.get("phase") or "",
+                "done": snap.get("done", 0),
+                "total": snap.get("total", 0),
+                "current": snap.get("current") or "",
+            }
+        self._speed_url_override = (speed_url or "").strip()
+        self._last_speed_xray_tail = ""
         try:
             self._execute_pipeline(
                 [row], "single", apply_config=False,
@@ -1005,15 +1537,29 @@ class ProxyManager:
             if not after:
                 return {"busy": False, "error": "deleted during test"}
             r = after[0]
+            speed = r["speed_kbps"] or 0
+            # Для диагностики: если скорость 0 — отдаём причину по URL (важнее),
+            # а лог Xray — отдельным полем.
+            speed_error = ""
+            if not speed:
+                if self._speed_error_reasons:
+                    speed_error = next(iter(self._speed_error_reasons.values()))
+                elif self._last_speed_xray_tail:
+                    speed_error = self._last_speed_xray_tail
             return {
                 "busy": False,
                 "status": r["status"],
                 "latency": r["latency_vless"] or 0,
-                "speed": r["speed_kbps"] or 0,
+                "speed": speed,
                 "speed_max": r["speed_max_kbps"] or 0,
+                "speed_url": self._speed_url_override or Settings.speed_test_url(),
+                "speed_error": speed_error,
+                "speed_errors": dict(self._speed_error_reasons),
+                "xray_log": self._last_speed_xray_tail,
                 "error": r["last_error"] or (None if r["status"] == "working" else "test failed"),
             }
         finally:
+            self._speed_url_override = ""
             try:
                 self._run_lock.release()
             except RuntimeError:
