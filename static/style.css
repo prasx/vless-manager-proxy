@@ -218,8 +218,8 @@ details[open] > summary { margin-bottom: 8px; }
   border-radius: var(--radius);
 }
 .appbar-link:hover { color: var(--text-primary); background: var(--bg-secondary); }
-.nav-toggle { display: inline-flex; }
-@media (min-width: 900px) { .nav-toggle { display: none; } }
+.appbar-tools .nav-toggle { display: inline-flex; }
+@media (min-width: 900px) { .appbar-tools .nav-toggle { display: none; } }
 
 /* ─── Шапка страницы ─── */
 .page-head {
