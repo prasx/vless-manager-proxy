@@ -66,9 +66,8 @@ function shortError(text, limit = 60) {
 function fmtImportTime(t) {
   const d = utcDate(t);
   if (!d) return t ? String(t) : '';
-  return d.toLocaleString(undefined, {
-    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-  });
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}, ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // ─── Сводка ───

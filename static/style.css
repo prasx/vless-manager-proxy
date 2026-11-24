@@ -446,7 +446,7 @@ input[type="checkbox"]:not(.chk-custom):checked::after {
 table { width: 100%; border-collapse: collapse; }
 .data-table { table-layout: fixed; }
 .data-table th,
-.data-table td { padding: 10px 8px; vertical-align: middle; }
+.data-table td { padding: 8px; vertical-align: middle; }
 .data-table th.num,
 .data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .data-table .actions-head { text-align: right; }
@@ -1394,7 +1394,7 @@ dialog.modal::backdrop { background: var(--overlay); }
 .src-table { display: none; }
 @media (min-width: 1100px) { .src-table { display: table; table-layout: fixed; width: 100%; } }
 .src-table th,
-.src-table td { padding: 10px 8px; vertical-align: middle; overflow: hidden; }
+.src-table td { padding: 8px; vertical-align: middle; overflow: hidden; }
 .src-table td.src-actions { overflow: visible; }
 .src-col-id { width: 48px; }
 .src-col-out { width: 112px; }
