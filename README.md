@@ -15,7 +15,9 @@
 
 Самостоятельная панель для VLESS-прокси. Проверяет узлы реальным запуском Xray, замеряет скорость, собирает конфиг Xray и `subscribe.txt` по одному правилу и применяет его через Xray API. Без облака и внешнего биллинга: SQLite, Flask, один процесс.
 
-![Дашборд VLESS Manager](docs/dashboard.png)
+![Дашборд VLESS Manager](docs/screens/dashboard.png)
+
+<sub>Страница источников — [docs/screens/sources.png](docs/screens/sources.png).</sub>
 
 ## Возможности
 
