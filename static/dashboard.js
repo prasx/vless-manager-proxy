@@ -316,6 +316,22 @@ function renderTraffic(ob, xr) {
       ? ' <span class="badge badge-green">работает</span>'
       : ' <span class="badge badge-red">остановлен</span>';
   }
+  // Состав конфига по политике допуска: сколько отобрано из рабочих и сколько
+  // из них реально замерено. Если сработал fallback — это видно сразу.
+  if (xr && !xr.error && xr.config_candidates != null) {
+    const measured = xr.config_measured || 0;
+    const working = xr.config_working || 0;
+    const fresh = xr.config_fresh_minutes || 0;
+    html += ` <span class="badge badge-muted" title="отбор: рабочих ${working}, замерено ${measured}, свежесть ≤ ${fresh} мин">конфиг: ${xr.config_candidates} · замерено ${measured}</span>`;
+    if (xr.config_fallback) {
+      const why = xr.config_fallback === 'unmeasured'
+        ? 'нет замеров, взяты незамеренные'
+        : (xr.config_fallback === 'slow'
+          ? 'все замеренные ниже порога скорости'
+          : 'нет свежих, взяты устаревшие');
+      html += ` <span class="badge badge-orange" title="${esc(why)}">fallback</span>`;
+    }
+  }
   el.innerHTML = html;
 }
 
@@ -624,6 +640,22 @@ async function retestFailed() {
   if (r.error) return toast(r.error, 'error');
   if (!r.queued) { toast('нет неработающих прокси для перетеста'); return; }
   toast(`запущен перетест ${r.queued} неработающих прокси…`);
+  setTimeout(loadData, 3000);
+}
+
+/** Актуализация: перепроверить/перезамерить то, что политика допуска уже
+ *  не пускает в конфиг (устаревшие и незамеренные профили). */
+async function refreshStaleProfiles() {
+  const r = await api('POST','/api/refresh-stale');
+  if (r.busy) return toast('идёт другой замер — попробуйте позже', 'error');
+  if (r.error && !r.success) return toast(r.error, 'error');
+  if (!r.success) return toast(r.reason || 'нечего актуализировать');
+  if (r.speed_will_truncate) {
+    toast(`в прогон ${r.queued} профилей, замеров успеет ~${r.speed_measurements}`
+      + ` (бюджет ${r.speed_budget_sec}с) — поднимите бюджет стадии скорости`, 'info');
+  } else {
+    toast(`в прогон поставлено ${r.queued} профилей…`);
+  }
   setTimeout(loadData, 3000);
 }
 

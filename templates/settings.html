@@ -140,7 +140,15 @@
           <div class="input-row">
             <input type="number" id="minSpeedMbps" class="input input-tight" min="0" max="1000" step="0.1" placeholder="0">
             <span class="tuning-suffix">Mbps</span>
-            <span class="tuning-comment">0 = без фильтра; ниже порога не попадает в конфиг</span>
+            <span class="tuning-comment">0 = без фильтра; ниже порога и незамеренные не попадают в конфиг</span>
+          </div>
+        </div>
+        <div class="tuning-item">
+          <span class="tuning-label">Свежесть профиля</span>
+          <div class="input-row">
+            <input type="number" id="profileMaxAgeMin" class="input input-tight" min="0" max="10080" placeholder="0">
+            <span class="tuning-suffix">мин</span>
+            <span class="tuning-comment">0 = авто (2× интервал проверки, 3 ч – сутки): старее — не в конфиг и не в подписку</span>
           </div>
         </div>
         <div class="tuning-item">

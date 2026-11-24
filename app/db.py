@@ -1,5 +1,6 @@
 """Работа с SQLite: инициализация схемы, запросы, настройки."""
 
+import json
 import sqlite3
 import threading
 import time
@@ -140,6 +141,12 @@ SETTING_DEFAULTS = {
     "handshake_timeout": "5",
     "conn_idle": "300",
     "min_speed_mbps": "0",
+    # Порог «свежести» профиля в конфиге/подписке, минут (0 = авто:
+    # 2 × check_interval_db, не меньше 3 ч и не больше суток).
+    "profile_max_age_min": "0",
+    # Теги node* outbound, которые, по данным панели, уже живут в Xray.
+    # Служебное состояние hot-reload: не для редактирования в UI.
+    "applied_node_tags": "",
     "speed_test_adaptive_sec": "2",
     "sniffing_enabled": "true",
     "sniffing_dest_override": "http,tls",
@@ -420,6 +427,46 @@ class Settings:
             return int(mbps * 1000) if mbps > 0 else 0
         except (ValueError, TypeError):
             return 0
+
+    @classmethod
+    def profile_max_age_min(cls) -> int:
+        """Явный порог свежести профиля в минутах. 0 = вычислить автоматически."""
+        try:
+            return max(0, int(cls.get("profile_max_age_min", "0")))
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def profile_freshness_minutes(cls) -> int:
+        """Сколько минут успешный тест считается доказательством работоспособности.
+
+        Конфиг и подписка берут только профили не старше этого порога: иначе
+        «working» месячной давности продолжает уезжать клиентам, хотя узел
+        давно мёртв. Авто-режим привязан к интервалу проверки из БД: две
+        проверки подряд должны уложиться в порог, но не меньше 3 часов
+        (полный прогон большой базы сам занимает часы) и не больше суток.
+        """
+        configured = cls.profile_max_age_min()
+        if configured > 0:
+            return max(10, min(10080, configured))
+        interval_min = max(1, cls.check_interval_db() // 60)
+        return max(180, min(1440, interval_min * 2))
+
+    @classmethod
+    def applied_node_tags(cls) -> list[str]:
+        """Теги node*, которые панель уже отправила в работающий Xray."""
+        try:
+            raw = json.loads(cls.get("applied_node_tags", "") or "[]")
+        except (ValueError, TypeError):
+            return []
+        if not isinstance(raw, list):
+            return []
+        return [t for t in raw if isinstance(t, str) and t.startswith("node")]
+
+    @classmethod
+    def set_applied_node_tags(cls, tags) -> None:
+        """Запоминает фактически применённый набор node-тегов."""
+        cls.set("applied_node_tags", json.dumps(sorted(set(tags))))
 
     @classmethod
     def speed_test_adaptive_sec(cls) -> int:

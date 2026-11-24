@@ -46,14 +46,28 @@ function renderSummary(sources) {
   const total = sources.length;
   const prox = sources.reduce((a, s) => a + (s.count || 0), 0);
   const work = sources.reduce((a, s) => a + (s.working || 0), 0);
+  const measured = sources.reduce((a, s) => a + (s.measured || 0), 0);
+  const attention = sources.filter(s => ['weak', 'bad', 'stale', 'broken'].includes(s.verdict)).length;
   const broken = sources.filter(s => s.last_status &&
     ['network_error', 'http_error', 'bad_url', 'error'].includes(s.last_status)).length;
   el.innerHTML =
     `<span>источников: <b>${total}</b></span>` +
     `<span>прокси: <b>${prox}</b></span>` +
     `<span>рабочих: <b>${work}</b></span>` +
+    `<span>замерено: <b>${measured}</b></span>` +
+    (attention ? `<span class="summary-warn">требуют внимания: <b>${attention}</b></span>` : '') +
     (broken ? `<span class="summary-bad">с ошибкой импорта: <b>${broken}</b></span>` : '');
 }
+
+// Подписи и цвета вердиктов источников приходят кодами — держим их здесь.
+const VERDICT_CLASS = {
+  healthy: 'ok',
+  weak: 'warn',
+  bad: 'bad',
+  stale: 'warn',
+  broken: 'bad',
+  inactive: 'muted',
+};
 
 function renderList(sources) {
   const list = $('#list');
@@ -69,6 +83,9 @@ function renderList(sources) {
     const imported = s.last_import ? fmtUtcTime(s.last_import) : 'никогда';
     const count = s.count != null ? s.count : 'нет';
     const working = s.working != null ? s.working : 0;
+    const measured = s.measured != null ? s.measured : 0;
+    const score = s.score != null ? s.score : 0;
+    const verdict = s.verdict || 'inactive';
     const st = s.last_status;
     const stTitle = [s.last_error, s.last_import ? 'последний импорт: ' + imported : '']
       .filter(Boolean).join(' · ');
@@ -76,14 +93,21 @@ function renderList(sources) {
       <div class="c-body">
         <div class="c-name">
           <span class="c-type ${isTxt ? 'type-txt' : 'type-url'}">${isTxt ? 'TXT' : 'URL'}</span>
+          <span class="c-prio" title="Приоритет по качеству источника">#${s.priority || '—'}</span>
           ${esc(s.name)}
+          <span class="c-quality v-${VERDICT_CLASS[verdict] || 'muted'}"
+                title="Оценка источника: ${score}/100 · ${esc(s.recommendation || '')}">${score}</span>
           <span class="c-status st-${statusClass(st)}" title="${esc(stTitle)}">импорт: ${esc(statusText(st))}</span>
         </div>
         <div class="c-url" title="${isTxt ? 'TXT-источник' : esc(s.url)}">${isTxt ? 'TXT-источник' : esc(s.url)}</div>
         <div class="c-meta">
-          <span class="c-counts">прокси: <b>${count}</b> · рабочих: <span class="${working > 0 ? 'ok' : 'bad'}">${working}</span></span>
+          <span class="c-counts">прокси: <b>${count}</b> · рабочих: <span class="${working > 0 ? 'ok' : 'bad'}">${working}</span>
+            · замерено: <b>${measured}</b> · качество: <b>${score}</b>
+            <span class="c-verdict v-${VERDICT_CLASS[verdict] || 'muted'}">${esc(s.verdict_label || verdict)}</span></span>
           &nbsp;·&nbsp; импорт: ${imported}
         </div>
+        ${s.recommendation && verdict !== 'healthy'
+          ? `<div class="c-reco v-${VERDICT_CLASS[verdict] || 'muted'}">${esc(s.recommendation)}</div>` : ''}
         ${s.last_error ? `<div class="c-error" title="${esc(s.last_error)}">${esc(s.last_error)}</div>` : ''}
       </div>
       <div class="c-actions">
@@ -97,14 +121,114 @@ function renderList(sources) {
   }
 }
 
+// ─── Состав конфига: что реально уйдёт в Xray и подписку ───
+
+const EXCLUDE_LABELS = {
+  stale: 'устарело',
+  slow: 'медленнее порога',
+  unmeasured: 'без замера',
+  blocked: 'страна исключена',
+  invalid: 'битая ссылка',
+};
+
+function fmtSpeed(kbps) {
+  if (!kbps) return '—';
+  return kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${kbps} Kbps`;
+}
+
+function renderConfigPreview(d) {
+  const el = $('#configPreview');
+  if (!el) return;
+  const c = d.counts || {};
+  const s = d.settings || {};
+  const selected = d.selected || [];
+  const excluded = c.stale + c.slow + c.unmeasured + c.blocked + c.invalid;
+
+  const chips = [
+    `<span>в конфиг <b>${selected.length}</b> из <b>${c.working_total || 0}</b> рабочих</span>`,
+    `<span>замерено <b>${selected.filter(r => r.tier === 1).length}</b> из <b>${selected.length}</b></span>`,
+    `<span>свежесть ≤ <b>${d.fresh_minutes}</b> мин</span>`,
+    `<span>лимит <b>${s.max_active_proxies != null ? s.max_active_proxies : '—'}</b></span>`,
+  ];
+  for (const key of ['stale', 'slow', 'unmeasured', 'blocked', 'invalid']) {
+    if (c[key]) chips.push(`<span class="summary-bad">${EXCLUDE_LABELS[key]}: <b>${c[key]}</b></span>`);
+  }
+  if (!excluded) chips.push('<span>отсеяно: <b>0</b></span>');
+
+  let html = `<div class="cp-chips">${chips.join('')}</div>`;
+
+  if (d.fallback === 'slow') {
+    html += `<div class="cp-alert">Все замеренные профили медленнее порога скорости —
+      временно используются они. Снизьте «Мин. скорость» или найдите узлы быстрее.</div>`;
+  } else if (d.fallback === 'unmeasured') {
+    html += `<div class="cp-alert">Строгий отбор не дал ни одного замеренного профиля —
+      в конфиг идут незамеренные. Проверьте стадию замера скорости и URL замера.</div>`;
+  } else if (d.fallback === 'stale') {
+    html += `<div class="cp-alert">Нет свежих профилей: временно используются устаревшие.
+      Запустите «Актуализировать» или «Тест всех».</div>`;
+  }
+
+  if (!selected.length) {
+    html += '<div class="empty">// нечего отправить в конфиг: нет рабочих свежих профилей</div>';
+    el.innerHTML = html;
+    return;
+  }
+
+  const rows = selected.map(r => `<tr>
+      <td>${esc(r.host)}</td>
+      <td>${esc(r.country || '—')}</td>
+      <td><span class="cp-tier ${r.tier === 1 ? 'ok' : 'muted'}">${esc(r.tier_label)}</span></td>
+      <td class="num">${r.latency_vless} ms</td>
+      <td class="num">${fmtSpeed(r.speed_kbps)}</td>
+      <td>${r.age_min != null ? r.age_min + ' мин' : '—'}</td>
+      <td>${esc(r.source_name || '—')}</td>
+    </tr>`).join('');
+  html += `<details class="cp-details">
+      <summary>показать отобранные профили (${selected.length})</summary>
+      <div class="cp-table-wrap"><table class="cp-table">
+        <thead><tr><th>хост</th><th>страна</th><th>приоритет</th><th>пинг</th><th>скорость</th><th>тест</th><th>источник</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </details>`;
+
+  const groups = {};
+  for (const e of (d.excluded || [])) {
+    (groups[e.reason] = groups[e.reason] || []).push(e);
+  }
+  const groupKeys = Object.keys(groups);
+  if (groupKeys.length) {
+    const items = groupKeys.map(key => {
+      const list = groups[key];
+      const totalForReason = c[key] != null ? c[key] : list.length;
+      const sample = list.slice(0, 8).map(e =>
+        `<li><span class="cp-ex-host">${esc(e.host)}</span>
+           <span class="cp-ex-detail">${esc(e.detail || '')}</span></li>`).join('');
+      const more = list.length > 8 ? `<li class="cp-ex-more">…и ещё ${list.length - 8} показанных</li>` : '';
+      const capped = totalForReason > list.length
+        ? ` · в ответе первые ${list.length}` : '';
+      return `<div class="cp-group">
+          <div class="cp-group-head">${EXCLUDE_LABELS[key] || key}: <b>${totalForReason}</b>${capped}</div>
+          <ul class="cp-ex-list">${sample}${more}</ul>
+        </div>`;
+    }).join('');
+    html += `<details class="cp-details">
+        <summary>почему не попали другие (${excluded})</summary>
+        ${items}
+      </details>`;
+  }
+
+  el.innerHTML = html;
+}
+
 async function load() {
   const list = $('#list');
   const err = $('#srcError');
   if (err) { err.hidden = true; err.innerHTML = ''; }
   list.innerHTML = '<div class="empty">// загрузка источников…</div>';
-  const [sources, settings] = await Promise.all([
+  const [sources, settings, preview] = await Promise.all([
     api('GET', '/api/sources'),
     api('GET', '/api/settings'),
+    api('GET', '/api/config/preview'),
   ]);
   const cause = sources.error || settings.error;
   if (cause) {
@@ -115,11 +239,30 @@ async function load() {
   }
   renderSummary(sources || []);
   renderList(sources || []);
+  if (!preview.error) renderConfigPreview(preview);
   const chk = $('#chkSafeOnly');
   if (chk && settings.safe_only_import === 'true') {
     chk.checked = true;
   }
 }
+
+async function refreshStale() {
+  const btn = $('#btnRefreshStale');
+  await busyButton(btn, 'Запускаем…', async () => {
+    const res = await api('POST', '/api/refresh-stale');
+    if (res.busy) return toast('Идёт другой замер — попробуйте позже', 'error');
+    if (res.error && !res.success) return toast(res.error, 'error');
+    if (!res.success) return toast(res.reason || 'нечего актуализировать', 'info');
+    if (res.speed_will_truncate) {
+      toast(`в прогон ${res.queued} профилей, но замеров успеет ~${res.speed_measurements}`
+        + ` из-за бюджета ${res.speed_budget_sec}с — увеличьте бюджет стадии скорости`, 'info');
+    } else {
+      toast(`в прогон поставлено ${res.queued} профилей`, 'success');
+    }
+  });
+  load();
+}
+
 
 function showLoadError(cause) {
   const err = $('#srcError');

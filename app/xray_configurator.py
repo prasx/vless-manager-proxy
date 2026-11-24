@@ -10,10 +10,11 @@ import threading
 import time
 from pathlib import Path
 
-from .db import db_q, Settings, xray_config_path
-from .utils import add_log, moscow_str
+from .db import Settings, xray_config_path
+from .utils import add_log
 from .subscribe import update_subscribe_cache
-from .vless import parse_vless, stream_settings, sanitize_flow
+from .vless import stream_settings, sanitize_flow
+from .selection import config_rows, node_tag
 from config import SOCKS_PORT, HTTP_PORT, API_PORT, API_LISTEN
 
 
@@ -34,6 +35,8 @@ class XrayConfigurator:
         self._apply_lock = threading.Lock()
         self._last_restart_time = 0.0
         self._restart_cooldown = 20  # seconds
+        # Снимок применённого набора outbound уже снят (см. _init_applied_state).
+        self._state_ready = False
         self._stats_cache = {"data": None, "ts": 0.0}
         self._stats_cache_lock = threading.Lock()
 
@@ -257,41 +260,54 @@ class XrayConfigurator:
             rules.extend(XrayConfigurator._geosite_rules(has_balancer=has_balancer))
         return rules
 
-    def _proxy_link_rows(self, max_outbounds: int = 0):
-        """Кандидаты для outbound'ов с учётом blocked_countries и порога скорости.
+    @staticmethod
+    def select_nodes(max_outbounds: int = 0):
+        """Отбор профилей по единой политике (см. app/selection.py)."""
+        return config_rows(max_outbounds)
 
-        Порог скорости отсекает только ИЗМЕРЕННО медленные профили. Профили
-        без замера (speed_kbps=0) остаются кандидатами: иначе, пока speed-стадия
-        не отработала, конфиг остаётся пустым и прокси не работает вовсе."""
-        blocked = Settings.blocked_countries()
-        codes = [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
-        country_sql = f"AND country NOT IN ({','.join(['?'] * len(codes))})" if codes else ""
-        min_kbps = Settings.min_speed_kbps()
-        speed_clause = (
-            f"AND (speed_kbps >= {min_kbps} OR speed_kbps = 0)" if min_kbps > 0 else ""
-        )
-        base = (
-            "SELECT link FROM proxies WHERE status='working' "
-            f"AND latency_vless > 0 {country_sql} {speed_clause} "
-            "ORDER BY speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC"
-        )
-        if max_outbounds > 0:
-            return db_q(base + " LIMIT ?", codes + [max_outbounds])
-        return db_q(base, codes)
+    def _log_selection(self, sel):
+        """Пишет в лог, сколько профилей отобрано и что отсеяно."""
+        add_log("DEBUG", f"Config selection: {sel.summary()}")
+        if sel.fallback == "slow":
+            add_log(
+                "WARN",
+                "Config fallback: все замеренные профили медленнее порога — "
+                "в конфиг временно идут они. Снизьте min_speed_mbps или найдите узлы быстрее",
+            )
+        elif sel.fallback == "unmeasured":
+            add_log(
+                "WARN",
+                "Config fallback: ни один профиль не замерен по скорости — "
+                "в конфиг временно идут незамеренные. Проверьте speed_test_url "
+                "и стадию замера скорости",
+            )
+        elif sel.fallback == "stale":
+            add_log(
+                "WARN",
+                f"Config fallback: нет свежих профилей (порог {sel.fresh_minutes} мин) — "
+                "временно используются устаревшие. Запустите «Тест всех»",
+            )
+        elif not sel.rows:
+            add_log("WARN", "Config selection is empty: нет ни одного профиля для конфига")
 
-    def generate_full_config(self, max_outbounds: int = 0, skip_geosite: bool = False) -> dict:
+    def generate_full_config(
+        self, max_outbounds: int = 0, skip_geosite: bool = False, selection=None
+    ) -> dict:
         """Генерирует полный конфиг с observatory + balancer.
 
-        Если max_outbounds > 0 — только N самых быстрых outbound.
-        Учитывает фильтр blocked_countries.
+        Если max_outbounds > 0 — только N самых приоритетных outbound.
+        Отбор профилей — единая политика app/selection.py: рабочие, свежие,
+        с приоритетом замеренных. selection передаётся, если вызывающий уже
+        сделал отбор (чтобы не считать его дважды).
         skip_geosite=True — временно исключить geosite-правила (для recovery).
         """
-        rows = self._proxy_link_rows(max_outbounds)
+        sel = selection if selection is not None else self.select_nodes(max_outbounds)
         proxy_obs = []
-        for r in rows:
-            parsed = parse_vless(r["link"])
-            if parsed:
-                proxy_obs.append(self._build_outbound(parsed, f"node{len(proxy_obs)}"))
+        for r in sel.rows:
+            parsed = r.get("parsed")
+            if not parsed:
+                continue
+            proxy_obs.append(self._build_outbound(parsed, node_tag(r["id"])))
 
         has_proxies = bool(proxy_obs)
         routing_rules: list = [
@@ -444,8 +460,7 @@ class XrayConfigurator:
             os.unlink(tmp_path)
         return ok
 
-    @staticmethod
-    def restart_via_systemd():
+    def restart_via_systemd(self):
         """Перезапускает systemd-сервис xray. Использует sudo, если не root."""
         cmd = ["systemctl", "restart", "xray"]
         try:
@@ -457,11 +472,115 @@ class XrayConfigurator:
             r = subprocess.run(cmd, capture_output=True, timeout=15)
             if r.returncode == 0:
                 add_log("INFO", "systemd xray restarted")
+                # Xray поднялся с конфигом на диске — это и есть применённый набор.
+                disk = self._disk_node_tags()
+                if disk:
+                    Settings.set_applied_node_tags(disk)
+                self._last_restart_time = time.time()
                 return True
             add_log("WARN", f"systemctl restart xray failed: {r.stderr.decode()[:200]}")
         except Exception as e:
             add_log("WARN", f"Could not restart systemd xray: {e}")
         return False
+
+    # ─── Применённое состояние outbound ───
+
+    def live_node_tags(self) -> set[str]:
+        """node-теги, видимые через statsquery (реально работающий Xray).
+
+        Пустое множество — не «узлов нет», а «statsquery их не показал»:
+        счётчики outbound появляются только после трафика, поэтому пустой
+        ответ не считается доказательством отсутствия узлов.
+        """
+        if not self.api_ok():
+            return set()
+        return {t for t in self.list_active_outbounds() if t.startswith("node")}
+
+    def _disk_node_tags(self) -> set[str]:
+        """node-теги из конфига на диске (с ним Xray стартовал/стартует)."""
+        try:
+            data = json.loads(xray_config_path().read_text())
+            return {
+                ob["tag"]
+                for ob in data.get("outbounds", [])
+                if isinstance(ob.get("tag"), str) and ob["tag"].startswith("node")
+            }
+        except Exception:
+            return set()
+
+    def known_node_tags(self) -> set[str]:
+        """Набор node-тегов, который, по нашим данным, уже живёт в Xray.
+
+        Приоритет: живые счётчики statsquery → память панели. Конфиг на диске
+        здесь не используется: к этому моменту мы уже могли перезаписать его
+        новым набором, и «на диске есть» не значит «в работающем Xray есть».
+        Начальное состояние снимается ДО записи конфига (_init_applied_state).
+        """
+        live = self.live_node_tags()
+        if live:
+            stored = set(Settings.applied_node_tags())
+            if stored and stored != live:
+                add_log(
+                    "DEBUG",
+                    f"Outbound state drift: память {len(stored)} vs живых {len(live)} тегов — верим statsquery",
+                )
+            Settings.set_applied_node_tags(live)
+            return live
+        return set(Settings.applied_node_tags())
+
+    def _init_applied_state(self) -> None:
+        """Снимает состояние outbound один раз перед первой записью конфига.
+
+        Пока мы не перезаписали файл, он всё ещё описывает то, с чем Xray
+        стартовал, поэтому именно он — лучшая догадка о живом наборе, когда
+        statsquery молчит (счётчиков ещё нет). После записи файла эта догадка
+        была бы уже ложной.
+        """
+        if self._state_ready:
+            return
+        self._state_ready = True
+        live = self.live_node_tags()
+        if live:
+            Settings.set_applied_node_tags(live)
+            return
+        if not Settings.applied_node_tags():
+            disk = self._disk_node_tags()
+            if disk:
+                Settings.set_applied_node_tags(disk)
+                add_log("DEBUG", f"Applied outbound state initialised from disk config: {len(disk)} nodes")
+
+    def _sync_outbounds(self, desired_obs) -> dict:
+        """Diff-based синхронизация node* outbound через Xray API.
+
+        Тег — `node<id профиля>`, поэтому тег однозначно связан с содержимым:
+        пересортировка профилей после замера скорости больше не превращает
+        node0 в другой узел (раньше diff-синк видел «тег есть» и не переотправлял
+        outbound — в работающем Xray оставались старые адреса).
+
+        Возвращает счётчики; решение о рестарте принимает вызывающий.
+        """
+        desired_tags = {ob["tag"] for ob in desired_obs}
+        known = self.known_node_tags()
+        to_remove = sorted(known - desired_tags)
+        to_add = [ob for ob in desired_obs if ob["tag"] not in known]
+
+        added: list[str] = []
+        failed: list[str] = []
+        for ob in to_add:
+            (added if self.add_outbound(ob) else failed).append(ob["tag"])
+        for tag in to_remove:
+            self._remove_outbound(tag)
+
+        applied = (known | set(added)) - set(to_remove)
+        if applied != known or failed:
+            Settings.set_applied_node_tags(applied)
+        return {
+            "added": len(added),
+            "attempted": len(to_add),
+            "failed": failed,
+            "removed": len(to_remove),
+            "total": len(desired_obs),
+        }
 
     # ─── Apply config ───
 
@@ -486,47 +605,26 @@ class XrayConfigurator:
         except Exception as e:
             add_log("ERROR", f"Config rebuild failed: {e}")
 
-    def _active_node_count(self):
-        """Сколько node* outbound сейчас в running Xray (0, если API недоступен)."""
-        if not self.api_ok():
-            return 0
-        return sum(1 for t in self.list_active_outbounds() if t.startswith("node"))
-
-    def _sync_outbounds(self, desired_obs):
-        """Diff-based синхронизация node* outbound через Xray API.
-
-        Вместо тотального remove_all + add_all делает только
-        точечные изменения: удаляет только теги, которых нет в желаемом
-        списке, добавляет только недостающие.
-        Возвращает (added_count, total_desired).
-        """
-        current = self.list_active_outbounds()
-        current_tags = {t for t in current if t.startswith("node")}
-        desired_tags = {ob["tag"] for ob in desired_obs}
-
-        to_remove = sorted(current_tags - desired_tags)
-        to_add = [ob for ob in desired_obs if ob["tag"] not in current_tags]
-
-        for tag in to_remove:
-            self._remove_outbound(tag)
-        for ob in to_add:
-            self.add_outbound(ob)
-
-        return len(to_add), len(desired_obs)
-
     def _apply_all_impl_safe(self):
         cfg_path = xray_config_path()
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
 
-        max_active = Settings.max_active_proxies()
-        min_kbps = Settings.min_speed_kbps()
+        # До перезаписи файла: снимок того, с чем Xray реально стартовал.
+        self._init_applied_state()
 
-        full = self.generate_full_config(max_outbounds=max_active)
+        max_active = Settings.max_active_proxies()
+        sel = self.select_nodes(max_active)
+        self._log_selection(sel)
+
+        full = self.generate_full_config(selection=sel)
         limited_obs = [o for o in full["outbounds"] if o["tag"].startswith("node")]
 
         # Всегда пишем конфиг на диск (нужен для systemd-рестарта и диагностики)
         cfg_path.write_text(json.dumps(full, indent=2))
         add_log("DEBUG", f"Config written to disk ({len(limited_obs)} outbounds)")
+        # Подписка не зависит от того, применился ли hot-reload: обновляем сразу.
+        # Раньше при cooldown после рестарта подписка оставалась старой.
+        update_subscribe_cache()
 
         has_work = bool(limited_obs)
         geosite_rules_list = self._geosite_rules(has_balancer=has_work)
@@ -542,8 +640,7 @@ class XrayConfigurator:
             )
 
         if not self.api_ok():
-            self._write_and_restart(cfg_path, max_active)
-            update_subscribe_cache()
+            self._write_and_restart(cfg_path, max_active, selection=sel)
             return
 
         # Cooldown после рестарта: не дёргаем API, даём Xray устаканиться
@@ -555,43 +652,43 @@ class XrayConfigurator:
             )
             return
 
-        added, total = self._sync_outbounds(limited_obs)
-        if added == total:
-            add_log(
-                "INFO",
-                f"Applied {added}/{total} outbounds via API (diff-based sync)",
-            )
-        elif added == 0 and total > 0:
+        result = self._sync_outbounds(limited_obs)
+        if result["attempted"] == 0 and result["removed"] == 0:
+            add_log("DEBUG", f"All {result['total']} outbounds already in sync, no API calls needed")
+            return
+        if result["failed"]:
             add_log(
                 "WARN",
-                f"All {total} outbound adds failed via API — restarting Xray",
+                f"Only {result['added']}/{result['attempted']} outbounds added via API — "
+                f"{len(result['failed'])} останутся в силе после рестарта Xray",
             )
-            self.restart_via_systemd()
-            self._last_restart_time = time.time()
-        elif added < total:
-            add_log(
-                "WARN",
-                f"Only {added}/{total} outbounds synced via API — partial apply",
-            )
-        else:
-            add_log("DEBUG", f"All {total} outbounds already in sync, no API calls needed")
-
-        update_subscribe_cache()
-
-    def _write_and_restart(self, cfg_path, max_active, attempt=1, skip_geosite=False):
-        """Пишет конфиг на диск и перезапускает Xray. При неудаче пробует без geosite."""
-        limited = self.generate_full_config(
-            max_outbounds=max_active, skip_geosite=skip_geosite
+            # Если живых node-outbound не видно вовсе, Xray мог стартовать с пустым
+            # конфигом: один рестарт применяет конфиг с диска. Не чаще раза в 5 мин,
+            # чтобы не устраивать цикл рестартов.
+            if not self.live_node_tags() and time.time() - self._last_restart_time > 300:
+                add_log("WARN", "No live node outbounds visible — restarting Xray to apply config from disk")
+                self.restart_via_systemd()
+            return
+        add_log(
+            "INFO",
+            f"Applied outbounds via API: +{result['added']} / -{result['removed']} "
+            f"(total {result['total']}, измеренных "
+            f"{sum(1 for r in sel.rows if r.get('tier') == 1)})",
         )
+
+    def _write_and_restart(self, cfg_path, max_active, attempt=1, skip_geosite=False, selection=None):
+        """Пишет конфиг на диск и перезапускает Xray. При неудаче пробует без geosite."""
+        sel = selection if (selection is not None and not skip_geosite) else self.select_nodes(max_active)
+        if sel is not selection:
+            self._log_selection(sel)
+        limited = self.generate_full_config(selection=sel, skip_geosite=skip_geosite)
         rule_count = len(self._geosite_rules())
         cfg_path.write_text(json.dumps(limited, indent=2))
         applied = sum(1 for o in limited["outbounds"] if o["tag"].startswith("node"))
-        all_working = db_q("SELECT COUNT(*) c FROM proxies WHERE status='working'")[0][
-            "c"
-        ]
         add_log(
             "WARN" if attempt > 1 else "INFO",
-            f"Xray API unavailable — wrote {applied} proxies to disk (total working: {all_working})",
+            f"Xray API unavailable — wrote {applied} proxies to disk "
+            f"(working {sel.counts.get('working_total', 0)}, годных {sel.counts.get('eligible', 0)})",
         )
         if applied == 0:
             return
@@ -608,9 +705,12 @@ class XrayConfigurator:
                 "WARN",
                 "Xray failed to start with GeoSite rules — retrying without them",
             )
-            self._write_and_restart(cfg_path, max_active, attempt=2, skip_geosite=True)
+            self._write_and_restart(
+                cfg_path, max_active, attempt=2, skip_geosite=True, selection=sel
+            )
         else:
             self._log_systemd_xray_error()
+
 
     @staticmethod
     def _log_systemd_xray_error():

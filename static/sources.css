@@ -332,3 +332,132 @@
 .dg-step.ok { color:var(--green); border-color:var(--green); }
 .dg-step.bad { color:var(--red); border-color:var(--red); }
 
+/* ─── Качество источников и состав конфига ───
+   Источник — поставщик живых узлов, поэтому рядом с ним оценка (0–100),
+   приоритет и вердикт: держать, искать лучше или искать замену. */
+
+.src-summary .summary-warn { color:var(--orange); border-color:var(--orange); }
+
+.card .c-prio {
+  font-size:0.62rem;
+  color:var(--text-muted);
+  margin-right:6px;
+}
+.c-quality {
+  display:inline-block;
+  min-width:26px;
+  text-align:center;
+  font-size:0.64rem;
+  font-weight:600;
+  padding:1px 6px;
+  border-radius:3px;
+  border:1px solid var(--border);
+  vertical-align:middle;
+  margin-left:6px;
+}
+.c-quality.v-ok { color:var(--green); border-color:var(--green); }
+.c-quality.v-warn { color:var(--orange); border-color:var(--orange); }
+.c-quality.v-bad { color:var(--red); border-color:var(--red); }
+.c-quality.v-muted { color:var(--text-muted); border-color:var(--border); }
+
+.c-verdict { font-size:0.66rem; margin-left:4px; }
+.c-verdict.v-ok { color:var(--green); }
+.c-verdict.v-warn { color:var(--orange); }
+.c-verdict.v-bad { color:var(--red); }
+.c-verdict.v-muted { color:var(--text-muted); }
+
+.card .c-reco { font-size:0.68rem; margin-top:3px; }
+.card .c-reco.v-ok { color:var(--green); }
+.card .c-reco.v-warn { color:var(--orange); }
+.card .c-reco.v-bad { color:var(--red); }
+.card .c-reco.v-muted { color:var(--text-muted); }
+
+.config-preview {
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:12px 14px;
+}
+.cp-chips {
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  align-items:center;
+  font-size:0.7rem;
+  color:var(--text-muted);
+}
+.cp-chips span {
+  border:1px solid var(--border);
+  border-radius:3px;
+  padding:2px 8px;
+  white-space:nowrap;
+}
+.cp-chips b { color:var(--text-primary); font-weight:600; }
+.cp-chips .summary-bad { color:var(--red); border-color:rgba(248,113,113,0.45); }
+.cp-alert {
+  border:1px solid var(--orange);
+  border-radius:4px;
+  background:rgba(251,146,60,0.08);
+  color:var(--orange);
+  font-size:0.72rem;
+  line-height:1.5;
+  padding:8px 10px;
+  margin-top:10px;
+}
+.cp-details { margin-top:10px; }
+.cp-details summary {
+  cursor:pointer;
+  font-size:0.72rem;
+  color:var(--text-secondary);
+  user-select:none;
+}
+.cp-details summary:hover { color:var(--text-primary); }
+.cp-table-wrap { overflow-x:auto; margin-top:8px; }
+.cp-table {
+  width:100%;
+  border-collapse:collapse;
+  font-size:0.68rem;
+}
+.cp-table th, .cp-table td {
+  text-align:left;
+  padding:4px 8px;
+  border-bottom:1px solid var(--border);
+  white-space:nowrap;
+}
+.cp-table th {
+  color:var(--text-muted);
+  font-weight:500;
+  text-transform:uppercase;
+  letter-spacing:0.06em;
+  font-size:0.6rem;
+}
+.cp-table td { color:var(--text-secondary); }
+.cp-table td.num { text-align:right; }
+.cp-tier { font-size:0.64rem; }
+.cp-tier.ok { color:var(--green); }
+.cp-tier.muted { color:var(--text-muted); }
+.cp-group { margin-top:8px; }
+.cp-group-head { font-size:0.7rem; color:var(--text-secondary); }
+.cp-ex-list {
+  list-style:none;
+  margin:4px 0 0;
+  padding:0;
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+.cp-ex-list li {
+  display:flex;
+  gap:8px;
+  font-size:0.66rem;
+  color:var(--text-muted);
+}
+.cp-ex-host {
+  color:var(--text-secondary);
+  min-width:140px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.cp-ex-detail { min-width:0; word-break:break-word; }
+.cp-ex-more { color:var(--text-muted); }

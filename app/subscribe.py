@@ -1,63 +1,58 @@
 """Генерация subscribe.txt для внешних клиентов."""
 
 from .db import db_q, Settings
+from .selection import config_rows
 from .utils import add_log, moscow_str
 from config import SUBSCRIBE_FILE
 
 
+def _speed_label(kbps: int) -> str:
+    """Человекочитаемая скорость из kbps."""
+    if kbps >= 1000:
+        return f"{kbps // 1000}.{kbps % 1000 // 100} Mbps"
+    return f"{kbps} Kbps"
+
+
 def update_subscribe_cache() -> None:
-    """Собирает subscribe.txt с vless-ссылками + метаданными для внешних клиентов."""
+    """Собирает subscribe.txt с vless-ссылками + метаданными для внешних клиентов.
+
+    Состав подписки — тот же отбор, что и для конфига Xray (app/selection.py):
+    рабочие и свежие профили, замеренные впереди незамеренных. Раньше здесь
+    был отдельный SQL, и подписка неизбежно расходилась с конфигом — ровно
+    тот случай, когда «в конфиге есть, а в подписке нет» (и наоборот).
+    """
     try:
         max_active = Settings.max_active_proxies()
-        blocked = Settings.blocked_countries()
-        codes = (
-            [c.strip() for c in blocked.split(",") if c.strip()] if blocked else []
-        )
-        if codes:
-            placeholders = ",".join("?" * len(codes))
-            country_sql = f"AND country NOT IN ({placeholders})"
-        else:
-            placeholders = ""
-            country_sql = ""
-            codes = []
-        min_kbps = Settings.min_speed_kbps()
-        # Порог отсекает только измеренно медленные; без замера (0) — оставляем.
-        speed_sql = (
-            f"AND (speed_kbps >= {min_kbps} OR speed_kbps = 0)" if min_kbps > 0 else ""
-        )
-        sort_col = "speed_kbps > 0 DESC, speed_kbps DESC, latency_vless ASC"
-        rows = db_q(
-            f"SELECT link, country, speed_kbps FROM proxies WHERE status='working' "
-            f"AND latency_vless > 0 {country_sql} {speed_sql} "
-            f"ORDER BY {sort_col} LIMIT ?",
-            codes + [max_active],
-        )
+        sel = config_rows(max_active)
         total_all = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
-        total_working = db_q(
-            "SELECT COUNT(*) c FROM proxies WHERE status='working'"
-        )[0]["c"]
-        speeds = [r["speed_kbps"] for r in rows if r["speed_kbps"] > 0]
+        speeds = [r["speed_kbps"] for r in sel.rows if r["speed_kbps"] > 0]
         avg_speed = int(sum(speeds) / len(speeds)) if speeds else 0
+        measured = sum(1 for r in sel.rows if r["speed_kbps"] > 0)
         probe_url = Settings.probe_url()
         now = moscow_str()
+
         lines = [
             "# profile-title: VLESS Manager",
             "# profile-update-interval: 1",
             f"# Updated: {now}",
-            f"# Configs: {len(rows)} / {total_working} working / {total_all} total",
+            f"# Configs: {len(sel.rows)} / {sel.counts.get('working_total', 0)} working / {total_all} total",
+            f"# Measured: {measured}/{len(sel.rows)} · fresh ≤{sel.fresh_minutes} min",
         ]
         if avg_speed:
-            speed_str = (
-                f"{avg_speed // 1000}.{avg_speed % 1000 // 100} Mbps"
-                if avg_speed >= 1000
-                else f"{avg_speed} Kbps"
-            )
-            lines.append(f"# Avg speed: {speed_str}")
+            lines.append(f"# Avg speed: {_speed_label(avg_speed)}")
+        blocked = Settings.blocked_countries()
         if blocked:
             lines.append(f"# Blocked: {blocked}")
         lines.append(f"# Probe: {probe_url}")
+        if sel.fallback:
+            reason = {
+                "slow": "все замеренные профили ниже порога скорости",
+                "unmeasured": "ни один профиль не замерен",
+                "stale": "нет свежих профилей, используются устаревшие",
+            }.get(sel.fallback, sel.fallback)
+            lines.append(f"# Warning: fallback — {reason}")
         lines.append("")
-        for r in rows:
+        for r in sel.rows:
             link = r["link"]
             if "#" not in link:
                 host_part = (
@@ -71,6 +66,6 @@ def update_subscribe_cache() -> None:
                 link = f"{link}#{name}"
             lines.append(link)
         SUBSCRIBE_FILE.write_text("\n".join(lines), encoding="utf-8")
-        add_log("DEBUG", f"Subscribe cache updated: {len(rows)} proxies")
+        add_log("DEBUG", f"Subscribe cache updated: {len(sel.rows)} proxies")
     except Exception as e:
         add_log("ERROR", f"Failed to update subscribe cache: {e}")

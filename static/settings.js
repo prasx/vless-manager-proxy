@@ -401,6 +401,7 @@ async function loadSettings() {
   $('speedTestMinSec').value = s.speed_test_min_sec || '10';
   $('applyAfterTest').checked = s.apply_after_test !== 'false';
   $('minSpeedMbps').value = s.min_speed_mbps || '0';
+  $('profileMaxAgeMin').value = s.profile_max_age_min || '0';
   $('speedTestAdaptiveSec').value = s.speed_test_adaptive_sec || '2';
   $('safeOnlyImport').checked = s.safe_only_import === 'true';
   $('importProxy').value = s.import_proxy || '';
@@ -438,13 +439,20 @@ function updateConfigStatus(status) {
   if (status.error) { el.textContent = '…'; return; }
   const active = status.nodes_in_config || 0;
   const candidates = status.config_candidates || 0;
+  const working = status.config_working || 0;
+  const measured = status.config_measured || 0;
+  const fallback = status.config_fallback === 'unmeasured'
+    ? ' · fallback: без замера'
+    : (status.config_fallback === 'stale'
+      ? ' · fallback: устаревшие'
+      : (status.config_fallback === 'slow' ? ' · fallback: ниже порога' : ''));
   if (!status.api_accessible) {
-    el.textContent = `кандидатов: ${candidates} (API недоступен)`;
+    el.textContent = `кандидатов: ${candidates} (рабочих ${working}, замерено ${measured}; API недоступен)${fallback}`;
     el.style.color = 'var(--text-muted)';
     return;
   }
-  el.textContent = `узлов в конфиге: ${active} · кандидатов: ${candidates}`;
-  el.style.color = 'var(--green)';
+  el.textContent = `узлов в конфиге: ${active} · кандидатов: ${candidates} (рабочих ${working}, замерено ${measured})${fallback}`;
+  el.style.color = status.config_fallback ? 'var(--orange)' : 'var(--green)';
 }
 
 function updateSpeedTestDependants() {
@@ -474,6 +482,7 @@ const FIELD_LABELS = {
   logKeep: 'Хранение логов',
   xrayStartupRetries: 'Ожидание старта Xray',
   minSpeedMbps: 'Минимальная скорость',
+  profileMaxAgeMin: 'Свежесть профиля',
 };
 
 function fieldLabel(id) {
@@ -519,6 +528,7 @@ function validateSettings() {
     { id: 'logKeep', min: 100, max: 99999 },
     { id: 'xrayStartupRetries', min: 5, max: 200 },
     { id: 'minSpeedMbps', min: 0, max: 1000 },
+    { id: 'profileMaxAgeMin', min: 0, max: 10080 },
   ];
   for (const f of numFields) {
     const el = $(f.id);
@@ -608,6 +618,7 @@ async function saveSettings() {
     db_check_auto_cleanup: $('dbCheckAutoCleanup').checked ? 'true' : 'false',
     apply_after_test: $('applyAfterTest').checked ? 'true' : 'false',
     min_speed_mbps: $('minSpeedMbps').value.trim() || '0',
+    profile_max_age_min: $('profileMaxAgeMin').value.trim() || '0',
     speed_test_adaptive_sec: $('speedTestAdaptiveSec').value.trim() || '2',
     observatory_probe_interval: $('observatoryProbeInterval').value.trim() || '10s',
     balancer_strategy: $('balancerStrategy').value,

@@ -96,6 +96,9 @@ class ProxyManager:
         self._checker = checker or BatchXrayChecker(port_reserver=self._ports)
         self._check_stats = (0, 0)  # (ok, total) стадии check — для итоговой строки
         self._run_reasons: dict[str, int] = {}  # причины отказов текущего прогона
+        # Когда failover последний раз сам инициировал пересборку: защита от
+        # цикла «пересборка каждые 30 сек».
+        self._last_failover_apply = 0.0
         # Какой URL замера скорости сработал в этом прогоне (см. _measure_kbps).
         self._speed_url: str = ""
         # Сколько раз URL замера не дал данных в этом прогоне (см. _speed_urls).
@@ -349,6 +352,13 @@ class ProxyManager:
 
     def _finish_run(self, label):
         """Завершает прогон: фиксирует итоговую строку и сбрасывает активный прогресс."""
+        try:
+            # Оценка источников должна отражать только что полученные результаты.
+            from .source_quality import invalidate as _invalidate_quality
+
+            _invalidate_quality()
+        except Exception:
+            pass
         ok_cnt, total_cnt = self._check_stats
         with self._progress_lock:
             p = self.progress
@@ -853,6 +863,56 @@ class ProxyManager:
             return False
         return self._start_background(rows, "retest-failed", apply_config=True, apply_blocking=True)
 
+    def start_refresh_stale(self) -> dict:
+        """Актуализация: прогон по профилям с протухшим доказательством.
+
+        Берутся только рабочие профили, которые политика допуска уже не пускает
+        в конфиг: устаревшие (проверка давно не проходила) и незамеренные.
+        «Тест всех» для этого не нужен: он гоняет и мёртвые профили.
+        """
+        from .selection import retest_targets
+
+        targets = retest_targets()
+        if not targets:
+            add_log("INFO", "Refresh stale: нет профилей с устаревшим доказательством")
+            return {"started": False, "queued": 0, "reason": "нет устаревших профилей"}
+        ids = [t["id"] for t in targets]
+        rows = db_q(
+            f"SELECT id, link, host FROM proxies WHERE id IN ({','.join('?' * len(ids))})",
+            ids,
+        )
+        if not rows:
+            return {"started": False, "queued": 0, "reason": "профили не найдены"}
+        started = self._start_background(
+            [dict(r) for r in rows],
+            "refresh-stale",
+            apply_config=True,
+            apply_blocking=True,
+        )
+        if not started:
+            return {"started": False, "busy": True, "queued": 0}
+        # Сколько из них реально успеет замериться за бюджет стадии скорости:
+        # замер идёт по одному профилю фиксированное окно, и при маленьком
+        # бюджете часть прогона — честная проверка без замера.
+        speed_max = int(Settings.get("speed_test_max", "8") or 0)
+        window = Settings.speed_test_duration_sec()
+        budget = Settings.speed_stage_budget_sec()
+        planned = min(len(rows), speed_max) if speed_max > 0 else 0
+        estimated = planned * window
+        add_log(
+            "INFO",
+            f"Refresh stale queued: {len(rows)} proxies (устаревших/без замера); "
+            f"замеров в прогоне: {planned}, ~{estimated}с при бюджете {budget or '∞'}с",
+        )
+        return {
+            "started": True,
+            "queued": len(rows),
+            "speed_measurements": planned,
+            "speed_estimate_sec": estimated,
+            "speed_budget_sec": budget,
+            "speed_will_truncate": bool(budget and estimated > budget),
+        }
+
     def _start_background(self, rows, label, *, apply_config, apply_blocking=False) -> bool:
         """Захватывает эксклюзивную блокировку здесь, а исполняет конвейер
         в отдельном потоке (блокировку освобождает поток по завершении)."""
@@ -956,39 +1016,62 @@ class ProxyManager:
                 add_log("ERROR", f"Background checker crashed: {e}")
 
     def failover_checker(self):
-        """Лёгкий фоновый поток: проверяет каждые 30 сек,
-        все ли ожидаемые node* outbound'ы живы в Xray.
-        Если часть нод пропала — инициирует apply_all() для пересборки конфига."""
+        """Лёгкий фоновый поток: проверяет каждые 30 сек, совпадает ли набор
+        node-outbound в работающем Xray с тем, что отбирает политика допуска.
+
+        Сравниваются именно теги, а не количество: раньше позиционные теги
+        (node0, node1, ...) после пересортировки означали другие профили, и
+        «то же количество» скрывало полностью другой набор узлов. Плюс память
+        применённого набора (applied_node_tags) ловит случай, когда hot-reload
+        не удался и конфиг на диске новее работающего Xray.
+        """
         add_log("INFO", "Failover checker started (interval: 30s)")
         while not self._shutdown.is_set():
             if self._shutdown.wait(timeout=30):
                 break
             try:
+                from .selection import config_rows, node_tag
                 from .xray_configurator import xray_configurator
 
                 if not xray_configurator.api_ok():
                     continue
 
                 # Пока идёт тест, статусы в БД ещё меняются: если пересобирать
-                # конфиг в этот момент, получим ложный рассинхрон (напр. 4/23)
-                # и лишние рестарты Xray каждые 30 сек.
+                # конфиг в этот момент, получим ложный рассинхрон и лишние
+                # пересборки каждые 30 сек.
                 if self._vless_busy:
                     continue
 
                 max_active = Settings.max_active_proxies()
-                # Считаем ожидаемые ноды тем же селектором, что и генератор
-                # конфига (учитывает blocked_countries, порог скорости и
-                # fallback при отсутствии замеров) — иначе ложный рассинхрон
-                # и пересборка конфига каждые 30 секунд.
-                expected = len(xray_configurator._proxy_link_rows(max_active))
+                expected_tags = {
+                    node_tag(r["id"])
+                    for r in config_rows(max_active).rows
+                }
+                live = xray_configurator.live_node_tags()
+                known = set(Settings.applied_node_tags())
+                now = time.time()
 
-                active = xray_configurator._active_node_count()
-                if active < expected:
-                    add_log(
-                        "WARN",
-                        f"Failover: only {active}/{expected} node outbounds active — triggering rebuild",
-                    )
-                    xray_configurator.apply_all(blocking=False)
+                if live and live != expected_tags:
+                    if now - self._last_failover_apply > 120:
+                        self._last_failover_apply = now
+                        add_log(
+                            "WARN",
+                            f"Failover: в Xray {len(live)} node-outbound, ожидается "
+                            f"{len(expected_tags)} — пересборка конфига",
+                        )
+                        xray_configurator.apply_all(blocking=False)
+                elif not live and known != expected_tags:
+                    # statsquery молчит (счётчиков ещё нет) — сверяемся с памятью
+                    # применённого набора. Не чаще раза в 5 минут, чтобы не
+                    # дёргать API на каждом цикле.
+                    if now - self._last_failover_apply > 300:
+                        self._last_failover_apply = now
+                        add_log(
+                            "WARN",
+                            f"Failover: применено {len(known)} outbound, ожидается "
+                            f"{len(expected_tags)} — пересборка конфига",
+                        )
+                        xray_configurator.apply_all(blocking=False)
             except Exception as e:  # noqa: BLE001
                 add_log("ERROR", f"Failover checker crashed: {e}")
 

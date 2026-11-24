@@ -8,6 +8,7 @@
 
 <div class="toolbar" style="margin-bottom:16px">
   <button class="btn btn-primary" id="btnImportAll" onclick="importAll()">Импорт всех</button>
+  <button class="btn" id="btnRefreshStale" onclick="refreshStale()" title="Перепроверить и перезамерить профили, которые выпали из конфига (устарели или без замера)">Актуализировать</button>
   <button class="btn" id="btnCheckConnect" onclick="checkConnectivity()" title="Проверить доступность источников и показать причину сбоя">Проверить связь</button>
   <label class="chk-safe" title="Пропускать прокси без TLS/Reality-шифрования">
     <input type="checkbox" id="chkSafeOnly" onchange="toggleSafeOnly()">
@@ -46,6 +47,11 @@
 <div class="data-error" id="srcError" role="status" hidden></div>
 
 <div class="card-list" id="list"></div>
+
+<div class="section-label" style="margin-top:28px">Состав конфига и подписки</div>
+<div class="config-preview" id="configPreview">
+  <div class="empty">// загрузка…</div>
+</div>
 
 <dialog id="dlgEditTxt" class="modal">
   <div class="modal-header">Редактирование TXT-источника</div>

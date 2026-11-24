@@ -103,14 +103,61 @@ class TestApiSmoke(ApiTestCase):
         self.assertEqual(data["due"], 0, "профиль в backoff не должен попадать в прогон")
 
 
+    def test_config_preview_reports_selection(self):
+        from app.utils import now_utc
+
+        app_db.db_q(
+            "INSERT INTO proxies (link, host, port, status, added_at, last_test_at, "
+            "latency_vless, speed_kbps, country) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                "vless://11111111-1111-1111-1111-111111111111@ok.test:443?security=tls&type=tcp#US",
+                "ok.test", 443, "working", now_utc(), now_utc(), 120, 8000, "US",
+            ),
+        )
+        r = self.client.get("/api/config/preview")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertEqual(data["counts"]["working_total"], 1)
+        self.assertEqual(len(data["selected"]), 1)
+        self.assertEqual(data["selected"][0]["tier"], 1)  # замерен
+        self.assertIn("profile_fresh_minutes", data["settings"])
+
+    def test_sources_endpoint_includes_quality(self):
+        from app.utils import now_utc
+
+        app_db.db_q(
+            "INSERT INTO sources (name, url, type, created_at, last_status) VALUES (?,?,?,?,?)",
+            ("src", "https://example.test/sub.txt", "url", now_utc(), "ok"),
+        )
+        r = self.client.get("/api/sources")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertEqual(len(data), 1)
+        self.assertIn("score", data[0])
+        self.assertIn("verdict", data[0])
+
+    def test_refresh_stale_without_targets(self):
+        r = self.client.post("/api/refresh-stale")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertFalse(data["success"])
+        self.assertEqual(data["queued"], 0)
+
     def test_pages_render(self):
         for path in ("/", "/logs", "/sources", "/settings"):
             r = self.client.get(path)
             self.assertEqual(r.status_code, 200, f"{path} не отрендерился")
         html = self.client.get("/settings").get_data(as_text=True)
-        for field_id in ("checkBatchSize", "tcpPrefilter", "speedStageBudget"):
+        for field_id in ("checkBatchSize", "tcpPrefilter", "speedStageBudget", "profileMaxAgeMin"):
             self.assertIn(f'id="{field_id}"', html)
         self.assertNotIn('id="maxWorkers"', html)
+
+        sources_html = self.client.get("/sources").get_data(as_text=True)
+        for element_id in ("btnRefreshStale", "configPreview"):
+            self.assertIn(f'id="{element_id}"', sources_html)
+
+        dash_html = self.client.get("/").get_data(as_text=True)
+        self.assertIn('id="refreshStaleBtn"', dash_html)
 
 
 if __name__ == "__main__":

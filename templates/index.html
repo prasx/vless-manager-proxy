@@ -59,6 +59,7 @@
   <div class="toolbar-row toolbar-row-1">
     <div class="toolbar-actions">
       <button class="btn" id="testAllBtn" onclick="testAll()">Тест всех</button>
+      <button class="btn btn-apply" id="refreshStaleBtn" onclick="refreshStaleProfiles()" title="Перепроверить и перезамерить профили, выпавшие из конфига: устаревшие или без замера">Актуализировать</button>
       <button class="btn btn-apply" id="retestFailedBtn" onclick="retestFailed()" title="Перетестировать только failed-прокси">Перетест failed</button>
       <button class="btn btn-danger" id="cancelTestBtn" style="display:none" onclick="cancelTest()">Отмена</button>
       <button class="btn btn-danger" id="cleanupBtn" onclick="cleanupFailed()">Очистить failed</button>

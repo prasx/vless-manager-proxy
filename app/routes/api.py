@@ -349,17 +349,44 @@ def api_test_failed():
 
 @api_bp.route("/sources", methods=["GET"])
 def api_sources_list():
-    """GET /api/sources — источники со счётчиками и итогом последнего импорта."""
+    """GET /api/sources — источники со счётчиками, итогом импорта и оценкой качества.
+
+    Порядок — по качеству источника (сколько из его профилей реально живые и
+    замеренные): это и есть приоритет, с которым стоит поддерживать источник.
+    """
+    from ..source_quality import collect
+
     rows = db_q(
         """SELECT
              s.id, s.name, s.url, s.type, s.last_import, s.created_at,
              s.last_status, s.last_error,
              (SELECT COUNT(*) FROM proxies p WHERE p.source_id = s.id) AS count,
              (SELECT COUNT(*) FROM proxies p WHERE p.source_id = s.id AND p.status='working') AS working
-           FROM sources s
-           ORDER BY s.created_at DESC"""
+           FROM sources s"""
     )
-    return jsonify([dict(r) for r in rows])
+    quality = collect()
+    items = []
+    for r in rows:
+        item = dict(r)
+        q = quality.get(r["id"]) or {}
+        item.update(
+            {
+                "score": q.get("score", 0),
+                "verdict": q.get("verdict", "inactive"),
+                "verdict_label": q.get("verdict_label", "нет профилей"),
+                "recommendation": q.get("recommendation", ""),
+                "measured": q.get("measured", 0),
+                "fresh": q.get("fresh", 0),
+                "avg_latency": q.get("avg_latency", 0),
+                "avg_speed_kbps": q.get("avg_speed_kbps", 0),
+            }
+        )
+        items.append(item)
+    # Сверху — источники, которые дают живые узлы.
+    items.sort(key=lambda d: (-d["score"], -d["working"], d["name"] or ""))
+    for idx, item in enumerate(items, start=1):
+        item["priority"] = idx
+    return jsonify(items)
 
 
 @api_bp.route("/sources", methods=["POST"])
@@ -385,6 +412,9 @@ def api_sources_add():
 def api_sources_delete(sid):
     """DELETE /api/sources/<id> — удаляет источник."""
     db_q("DELETE FROM sources WHERE id=?", (sid,))
+    from ..source_quality import invalidate as _invalidate_quality
+
+    _invalidate_quality()
     add_log("INFO", f"Deleted source #{sid}")
     return jsonify(success=True)
 
@@ -447,6 +477,9 @@ def api_sources_import_one(sid):
         return jsonify(error="Not found"), 404
     result = import_source(dict(rows[0]))
     save_source_status(result)
+    from ..source_quality import invalidate as _invalidate_quality
+
+    _invalidate_quality()
     return jsonify(success=result["status"] == importer.STATUS_OK, **result)
 
 
@@ -463,6 +496,9 @@ def api_sources_import_all():
     report = import_sources([dict(r) for r in rows])
     for result in report["results"]:
         save_source_status(result)
+    from ..source_quality import invalidate as _invalidate_quality
+
+    _invalidate_quality()
     # errors — только сбои (сеть/HTTP/URL). Пустой ответ и пропуск по бюджету —
     # предупреждения: раньше в errors попадало всё подряд, и внешний потребитель
     # считал предупреждения ошибками.
@@ -541,7 +577,8 @@ def api_import_diagnose():
 _REBUILD_KEYS = {
     "blocked_countries", "geo_enabled", "max_active_proxies", "probe_url",
     "observatory_probe_interval", "balancer_strategy", "handshake_timeout", "conn_idle",
-    "min_speed_mbps", "sniffing_enabled", "sniffing_dest_override", "sniffing_route_only",
+    "min_speed_mbps", "profile_max_age_min",
+    "sniffing_enabled", "sniffing_dest_override", "sniffing_route_only",
     "geosite_rules", "proxy_listen",
 }
 
@@ -587,6 +624,7 @@ def api_settings_set():
 # уже записанного значения, которое UI показывает вне своего диапазона.
 _INT_RANGES = {
     "max_active_proxies": (1, 10000),
+    "profile_max_age_min": (0, 10080),
     "vless_per_proxy_timeout": (1, 600),
     "log_trim_every": (1, 10**9),
     "log_keep": (1, 10**9),
@@ -712,20 +750,78 @@ def api_xray_status():
     api_ok = xray_configurator.api_ok()
     d = xray_configurator.diagnose()
     running = api_ok or (d["systemd_active"] and d["ports"].get("1080"))
-    active = xray_configurator.list_active_outbounds() if api_ok else []
-    nodes = [t for t in active if t.startswith("node")]
-    # Тем же селектором, что и генератор конфига (учёт blocked/скорости).
-    candidate = len(xray_configurator._proxy_link_rows(0))
+    live_nodes = sorted(xray_configurator.live_node_tags()) if api_ok else []
+    # Тем же селектором, что и генератор конфига (единственная политика допуска).
+    sel = xray_configurator.select_nodes(0)
     return jsonify(
         running=bool(running),
         api_accessible=api_ok,
         api_endpoint="127.0.0.1:10085",
         systemd_active=d["systemd_active"],
         config_mismatch=d["config_mismatch"],
-        active_outbounds=active,
-        nodes_in_config=len(nodes),
-        config_candidates=candidate,
+        active_outbounds=xray_configurator.list_active_outbounds() if api_ok else [],
+        nodes_in_config=len(live_nodes),
+        config_candidates=len(sel.rows),
+        config_working=sel.counts.get("working_total", 0),
+        config_measured=sum(1 for r in sel.rows if r.get("speed_kbps", 0) > 0),
+        config_fresh_minutes=sel.fresh_minutes,
+        config_fallback=sel.fallback,
     )
+
+
+@api_bp.route("/config/preview")
+def api_config_preview():
+    """GET /api/config/preview — что попадёт в конфиг и подписку и почему.
+
+    Отвечает на вопрос «почему доступный/замеренный сервер не в конфиге»:
+    отобранные профили идут с приоритетом (замерен/только проба), отсеянные —
+    с причиной (устарел, ниже порога скорости, без замера, страна исключена,
+    битая ссылка). `fallback` показывает, что строгие правила не дали
+    ни одного профиля и конфиг собран по запасному варианту.
+    """
+    from ..selection import config_rows
+    from ..source_quality import collect
+
+    limit = request.args.get("limit", type=int)
+    limit = Settings.max_active_proxies() if limit is None else max(1, min(10000, limit))
+    sel = config_rows(limit)
+    quality = collect()
+    names = {sid: q["name"] for sid, q in quality.items()}
+
+    def with_source(item: dict) -> dict:
+        sid = item.get("source_id")
+        item = dict(item)
+        item["source_name"] = (
+            names.get(sid) if sid is not None and sid in names else ("—" if sid is None else f"#{sid}")
+        )
+        return item
+
+    data = sel.as_dict()
+    data["selected"] = [with_source(item) for item in data["selected"]]
+    data["excluded"] = [with_source(item) for item in data["excluded"]]
+    data["settings"] = {
+        "max_active_proxies": limit,
+        "min_speed_mbps": Settings.get("min_speed_mbps", "0"),
+        "min_speed_kbps": Settings.min_speed_kbps(),
+        "profile_fresh_minutes": sel.fresh_minutes,
+        "blocked_countries": Settings.blocked_countries(),
+        "speed_test_enabled": Settings.get("speed_test_enabled", "true") == "true",
+    }
+    return jsonify(data)
+
+
+@api_bp.route("/refresh-stale", methods=["POST"])
+def api_refresh_stale():
+    """POST /api/refresh-stale — актуализация: перепроверить/перезамерить
+    профили, которые выпали из конфига из-за устаревания или отсутствия замера.
+
+    Это не «тест всех» (он гоняет всю базу), а точечный прогон по тем, чьё
+    доказательство работоспособности протухло.
+    """
+    res = proxy_manager.start_refresh_stale()
+    if res.get("busy"):
+        return jsonify(success=False, **res), 409
+    return jsonify(success=bool(res.get("started")), **res)
 
 
 @api_bp.route("/xray/outbounds", methods=["GET"])
@@ -1061,6 +1157,9 @@ def api_import():
     """
     url = (request.get_json(silent=True) or {}).get("url", "")
     result = import_url(url)
+    from ..source_quality import invalidate as _invalidate_quality
+
+    _invalidate_quality()
     return jsonify(success=result["status"] == importer.STATUS_OK, **result)
 
 
