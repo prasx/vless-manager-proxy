@@ -24,7 +24,7 @@ function setLoadError(source, msg) {
   const box = $('settingsError');
   if (!box) return;
   const text = $('settingsErrorText');
-  if (text) text.textContent = Object.values(_loadErrors).join(' · ');
+  if (text) text.textContent = Object.values(_loadErrors).join('; ');
   box.hidden = Object.keys(_loadErrors).length === 0;
 }
 
@@ -102,6 +102,8 @@ function markClean() {
 
 function updateDirtyUI() {
   const el = $('dirtyIndicator');
+  const bar = $('settingsSaveBar');
+  if (bar) bar.hidden = !_dirty;
   if (!el) return;
   el.textContent = _dirty ? 'есть несохранённые изменения' : '';
   el.className = _dirty ? 'settings-dirty-indicator dirty' : 'settings-dirty-indicator';
@@ -234,6 +236,16 @@ function removeGeositeRule(idx) {
 let countryData = [];
 let blockedCodes = new Set();
 let countrySearch = '';
+let noCountry = 0;
+
+// Названия стран не хранятся в БД: Intl.DisplayNames даёт их из кода без
+// дополнительного источника. Если браузер не умеет — остаётся код.
+let regionNames = null;
+try { regionNames = new Intl.DisplayNames(['ru'], { type: 'region' }); } catch (e) { regionNames = null; }
+function countryName(code) {
+  if (!regionNames) return code;
+  try { return regionNames.of(code) || code; } catch (e) { return code; }
+}
 
 async function loadCountries() {
   const seq = nextSeq('countries');
@@ -242,45 +254,44 @@ async function loadCountries() {
   if (data.error) { setLoadError('countries', 'не удалось загрузить страны: ' + data.error); return; }
   setLoadError('countries', '');
   countryData = data.countries || [];
+  noCountry = data.no_country || 0;
   blockedCodes = new Set((data.blocked || '').split(',').map(s => s.trim()).filter(Boolean));
   const badge = $('countryVerifyBadge');
   if (badge) {
     badge.textContent = data.last_verify
-      ? `проверено ip-api · последняя проверка ${data.last_verify.slice(0, 10)}`
-      : (countryData.length ? 'ожидание определения стран…' : '');
+      ? `страны определены через ip-api, последняя проверка ${data.last_verify.slice(0, 10)}`
+      : (countryData.length ? 'определение стран ещё не проходило, используются метки из ссылок' : '');
   }
   renderCountryFilter();
 }
 
 function renderCountryFilter() {
-  const tb = $('countryFilterBody');
-  if (!tb) return;
-  tb.innerHTML = '';
+  const box = $('countryFilterBody');
+  if (!box) return;
+  box.innerHTML = '';
   if (!countryData.length) {
-    const tr = document.createElement('tr');
-    const td = document.createElement('td');
-    td.colSpan = 4;
-    td.className = 'empty';
-    td.textContent = 'стран пока нет: импортируйте прокси';
-    tr.appendChild(td);
-    tb.appendChild(tr);
+    box.innerHTML = '<p class="settings-muted-label">Стран пока нет: импортируйте прокси.</p>';
     updateCountryCount();
     return;
   }
-  const search = countrySearch.trim().toUpperCase();
-  for (const c of countryData) {
-    if (search && !c.code.includes(search)) continue;
-    tb.appendChild(countryRow(c));
+  const search = countrySearch.trim().toLowerCase();
+  const visible = countryData.filter(c => {
+    if (!search) return true;
+    return c.code.toLowerCase().includes(search)
+      || countryName(c.code).toLowerCase().includes(search);
+  });
+  if (!visible.length) {
+    box.innerHTML = '<p class="settings-muted-label">Ничего не найдено.</p>';
+  } else {
+    for (const c of visible) box.appendChild(countryChip(c));
   }
   updateCountryCount();
 }
 
-function countryRow(c) {
-  const tr = document.createElement('tr');
-  tr.className = 'country-row';
+function countryChip(c) {
+  const chip = document.createElement('label');
+  chip.className = 'country-chip' + (blockedCodes.has(c.code) ? ' is-blocked' : '');
 
-  const tdChk = document.createElement('td');
-  tdChk.className = 'country-cell-chk';
   const cb = document.createElement('input');
   cb.type = 'checkbox';
   cb.className = 'chk-custom';
@@ -289,37 +300,26 @@ function countryRow(c) {
   cb.checked = blockedCodes.has(c.code);
   cb.addEventListener('change', () => {
     if (cb.checked) blockedCodes.add(c.code); else blockedCodes.delete(c.code);
-    markCell(tr, cb.checked);
+    chip.classList.toggle('is-blocked', cb.checked);
     updateCountryCount();
     recomputeDirty();
   });
-  tdChk.appendChild(cb);
 
-  const tdCode = document.createElement('td');
-  tdCode.className = 'country-cell-code';
-  const src = document.createElement('span');
-  src.className = 'country-source';
-  const verifiedLabel = c.verified === c.total ? 'ip-api' : (c.verified === 0 ? 'fragment' : 'mixed');
-  src.textContent = `[${verifiedLabel}]`;
-  src.title = `source: ${verifiedLabel} (${c.verified}/${c.total} verified)`;
-  tdCode.append(src, document.createTextNode(' ' + c.code));
+  const code = document.createElement('span');
+  code.className = 'cc-code';
+  code.textContent = c.code;
 
-  const tdStat = document.createElement('td');
-  tdStat.className = 'country-cell-stat';
-  tdStat.textContent = `${c.working}/${c.total} работают`;
+  const name = document.createElement('span');
+  name.className = 'cc-name';
+  name.textContent = countryName(c.code);
+  name.title = `${countryName(c.code)} (${c.code}), рабочих ${c.working} из ${c.total}`;
 
-  const tdMark = document.createElement('td');
-  tdMark.className = 'country-cell-mark';
-  markCell(tr, cb.checked, tdMark);
+  const count = document.createElement('span');
+  count.className = 'cc-count';
+  count.textContent = `${c.working}/${c.total}`;
 
-  tr.append(tdChk, tdCode, tdStat, tdMark);
-  return tr;
-}
-
-function markCell(tr, blocked, cell) {
-  const td = cell || tr.querySelector('.country-cell-mark');
-  if (!td) return;
-  td.textContent = blocked ? 'excluded' : '';
+  chip.append(cb, code, name, count);
+  return chip;
 }
 
 function updateCountryCount() {
@@ -328,8 +328,10 @@ function updateCountryCount() {
   if (!countryData.length) { cnt.textContent = ''; return; }
   const inList = countryData.filter(c => blockedCodes.has(c.code)).length;
   const extra = blockedCodes.size - inList;
-  cnt.textContent = `исключено ${blockedCodes.size} из ${countryData.length}`
-    + (extra > 0 ? ` · вне списка: ${extra}` : '');
+  let text = `исключено ${blockedCodes.size} из ${countryData.length}`;
+  if (extra > 0) text += `, вне списка ${extra}`;
+  if (noCountry > 0) text += `; без страны ${noCountry} профилей, они не фильтруются`;
+  cnt.textContent = text;
 }
 
 function selectAllCountries(blocked) {
@@ -421,7 +423,12 @@ async function loadSettings() {
   $('speedStageBudget').value = s.speed_stage_budget_sec || '120';
 
   setLoadError('xray', status.error ? `не удалось получить статус Xray: ${status.error}` : '');
-  if (!status.error) renderXrayStatus(status);
+  if (!status.error) {
+    renderXrayStatus(status);
+  } else {
+    const el = $('xrayStatus');
+    if (el) el.innerHTML = '<span class="badge badge-red">нет связи с API</span>';
+  }
   updateConfigStatus(status);
   updateSpeedTestDependants();
   loadPerfEstimate();
@@ -442,16 +449,16 @@ function updateConfigStatus(status) {
   const working = status.config_working || 0;
   const measured = status.config_measured || 0;
   const fallback = status.config_fallback === 'unmeasured'
-    ? ' · fallback: без замера'
+    ? ', fallback: без замера'
     : (status.config_fallback === 'stale'
-      ? ' · fallback: устаревшие'
-      : (status.config_fallback === 'slow' ? ' · fallback: ниже порога' : ''));
+      ? ', fallback: устаревшие'
+      : (status.config_fallback === 'slow' ? ', fallback: ниже порога' : ''));
   if (!status.api_accessible) {
     el.textContent = `кандидатов: ${candidates} (рабочих ${working}, замерено ${measured}; API недоступен)${fallback}`;
     el.style.color = 'var(--text-muted)';
     return;
   }
-  el.textContent = `узлов в конфиге: ${active} · кандидатов: ${candidates} (рабочих ${working}, замерено ${measured})${fallback}`;
+  el.textContent = `узлов в конфиге: ${active}, кандидатов: ${candidates} (рабочих ${working}, замерено ${measured})${fallback}`;
   el.style.color = status.config_fallback ? 'var(--orange)' : 'var(--green)';
 }
 
@@ -545,7 +552,7 @@ function validateSettings() {
       continue;
     }
     if (val < f.min || val > f.max) {
-      errors.push(`${fieldLabel(f.id)}: допустимый диапазон ${f.min}–${f.max}`);
+      errors.push(`${fieldLabel(f.id)}: допустимый диапазон ${f.min}-${f.max}`);
       markInvalid(f.id);
     }
   }
@@ -737,12 +744,16 @@ function resetProbeUrl() {
 function renderXrayStatus(s) {
   const el = $('xrayStatus');
   if (!el) return;
-  const run = s.running ? '<span class="badge badge-green">работает</span>' : '<span class="badge badge-muted">остановлен</span>';
-  const apiOk = s.api_accessible ? 'API ✓' : 'API ✗';
-  const sd = s.systemd_active ? 'systemd ✓' : '';
-  const nodes = s.active_outbounds && s.active_outbounds.length
-    ? `узлы: ${s.active_outbounds.filter(t => t.startsWith('node')).join(', ')}` : '';
-  el.innerHTML = `${run} &nbsp;${apiOk} &nbsp;${sd}<br><span class="xray-nodes">${nodes}</span>`;
+  const run = s.running
+    ? '<span class="badge badge-green">работает</span>'
+    : '<span class="badge badge-red">остановлен</span>';
+  const api = s.api_accessible
+    ? '<span class="badge badge-green">API доступен</span>'
+    : '<span class="badge badge-muted">API недоступен</span>';
+  const sd = s.systemd_active ? '<span class="badge badge-muted">systemd активен</span>' : '';
+  const nodes = (s.active_outbounds || []).filter(t => String(t).startsWith('node'));
+  const nodesText = nodes.length ? `<span class="badge badge-muted">узлов ${nodes.length}</span>` : '';
+  el.innerHTML = `<span class="status-chips">${run}${api}${sd}${nodesText}</span>`;
   const btnStart = $('btnXrayStart');
   const btnStop = $('btnXrayStop');
   if (btnStart) btnStart.style.display = s.running ? 'none' : '';
@@ -816,7 +827,7 @@ function updatePerfEstimate() {
   const estSec = waves * perWave;
   estVal.textContent = `~${(estSec / 60).toFixed(1)} мин`;
   estVal.title = 'оценка сверху: как будто все профили отвечают только по таймауту';
-  estDetail.textContent = `${_profileCount} профилей · ${batch} за раз · ${waves} волн · таймаут ${probeT} с`;
+  estDetail.textContent = `${_profileCount} профилей, ${batch} за раз, ${waves} волн, таймаут ${probeT} с`;
 }
 
 // ─── Резервная копия ───

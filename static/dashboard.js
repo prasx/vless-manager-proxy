@@ -135,7 +135,7 @@ function renderReasonFilter(reasons) {
     opts += '<option value="none">без причины</option>';
   }
   for (const r of list) {
-    opts += `<option value="${esc(r.reason)}" title="${esc(r.reason)}">${esc(reasonRu(r.reason))} · ${r.count}</option>`;
+    opts += `<option value="${esc(r.reason)}" title="${esc(r.reason)}">${esc(reasonRu(r.reason))} (${r.count})</option>`;
   }
   sel.innerHTML = opts;
   sel.style.display = list.length || currentReason === 'none' ? '' : 'none';
@@ -161,7 +161,7 @@ function onReasonChange() {
 }
 
 function updateSourceButtons() {
-  $$('.source-bar .btn').forEach(el => {
+  $$('.source-filter .btn').forEach(el => {
     if (el) el.classList.toggle('btn-primary', el.dataset.source === currentSource);
   });
   const sel = $('.source-select');
@@ -238,21 +238,22 @@ async function fetchPage(reset) {
 
   if (reset && !_initialMetaLoaded) {
     _initialMetaLoaded = true;
-    const [status, ob, xr, health] = await Promise.all([
-      api('GET', '/api/status'),
-      api('GET', '/api/xray/outbounds'),
-      api('GET', '/api/xray/status'),
-      api('GET', '/api/health'),
-    ]);
-    renderHealth(health);
+    // Счётчики рисуем сразу: /api/status лёгкий, а /api/xray/* и /api/health
+    // на медленном сервере отвечают секундами, и раньше вся шапка ждала их.
+    const status = await api('GET', '/api/status');
     renderStats(status);
     if (status && !status.error) {
       renderSourceButtons(status.sources, status.unknown_count, status.total);
       renderReasonFilter(status.reasons || []);
     } else {
-      // метаданные не загрузились: пробуем снова на следующем обновлении
       _initialMetaLoaded = false;
     }
+    const [ob, xr, health] = await Promise.all([
+      api('GET', '/api/xray/outbounds'),
+      api('GET', '/api/xray/status'),
+      api('GET', '/api/health'),
+    ]);
+    renderHealth(health);
     renderTraffic(ob, xr);
   }
 }
@@ -273,7 +274,7 @@ function renderStats(status) {
   $('#statWorking').textContent = status.working;
   $('#statFailed').textContent = status.failed;
   $('#statTopSpeed').textContent = status.top_speed;
-  const speedLabel = document.querySelector('.stat-card[data-filter="top_speed"] .label-s');
+  const speedLabel = document.querySelector('.stat-card[data-filter="top_speed"] .stat-label');
   if (speedLabel && status.top_speed_threshold) {
     const mbps = status.top_speed_threshold / 1000;
     speedLabel.textContent = mbps >= 1 ? `топ-скорость ≥${mbps}Mbps` : `топ-скорость ≥${status.top_speed_threshold}Kbps`;
@@ -290,8 +291,8 @@ function renderHealth(health) {
     return;
   }
   el.innerHTML = health.status === 'ok'
-    ? '<span class="badge badge-green">исправен</span>'
-    : '<span class="badge badge-red">проблемы</span>';
+    ? '<span class="badge badge-green">панель исправна</span>'
+    : '<span class="badge badge-red">проблемы панели</span>';
 }
 
 function renderTraffic(ob, xr) {
@@ -322,7 +323,8 @@ function renderTraffic(ob, xr) {
     const measured = xr.config_measured || 0;
     const working = xr.config_working || 0;
     const fresh = xr.config_fresh_minutes || 0;
-    html += ` <span class="badge badge-muted" title="отбор: рабочих ${working}, замерено ${measured}, свежесть ≤ ${fresh} мин">конфиг: ${xr.config_candidates} · замерено ${measured}</span>`;
+    html += ` <span class="badge badge-muted" title="отбор: рабочих ${working}, замерено ${measured}, свежесть до ${fresh} мин">конфиг <b>${xr.config_candidates}</b></span>`;
+    html += ` <span class="badge badge-muted">замерено <b>${measured}</b></span>`;
     if (xr.config_fallback) {
       const why = xr.config_fallback === 'unmeasured'
         ? 'нет замеров, взяты незамеренные'
@@ -345,6 +347,8 @@ function renderSourceButtons(sources, unknownCount, totalCount) {
   if (bar.dataset.signature === signature) { updateSourceButtons(); return; }
   bar.dataset.signature = signature;
   $$('.source-btn-src, .source-select').forEach(el => el.remove());
+
+  $$('.source-filter .btn').forEach(el => { el.classList.remove('btn-primary'); });
 
   const totalSrc = list.length + (unknownCount > 0 ? 1 : 0);
   const allBtn = $('#sourceAll');
@@ -489,14 +493,10 @@ function resetSelectAll() {
 function updateBatchButtons() {
   const cnt = selected.size;
   const hasSel = cnt > 0;
-  $('#batchDeleteBtn').style.display = hasSel ? 'inline-flex' : 'none';
-  $('#batchTestBtn').style.display = hasSel ? 'inline-flex' : 'none';
-  $('#testAllBtn').style.display = hasSel ? 'none' : 'inline-flex';
-  $('#retestFailedBtn').style.display = hasSel ? 'none' : 'inline-flex';
-  $('#cleanupBtn').style.display = hasSel ? 'none' : 'inline-flex';
+  const bar = $('#batchBar');
+  if (bar) bar.hidden = !hasSel;
   const bc = $('#batchCount');
-  if (hasSel) { bc.textContent = `выбрано: ${cnt}`; bc.style.display = ''; }
-  else { bc.textContent = ''; bc.style.display = 'none'; }
+  if (bc) bc.textContent = hasSel ? `Выбрано: ${cnt}` : '';
 }
 
 async function batchDelete() {
@@ -540,9 +540,9 @@ function renderDesktop(proxies) {
       <td class="speed-cell">${speedHtml}</td>
       <td class="lat-cell">${vlessHtml}</td>
       <td class="actions-cell">
-        <button class="btn btn-sm" onclick="copyLink(${p.id})">копия</button>
-        <button class="btn btn-sm" onclick="testOne(${p.id})">тест</button>
-        <button class="btn btn-sm btn-danger" onclick="delOne(${p.id})">удалить</button>
+        <button class="btn btn-sm btn-ghost" onclick="copyLink(${p.id})">копия</button>
+        <button class="btn btn-sm btn-ghost" onclick="testOne(${p.id})">тест</button>
+        <button class="btn btn-sm btn-danger-ghost" onclick="delOne(${p.id})">удалить</button>
       </td>
     `;
     tb.appendChild(tr);
@@ -569,9 +569,9 @@ function renderMobile(proxies) {
         <span>#${p.id}</span><span>${esc(p.port)}</span><span>${esc(p.country || 'нет')}${securityBadge(p.security)}</span>
       </div>
       <div class="mc-actions">
-        <button class="btn btn-sm" onclick="copyLink(${p.id})">копия</button>
-        <button class="btn btn-sm" onclick="testOne(${p.id})">тест</button>
-        <button class="btn btn-sm btn-danger" onclick="delOne(${p.id})">удалить</button>
+        <button class="btn btn-sm btn-ghost" onclick="copyLink(${p.id})">копия</button>
+        <button class="btn btn-sm btn-ghost" onclick="testOne(${p.id})">тест</button>
+        <button class="btn btn-sm btn-danger-ghost" onclick="delOne(${p.id})">удалить</button>
       </div>
       <div class="mc-status">
         <span class="badge ${badgeCls}" title="${testTooltip(p)}">${statusText(p.status)}</span>
@@ -588,6 +588,18 @@ function renderMobile(proxies) {
 
 $$('.stat-card').forEach(el => {
   el.addEventListener('click', () => setFilter(el.dataset.filter));
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      setFilter(el.dataset.filter);
+    }
+  });
+});
+
+// «Ещё» закрывается кликом вне меню, как обычное всплывающее меню.
+document.addEventListener('click', (e) => {
+  const menu = $('#moreActions');
+  if (menu && menu.open && !menu.contains(e.target)) menu.open = false;
 });
 $('#reasonFilter')?.addEventListener('change', onReasonChange);
 
@@ -595,7 +607,7 @@ async function testOne(id) {
   const r = await api('POST',`/api/test/${id}`);
   if (r.error) return toast(r.error, 'error');
   if (r.status === 'working') {
-    const speedStr = r.speed ? ` · ${formatSpeed(r.speed)}` : '';
+    const speedStr = r.speed ? `, ${formatSpeed(r.speed)}` : '';
     toast(`прокси #${id} работает: ${r.latency}мс${speedStr}`, 'success');
   }
   else toast(`прокси #${id} не работает${r.error ? ': ' + r.error : ''}`);
@@ -647,12 +659,12 @@ async function retestFailed() {
  *  не пускает в конфиг (устаревшие и незамеренные профили). */
 async function refreshStaleProfiles() {
   const r = await api('POST','/api/refresh-stale');
-  if (r.busy) return toast('идёт другой замер — попробуйте позже', 'error');
+  if (r.busy) return toast('идёт другой замер, попробуйте позже', 'error');
   if (r.error && !r.success) return toast(r.error, 'error');
   if (!r.success) return toast(r.reason || 'нечего актуализировать');
   if (r.speed_will_truncate) {
     toast(`в прогон ${r.queued} профилей, замеров успеет ~${r.speed_measurements}`
-      + ` (бюджет ${r.speed_budget_sec}с) — поднимите бюджет стадии скорости`, 'info');
+      + ` (бюджет ${r.speed_budget_sec}с), поднимите бюджет стадии скорости`, 'info');
   } else {
     toast(`в прогон поставлено ${r.queued} профилей…`);
   }
@@ -714,8 +726,8 @@ const STAGE_ICO = { 'check': '✓', 'ping': '↕', 'speed': '↓', 'import': '�
 function stageStatusText(st) {
   if (!st) return '';
   switch (st.key) {
-    case 'check': return `${st.done}/${st.total} · работает ${st.ok}`;
-    case 'ping':  return `${st.done}/${st.total} · измерено ${st.ok}`;
+    case 'check': return `${st.done}/${st.total}, работает ${st.ok}`;
+    case 'ping':  return `${st.done}/${st.total}, измерено ${st.ok}`;
     case 'speed': return `${st.done}/${st.total} профилей`;
     case 'import': return `${st.done}/${st.total} источников`;
     default: return `${st.done}/${st.total}`;
@@ -733,10 +745,10 @@ function renderStageSteps(stages) {
     const cls = status === 'active' ? 'st-active' : `st-${status}`;
     const ico = status === 'done' ? '✓'
       : status === 'active' ? (STAGE_ICO[st.key] || '●')
-      : status === 'canceled' ? '✕' : (STAGE_ICO[st.key] || '·');
+      : status === 'canceled' ? '✕' : (STAGE_ICO[st.key] || '○');
     const time = (status === 'done' || status === 'canceled') && st.seconds
-      ? ` <b>· ${st.seconds}с</b>` : '';
-    return `<span class="stage-chip ${cls}"><span class="st-ico">${ico}</span>${esc(st.title)}${status === 'active' && st.total ? ' <b>· ' + stageStatusText(st) + '</b>' : ''}${time}</span>`;
+      ? ` <b>, ${st.seconds}с</b>` : '';
+    return `<span class="stage-chip ${cls}"><span class="st-ico">${ico}</span>${esc(st.title)}${status === 'active' && st.total ? ' <b>, ' + stageStatusText(st) + '</b>' : ''}${time}</span>`;
   }).join('');
   box.style.display = 'flex';
 }
@@ -810,12 +822,12 @@ function onProgressEvent(p) {
     const stTitle = active ? active.title : '';
     const phaseText = active
       ? (active.key === 'check'
-          ? `${active.done}/${active.total} · работает ${active.ok}, нет ${Math.max(0, active.done - active.ok)}`
+          ? `${active.done}/${active.total}, работает ${active.ok}, нет ${Math.max(0, active.done - active.ok)}`
           : stageStatusText(active))
       : `${p.done}/${p.total}`;
     label.textContent = p.cancel_requested
-      ? `«${labelRu(p.label)}»: отмена… · ${elapsed}`
-      : `«${labelRu(p.label)}» → ${stTitle}: ${phaseText} · ${elapsed}`;
+      ? `«${labelRu(p.label)}»: отмена…, ${elapsed}`
+      : `«${labelRu(p.label)}» → ${stTitle}: ${phaseText}, ${elapsed}`;
 
     if (detail) {
       if (p.current) {

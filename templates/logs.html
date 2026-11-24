@@ -1,33 +1,41 @@
 {% extends "base.html" %}
-{% block title %}VLESS Manager · Логи{% endblock %}
-{% block page_title %}Логи{% endblock %}
+{% block title %}VLESS Manager: Логи{% endblock %}
 {% block extra_css %}
-<link rel="stylesheet" href="{{ url_for('static', filename='logs.css') }}">
+<link rel="stylesheet" href="../static/style.css">
 {% endblock %}
 {% block content %}
 
-<div class="toolbar">
-  <select id="logLevelFilter" class="select-filter" onchange="setLevel(this.value)">
-    <option value="">Все</option>
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Логи</h1>
+    <p class="page-sub">События панели: предупреждения и ошибки, импорт, проверки и применение конфига.</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-danger-ghost" onclick="clearLogs()">Очистить логи</button>
+  </div>
+</header>
+
+<div class="filters">
+  <select id="logLevelFilter" class="input filter-select" onchange="setLevel(this.value)" aria-label="Уровень логов">
+    <option value="">Все уровни</option>
     <option value="DEBUG">DEBUG</option>
     <option value="INFO">INFO</option>
     <option value="WARN">WARN</option>
     <option value="ERROR">ERROR</option>
   </select>
-  <button class="btn" onclick="clearLogs()">Очистить</button>
 </div>
 
 <div class="data-error" id="logError" role="status" hidden></div>
 
 <div class="table-wrap">
-  <table>
+  <table class="logs-table">
     <thead>
       <tr><th>Время</th><th>Уровень</th><th>CID</th><th>Сообщение</th></tr>
     </thead>
     <tbody id="logBody"></tbody>
   </table>
   <div class="pagination-bar" id="logPagination" style="display:none">
-    <button class="btn" id="logShowMoreBtn" onclick="loadMore()">Показать ещё 50</button>
+    <button class="btn btn-sm" id="logShowMoreBtn" onclick="loadMore()">Показать ещё</button>
     <span class="pagination-info" id="logPaginationInfo"></span>
   </div>
 </div>

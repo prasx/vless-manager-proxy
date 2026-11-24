@@ -1,66 +1,87 @@
 {% extends "base.html" %}
-{% block title %}VLESS Manager · Источники{% endblock %}
-{% block page_title %}Источники{% endblock %}
+{% block title %}VLESS Manager: Источники{% endblock %}
 {% block extra_css %}
-<link rel="stylesheet" href="{{ url_for('static', filename='sources.css') }}">
+<link rel="stylesheet" href="../static/style.css">
 {% endblock %}
 {% block content %}
 
-<div class="toolbar" style="margin-bottom:16px">
-  <button class="btn btn-primary" id="btnImportAll" onclick="importAll()">Импорт всех</button>
-  <button class="btn" id="btnRefreshStale" onclick="refreshStale()" title="Перепроверить и перезамерить профили, которые выпали из конфига (устарели или без замера)">Актуализировать</button>
-  <button class="btn" id="btnCheckConnect" onclick="checkConnectivity()" title="Проверить доступность источников и показать причину сбоя">Проверить связь</button>
-  <label class="chk-safe" title="Пропускать прокси без TLS/Reality-шифрования">
-    <input type="checkbox" id="chkSafeOnly" onchange="toggleSafeOnly()">
-    <span>Безопасный импорт (TLS/Reality)</span>
-  </label>
-  <span class="src-summary" id="srcSummary"></span>
-</div>
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Источники</h1>
+    <p class="page-sub" id="srcSummary">Сколько живых узлов даёт каждый источник.</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-primary" id="btnImportAll" onclick="importAll()">Импорт всех</button>
+    <button class="btn" id="btnRefreshStale" onclick="refreshStale()" title="Перепроверить и перезамерить профили, которые выпали из конфига">Актуализировать</button>
+    <button class="btn" id="btnCheckConnect" onclick="checkConnectivity()" title="Проверить доступность источников и показать причину сбоя">Проверить связь</button>
+  </div>
+</header>
 
-<div class="import-report" id="importReport" role="status" hidden></div>
-
-<div class="section-label">Добавить прокси вручную</div>
-<div class="add-form" style="margin-bottom:24px;">
-  <input class="inp-url" id="inpProxy" placeholder="vless://..." spellcheck="false" style="flex:1">
-  <button class="btn btn-primary" id="btnAddProxy" onclick="addProxy()">+ Добавить</button>
-</div>
-
-<div class="section-label">Источники прокси</div>
-
-<div class="source-tabs">
-  <button class="tab tab-active" data-tab="url" onclick="switchTab('url')">URL</button>
-  <button class="tab" data-tab="txt" onclick="switchTab('txt')">TXT</button>
-</div>
-
-<div id="urlSourceForm" class="add-form">
-  <input class="inp-name" id="inpName" placeholder="имя" spellcheck="false">
-  <input class="inp-url" id="inpUrl" placeholder="https://..." spellcheck="false">
-  <button class="btn btn-primary" id="btnAddSource" onclick="addSource()">+ Добавить URL-источник</button>
-</div>
-
-<div id="txtSourceForm" class="add-form" style="display:none">
-  <input class="inp-name" id="inpNameTxt" placeholder="имя" spellcheck="false">
-  <textarea class="inp-txt" id="inpTxtContent" placeholder="vless://... (по одной на строку)" rows="6" spellcheck="false"></textarea>
-  <button class="btn btn-primary" id="btnAddTxtSource" onclick="addTxtSource()">+ Добавить TXT-источник</button>
-</div>
+{# Состав конфига, глобальное состояние панели, поэтому он идёт до списка,
+   а не после десяти карточек. #}
+<section class="config-panel" id="configPreview">
+  <div class="empty">// загрузка…</div>
+</section>
 
 <div class="data-error" id="srcError" role="status" hidden></div>
+<div class="import-report" id="importReport" role="status" hidden></div>
 
-<div class="card-list" id="list"></div>
+<section class="sources-section" aria-label="Источники прокси">
+  <div class="section-head">
+    <h2>Источники прокси</h2>
+    <label class="chk-safe" title="Пропускать прокси без TLS/Reality-шифрования">
+      <input type="checkbox" id="chkSafeOnly" onchange="toggleSafeOnly()">
+      <span>Безопасный импорт (TLS/Reality)</span>
+    </label>
+  </div>
+  <div class="source-list" id="list">
+    <div class="empty">// загрузка источников…</div>
+  </div>
+</section>
 
-<div class="section-label" style="margin-top:28px">Состав конфига и подписки</div>
-<div class="config-preview" id="configPreview">
-  <div class="empty">// загрузка…</div>
-</div>
+{# Добавление, редкое действие, поэтому оно свёрнуто и не отнимает первый экран
+   у списка источников. #}
+<details class="add-panel" id="addPanel">
+  <summary>Добавить источник или прокси</summary>
+  <div class="add-body">
+    <div class="add-block">
+      <h3>Прокси вручную</h3>
+      <div class="add-form">
+        <input class="inp-url" id="inpProxy" placeholder="vless://..." spellcheck="false" aria-label="VLESS-ссылка">
+        <button class="btn" id="btnAddProxy" onclick="addProxy()">Добавить</button>
+      </div>
+    </div>
+
+    <div class="add-block">
+      <h3>Подписка</h3>
+      <div class="source-tabs" role="tablist" aria-label="Тип источника">
+        <button class="tab tab-active" type="button" role="tab" aria-selected="true" data-tab="url" onclick="switchTab('url')">URL</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="txt" onclick="switchTab('txt')">TXT</button>
+      </div>
+
+      <div id="urlSourceForm" class="add-form">
+        <input class="inp-name" id="inpName" placeholder="имя" spellcheck="false" aria-label="Имя источника">
+        <input class="inp-url" id="inpUrl" placeholder="https://..." spellcheck="false" aria-label="URL подписки">
+        <button class="btn" id="btnAddSource" onclick="addSource()">Добавить источник</button>
+      </div>
+
+      <div id="txtSourceForm" class="add-form" style="display:none">
+        <input class="inp-name" id="inpNameTxt" placeholder="имя" spellcheck="false" aria-label="Имя TXT-источника">
+        <textarea class="inp-txt" id="inpTxtContent" placeholder="vless://... (по одной на строку)" rows="6" spellcheck="false" aria-label="Содержимое TXT-источника"></textarea>
+        <button class="btn" id="btnAddTxtSource" onclick="addTxtSource()">Добавить TXT</button>
+      </div>
+    </div>
+  </div>
+</details>
 
 <dialog id="dlgEditTxt" class="modal">
   <div class="modal-header">Редактирование TXT-источника</div>
-  <textarea id="dlgTxtContent" rows="12" spellcheck="false" style="width:100%;box-sizing:border-box"></textarea>
+  <textarea id="dlgTxtContent" rows="12" spellcheck="false" aria-label="Содержимое TXT-источника"></textarea>
   <p class="modal-hint">Изменения применятся к содержимому источника. Запустите «Импорт» для обновления прокси.</p>
   <div class="modal-actions">
     <button class="btn" onclick="document.getElementById('dlgEditTxt').close()">Отмена</button>
-    <button class="btn btn-primary" id="btnSaveTxt" onclick="saveTxtContent(false)">Сохранить</button>
-    <button class="btn btn-apply" onclick="saveTxtContent(true)">Сохранить и импортировать</button>
+    <button class="btn" id="btnSaveTxt" onclick="saveTxtContent(false)">Сохранить</button>
+    <button class="btn btn-primary" onclick="saveTxtContent(true)">Сохранить и импортировать</button>
   </div>
 </dialog>
 {% endblock %}

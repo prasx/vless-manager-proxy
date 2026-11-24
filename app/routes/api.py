@@ -963,7 +963,13 @@ def api_countries():
     last_verify = db_q(
         "SELECT MAX(added_at) FROM proxies WHERE country_verified=1"
     )[0][0]
-    return jsonify(countries=countries, blocked=blocked_raw, last_verify=last_verify)
+    # Сколько профилей осталось без страны: фильтр по странам их не покрывает,
+    # и панель обязана сказать это прямо, а не делать вид, что фильтр глобальный.
+    no_country = db_q(
+        "SELECT COUNT(*) c FROM proxies WHERE country='' OR country IS NULL"
+    )[0]["c"]
+    return jsonify(countries=countries, blocked=blocked_raw, last_verify=last_verify,
+                   no_country=no_country)
 
 
 # ─── Прогресс тестов ───

@@ -1,53 +1,81 @@
 {% extends "base.html" %}
-{% block title %}VLESS Manager · Дашборд{% endblock %}
-{% block page_title %}Прокси{% endblock %}
+{% block title %}VLESS Manager: Дашборд{% endblock %}
 {% block extra_css %}
-<link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
-<style>
-.stage-chip { display:inline-flex; align-items:center; gap:5px; font-size:.66rem; padding:2px 9px; border-radius:10px; border:1px solid var(--border); color:var(--text-muted); white-space:nowrap; }
-.stage-chip .st-ico { font-style:normal; }
-.stage-chip.st-pending { opacity:.55; }
-.stage-chip.st-active { border-color:var(--green); color:var(--text-primary); background:rgba(0,200,120,.08); }
-.stage-chip.st-active .st-ico { color:var(--green); }
-.stage-chip.st-done { border-color:var(--border); color:var(--text-primary); }
-.stage-chip.st-done .st-ico { color:var(--green); }
-.stage-chip.st-skipped { opacity:.45; }
-.stage-chip.st-canceled { border-color:var(--red); color:var(--red); }
-</style>
+<link rel="stylesheet" href="../static/style.css">
 {% endblock %}
 {% block content %}
 
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Прокси</h1>
+    <p class="page-sub">Что живёт сейчас, что попадёт в конфиг Xray и подписку.</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-primary" id="testAllBtn" onclick="testAll()">Тест всех</button>
+    <button class="btn" id="refreshStaleBtn" onclick="refreshStaleProfiles()" title="Перепроверить и перезамерить профили, выпавшие из конфига">Актуализировать</button>
+    <button class="btn" id="retestFailedBtn" onclick="retestFailed()" title="Перетестировать только failed-прокси">Перетест failed</button>
+    <details class="more" id="moreActions">
+      <summary class="btn">Ещё</summary>
+      <div class="more-menu">
+        <button class="btn btn-danger-ghost" id="cleanupBtn" onclick="cleanupFailed()">Очистить failed</button>
+      </div>
+    </details>
+    <button class="btn btn-danger" id="cancelTestBtn" style="display:none" onclick="cancelTest()">Отмена</button>
+  </div>
+</header>
+
 <div class="stats" id="statGrid">
-  <button type="button" class="stat-card active" data-filter="" aria-pressed="true">
+  <div class="stat-card active" role="button" tabindex="0" data-filter="" aria-pressed="true">
     <span class="num" id="statTotal"><span class="skeleton skeleton-num"></span></span>
-    <span class="label-s">все</span>
-  </button>
-  <button type="button" class="stat-card" data-filter="working" aria-pressed="false">
+    <span class="stat-label">все прокси</span>
+  </div>
+  <div class="stat-card" role="button" tabindex="0" data-filter="working" aria-pressed="false">
     <span class="num" id="statWorking"><span class="skeleton skeleton-num"></span></span>
-    <span class="label-s">рабочие</span>
-  </button>
-  <button type="button" class="stat-card" data-filter="top_speed" aria-pressed="false">
+    <span class="stat-label">рабочие</span>
+  </div>
+  <div class="stat-card" role="button" tabindex="0" data-filter="top_speed" aria-pressed="false">
     <span class="num" id="statTopSpeed"><span class="skeleton skeleton-num"></span></span>
-    <span class="label-s">топ-скорость</span>
-  </button>
-  <button type="button" class="stat-card" data-filter="failed" aria-pressed="false">
+    <span class="stat-label">топ-скорость</span>
+  </div>
+  <div class="stat-card" role="button" tabindex="0" data-filter="failed" aria-pressed="false">
     <span class="num" id="statFailed"><span class="skeleton skeleton-num"></span></span>
-    <span class="label-s">не работает</span>
-  </button>
+    <span class="stat-label">не работает</span>
+  </div>
 </div>
 
-<div id="activeNode">
-  <div id="activeNodeTop">
-    <div id="activeInfo">// outbounds: загрузка…</div>
+<section class="status-strip" id="activeNode" aria-label="Состояние Xray">
+  <div class="status-line" id="activeNodeTop">
+    <span id="activeInfo">// outbounds: загрузка…</span>
     <span id="healthIndicator"><span class="badge badge-muted">проверка…</span></span>
-    <div id="lastTestRow" style="font-size:0.72rem;color:var(--text-muted)"></div>
+    <span id="lastTestRow"></span>
   </div>
-  <div id="stageSteps" style="display:none;margin-top:8px;gap:6px;flex-wrap:wrap;align-items:center"></div>
-  <div id="testProgressBar" style="display:none;margin-top:6px;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
-    <div id="testProgressFill" style="height:100%;width:0%;background:var(--green);transition:width .5s"></div>
+  <div id="stageSteps" class="stage-steps"></div>
+  <div id="testProgressBar" class="progress">
+    <div id="testProgressFill" class="progress-fill"></div>
   </div>
-  <div id="testProgressLabel" style="font-size:0.7rem;color:var(--text-muted);margin-top:2px"></div>
-  <div id="testProgressDetail" style="font-size:0.68rem;color:var(--text-muted);margin-top:2px;display:none"></div>
+  <div id="testProgressLabel" class="progress-label"></div>
+  <div id="testProgressDetail" class="progress-detail"></div>
+</section>
+
+<div class="filters">
+  <div class="search-field">
+    <input type="search" id="searchInput" class="input" placeholder="Поиск по хосту или id…" aria-label="Поиск по хосту или id">
+  </div>
+  <select id="reasonFilter" class="input filter-select" aria-label="Причина отказа" style="display:none"></select>
+  <div class="source-filter" id="sourceBar">
+    <button type="button" class="btn btn-sm" id="sourceAll" data-source="" onclick="setSource('')">Все</button>
+    <button type="button" class="btn btn-sm" id="sourceUnknown" data-source="unknown" onclick="setSource('unknown')" style="display:none">Свои</button>
+  </div>
+  <label class="chk-all" title="Выбрать все прокси на странице">
+    <input type="checkbox" class="chk-custom" id="selectAllMobile" onchange="toggleSelectAllFrom(this.checked)">
+    <span>выбрать все</span>
+  </label>
+</div>
+
+<div class="batchbar" id="batchBar" hidden>
+  <span id="batchCount" class="batch-count"></span>
+  <button class="btn btn-sm" id="batchTestBtn" onclick="batchTest()">Тест выбранных</button>
+  <button class="btn btn-sm btn-danger-ghost" id="batchDeleteBtn" onclick="batchDelete()">Удалить выбранные</button>
 </div>
 
 <div class="data-error" id="dataError" role="status" hidden>
@@ -55,48 +83,29 @@
   <button type="button" class="btn btn-sm" onclick="loadData()">повторить</button>
 </div>
 
-<div class="toolbar">
-  <div class="toolbar-row toolbar-row-1">
-    <div class="toolbar-actions">
-      <button class="btn" id="testAllBtn" onclick="testAll()">Тест всех</button>
-      <button class="btn btn-apply" id="refreshStaleBtn" onclick="refreshStaleProfiles()" title="Перепроверить и перезамерить профили, выпавшие из конфига: устаревшие или без замера">Актуализировать</button>
-      <button class="btn btn-apply" id="retestFailedBtn" onclick="retestFailed()" title="Перетестировать только failed-прокси">Перетест failed</button>
-      <button class="btn btn-danger" id="cancelTestBtn" style="display:none" onclick="cancelTest()">Отмена</button>
-      <button class="btn btn-danger" id="cleanupBtn" onclick="cleanupFailed()">Очистить failed</button>
-      <button class="btn btn-apply" id="batchTestBtn" style="display:none" onclick="batchTest()">Тест выбранных</button>
-      <button class="btn btn-danger" id="batchDeleteBtn" style="display:none" onclick="batchDelete()">Удалить выбранные</button>
-      <span id="batchCount" style="font-size:0.72rem;color:var(--text-muted);display:none"></span>
-    </div>
-    <label class="chk-all">
-      <input type="checkbox" class="chk-custom" id="selectAllMobile" onchange="toggleSelectAllFrom(this.checked)">
-      <span>выбрать все</span>
-    </label>
-  </div>
-  <div class="toolbar-row toolbar-row-2">
-    <input type="search" id="searchInput" class="input" placeholder="Поиск по хосту или id…" style="font-size:0.78rem">
-    <select id="reasonFilter" class="input" style="width:auto;max-width:260px;font-size:0.75rem;display:none" title="Фильтр по причине отказа"></select>
-  </div>
-  <div class="toolbar-row toolbar-row-3">
-    <div class="source-bar" id="sourceBar">
-      <button class="btn btn-sm btn-primary" id="sourceAll" data-source="" onclick="setSource('')">Все</button>
-      <button class="btn btn-sm" id="sourceUnknown" data-source="unknown" onclick="setSource('unknown')" style="display:none">Свои</button>
-    </div>
-  </div>
-</div>
-
-<div class="table-wrap">
+<section class="table-wrap" aria-label="Список прокси">
   <table class="desktop-table">
     <thead>
-      <tr><th class="chk"><input type="checkbox" class="chk-custom" id="selectAll" onchange="toggleSelectAll()"></th><th>#</th><th>Хост</th><th>Порт</th><th>Страна</th><th>Статус</th><th>Скорость</th><th>Задержка</th><th></th></tr>
+      <tr>
+        <th class="chk"><input type="checkbox" class="chk-custom" id="selectAll" onchange="toggleSelectAll()" aria-label="Выбрать все"></th>
+        <th>#</th>
+        <th>Хост</th>
+        <th>Порт</th>
+        <th>Страна</th>
+        <th>Статус</th>
+        <th>Скорость</th>
+        <th>Задержка</th>
+        <th><span class="sr-only">Действия</span></th>
+      </tr>
     </thead>
     <tbody id="tbodyDesktop"></tbody>
   </table>
   <div class="mobile-list" id="mobileList"></div>
-  <div class="pagination-bar" id="paginationBar" style="display:none">
-    <button class="btn" id="showMoreBtn" onclick="loadMore()">Показать ещё 50</button>
+  <div class="pagination-bar" id="paginationBar" hidden>
+    <button class="btn btn-sm" id="showMoreBtn" onclick="loadMore()">Показать ещё</button>
     <span class="pagination-info" id="paginationInfo"></span>
   </div>
-</div>
+</section>
 {% endblock %}
 
 {% block extra_js %}

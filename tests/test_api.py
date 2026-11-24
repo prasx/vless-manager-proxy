@@ -143,6 +143,19 @@ class TestApiSmoke(ApiTestCase):
         self.assertFalse(data["success"])
         self.assertEqual(data["queued"], 0)
 
+    def test_countries_reports_no_country(self):
+        """Фильтр стран не покрывает профили без страны, и API это говорит."""
+        from app.utils import now_utc
+
+        for host, country in (("one.test", ""), ("two.test", "US")):
+            app_db.db_q(
+                "INSERT INTO proxies (link, host, port, country, status, added_at) VALUES (?,?,?,?,?,?)",
+                (f"vless://11111111-1111-1111-1111-111111111111@{host}:443", host, 443, country, "working", now_utc()),
+            )
+        data = self.client.get("/api/countries").get_json()
+        self.assertEqual(data["no_country"], 1)
+        self.assertEqual([c["code"] for c in data["countries"]], ["US"])
+
     def test_pages_render(self):
         for path in ("/", "/logs", "/sources", "/settings"):
             r = self.client.get(path)

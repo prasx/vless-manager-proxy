@@ -1,5 +1,9 @@
 shots/
+after/
 before/
 before.json
 before.txt
 compare.html
+preflight.json
+log.json
+render.json

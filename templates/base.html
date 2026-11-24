@@ -4,42 +4,47 @@
 {% block head %}
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Панель управления VLESS-прокси: проверка узлов, замер скорости, конфиг Xray и подписка.">
 <title>{% block title %}VLESS Manager{% endblock %}</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../static/style.css">
 {% block extra_css %}{% endblock %}
 {% endblock %}
 </head>
 <body>
-<div class="noise"></div>
-<div class="container">
+<div class="noise" aria-hidden="true"></div>
 
-{% block header %}
-<div class="header">
-  <div class="header-top">
-    <div class="header-brand">
-      <div class="label">VLESS Manager</div>
-      <h1>{% block page_title %}Dashboard{% endblock %}</h1>
-    </div>
+{# Верхний бар: бренд, разделы текстом, утилиты справа. Действия страниц живут
+   в шапке самой страницы, чтобы навигация не превращалась в стену кнопок. #}
+<div class="appbar">
+  <div class="container appbar-inner">
+    <a class="brand" href="/">VLESS Manager</a>
 
-    {# mainNav — единая навигация: один и тот же список разделов на каждой
-       странице. Действия страниц (тесты, импорт, обслуживание Xray) живут в
-       тулбарах самих страниц: в меню они ломали и вид, и смысл навигации. #}
-    <nav class="nav" id="mainNav">
+    <nav class="nav" id="mainNav" aria-label="Разделы">
       {% set here = request.path %}
       {% set items = [('/', 'Дашборд'), ('/sources', 'Источники'), ('/settings', 'Настройки'), ('/logs', 'Логи')] %}
       {% for href, title in items %}
-      <a href="{{ href }}" class="btn"{% if here == href %} aria-current="page"{% endif %}>{{ title }}</a>
+      <a href="{{ href }}"{% if here == href %} aria-current="page"{% endif %}>{{ title }}</a>
       {% endfor %}
-      <a href="/api/subscribe.txt" class="btn" target="_blank" rel="noopener">Подписка</a>
-      <button class="btn" type="button" onclick="toggleConnModal()">Соединения</button>
-      <button class="btn btn-theme" onclick="toggleTheme()" aria-label="Переключить тему" title="Переключить тему">&#9681;</button>
     </nav>
 
-    <div class="header-actions">
-      <!-- Уведомления: колокольчик и попап 9:16 только с предупреждениями (WARN),
-           внизу ссылка на логи целиком -->
+    <div class="appbar-tools">
+      <a class="appbar-link" href="/api/subscribe.txt" target="_blank" rel="noopener">Подписка</a>
+      <button class="btn btn-ghost btn-sm" type="button" onclick="toggleConnModal()">Соединения</button>
+
+      <button class="icon-btn" type="button" onclick="toggleTheme()" aria-label="Переключить тему" title="Переключить тему">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9"/>
+          <path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none"/>
+        </svg>
+      </button>
+
+      <!-- Уведомления: колокольчик и попап только с предупреждениями (WARN),
+           внизу ссылка на логи целиком. -->
       <div class="notif">
-        <button type="button" class="btn btn-bell" id="notifBell"
+        <button type="button" class="icon-btn btn-bell" id="notifBell"
                 aria-label="Предупреждения" aria-haspopup="dialog" aria-expanded="false"
                 aria-controls="notifPop" title="Предупреждения">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -57,35 +62,36 @@
           </div>
           <div class="notif-list" id="notifList"></div>
           <div class="notif-foot">
-            <a class="notif-all" href="/logs">логи целиком &rarr;</a>
+            <a class="notif-all" href="/logs">Все логи</a>
           </div>
         </div>
       </div>
 
-      <button class="btn btn-nav-toggle" id="navToggle" type="button" onclick="toggleNav()"
-              aria-label="Меню" aria-expanded="false" aria-controls="mainNav">&#9776;</button>
+      <button class="icon-btn nav-toggle" id="navToggle" type="button" onclick="toggleNav()"
+              aria-label="Меню" aria-expanded="false" aria-controls="mainNav">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16"/>
+        </svg>
+      </button>
     </div>
   </div>
 </div>
-{% endblock %}
 
+<main class="container">
 {% block content %}{% endblock %}
+</main>
 
-{% block footer %}
-<div class="footer">
-  <span>v3.0</span>
+<footer class="container app-footer">
+  <span>v4.0.0</span>
   <a href="https://github.com/prasx" target="_blank" rel="noopener">GitHub</a>
-</div>
-{% endblock %}
-
-</div>
+</footer>
 
 <!-- Модалка «Соединения»: раздел единой навигации, поэтому разметка общая для
-     всех страниц, а не только для дашборда. Логика — static/connections.js -->
+     всех страниц, а не только для дашборда. Логика, static/connections.js -->
 <div class="modal-overlay" id="connModal">
-  <div class="modal-box">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="connTitle">
     <div class="modal-head">
-      <h3>Активные соединения</h3>
+      <h2 id="connTitle">Активные соединения</h2>
       <button type="button" class="modal-close" onclick="toggleConnModal()" aria-label="Закрыть">&times;</button>
     </div>
     <div class="modal-body">

@@ -97,10 +97,10 @@ function renderRow(row) {
   const tr = document.createElement('tr');
   const cid = row.correlation_id || '';
   tr.innerHTML = `
-    <td style="color:var(--text-muted);white-space:nowrap">${esc(row.timestamp)}</td>
+    <td>${esc(row.timestamp)}</td>
     <td class="level-${esc(row.level)}">${esc(row.level)}</td>
-    <td style="font-size:0.65rem;color:var(--text-muted);font-family:monospace">${cid ? esc(cid.slice(0, 8)) : ''}</td>
-    <td style="word-break:break-word">${esc(row.message)}</td>
+    <td>${cid ? esc(cid.slice(0, 8)) : ''}</td>
+    <td>${esc(row.message)}</td>
   `;
   return tr;
 }
