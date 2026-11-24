@@ -541,7 +541,7 @@ function renderDesktop(proxies) {
       <td class="host-cell" title="${esc(p.host)}">${esc(p.host)}</td>
       <td class="num">${esc(p.port)}</td>
       <td>${esc(p.country || 'нет')}${securityBadge(p.security)}</td>
-      <td class="status-cell"><span class="badge ${badgeCls}" title="${testTooltip(p)}">${statusText(p.status)}</span>${errorHint(p)}</td>
+      <td class="status-cell"><div class="status-inner"><span class="badge ${badgeCls}" title="${testTooltip(p)}">${statusText(p.status)}</span>${errorHint(p)}</div></td>
       <td class="speed-cell num" title="${esc(speedTitle)}">${speedHtml}${peakHtml}</td>
       <td class="lat-cell num">${vlessHtml}</td>
       <td class="actions-cell"><div class="row-actions">

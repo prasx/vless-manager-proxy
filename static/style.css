@@ -437,6 +437,9 @@ input[type="checkbox"]:not(.chk-custom):checked::after {
 .chk-group { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 
 /* ─── Таблицы ─── */
+/* th/td должны оставаться table-cell. Любой display:flex/grid на самой ячейке
+   выбивает её из строки: ломаются границы, высота и выравнивание колонок.
+   Раскладка внутри ячейки — только через обёртку (.row-actions, .status-inner). */
 .table-wrap {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -1198,7 +1201,7 @@ dialog.modal::backdrop { background: var(--overlay); }
 .desktop-table td.lat-cell,
 .desktop-table td.speed-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .speed-max { display: block; font-size: 0.7rem; font-weight: 400; color: var(--text-muted); }
-.desktop-table .status-cell {
+.status-inner {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -1400,12 +1403,7 @@ dialog.modal::backdrop { background: var(--overlay); }
 .src-col-out { width: 112px; }
 .src-col-imp { width: 168px; }
 .src-col-val { width: 144px; }
-.src-col-act { width: 212px; }
-/* На узком десктопе (1100–1339) три действия не помещаются в широкую
-   колонку: поджимаем кнопки, чтобы «удалить» не выходило за таблицу. */
-@media (min-width: 1100px) and (max-width: 1339px) {
-  .src-actions .btn { padding: 0 4px; font-size: 0.72rem; }
-}
+.src-col-act { width: 232px; }
 .src-cards { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
 @media (min-width: 1100px) { .src-cards { display: none; } }
 @media (max-width: 1099px) {
@@ -1477,8 +1475,17 @@ dialog.modal::backdrop { background: var(--overlay); }
 .v-duplicate { color: var(--text-muted); }
 .v-empty { color: var(--orange); }
 .src-reco { font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; }
-.src-actions { display: flex; gap: 4px; align-items: center; justify-content: flex-end; white-space: nowrap; text-align: right; }
-.src-actions .btn { padding: 0 8px; font-size: 0.75rem; }
+.src-actions { white-space: nowrap; text-align: right; }
+/* Кнопки — во внутреннем гриде, а не flex на <td>: display:flex на ячейке
+   ломает табличную раскладку, из-за чего рвались линии строк. */
+.src-actions-inner {
+  display: grid;
+  grid-template-columns: 76px 64px 68px;
+  gap: 4px;
+  justify-content: end;
+  align-items: center;
+}
+.src-actions-inner .btn { padding: 0 4px; font-size: 0.75rem; justify-content: center; }
 .src-verdict { white-space: normal; }
 .src-measured { display: block; margin-top: 4px; font-size: 0.75rem; color: var(--text-muted); }
 .src-import-time { display: block; margin-top: 4px; font-size: 0.75rem; color: var(--text-muted); }

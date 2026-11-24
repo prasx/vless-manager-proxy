@@ -155,7 +155,7 @@ function renderList(sources) {
         <span class="src-score">${s.score != null ? s.score : 0}</span>
         <span class="${vcls}" title="${esc(reco)}">${esc(s.verdict_label || '—')}</span>
       </td>
-      <td class="src-actions">${sourceActionsHTML(s)}</td>
+      <td class="src-actions"><div class="src-actions-inner">${sourceActionsHTML(s)}</div></td>
     </tr>`;
   }).join('');
 
