@@ -404,6 +404,7 @@ async function loadSettings() {
   $('applyAfterTest').checked = s.apply_after_test !== 'false';
   $('minSpeedMbps').value = s.min_speed_mbps || '0';
   $('profileMaxAgeMin').value = s.profile_max_age_min || '0';
+  $('requireSpeed').checked = s.require_speed === 'true';
   $('speedTestAdaptiveSec').value = s.speed_test_adaptive_sec || '2';
   $('safeOnlyImport').checked = s.safe_only_import === 'true';
   $('importProxy').value = s.import_proxy || '';
@@ -626,6 +627,7 @@ async function saveSettings() {
     apply_after_test: $('applyAfterTest').checked ? 'true' : 'false',
     min_speed_mbps: $('minSpeedMbps').value.trim() || '0',
     profile_max_age_min: $('profileMaxAgeMin').value.trim() || '0',
+    require_speed: $('requireSpeed').checked ? 'true' : 'false',
     speed_test_adaptive_sec: $('speedTestAdaptiveSec').value.trim() || '2',
     observatory_probe_interval: $('observatoryProbeInterval').value.trim() || '10s',
     balancer_strategy: $('balancerStrategy').value,
@@ -697,6 +699,7 @@ const RESET_CHECKBOXES = {
   speedTestEnabled: true,
   applyAfterTest: true,
   safeOnlyImport: false,
+  requireSpeed: false,
   tcpPrefilter: true,
   sniffingEnabled: true,
   sniffingRouteOnly: true,

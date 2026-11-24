@@ -287,6 +287,12 @@ class XrayConfigurator:
                 f"Config fallback: нет свежих профилей (порог {sel.fresh_minutes} мин) — "
                 "временно используются устаревшие. Запустите «Тест всех»",
             )
+        elif sel.strict and not sel.rows:
+            add_log(
+                "WARN",
+                "Strict selection: включён режим «только замеренные», но замеренных "
+                "свежих профилей нет — конфиг и подписка пусты",
+            )
         elif not sel.rows:
             add_log("WARN", "Config selection is empty: нет ни одного профиля для конфига")
 

@@ -96,6 +96,11 @@ _SCHEMA = {
         ("created_at", "TIMESTAMP"),
         ("last_status", "TEXT"),
         ("last_error", "TEXT"),
+        # Счётчики последнего удачного импорта: показывают, почему у источника
+        # может быть 0 профилей (все ссылки уже были в других источниках).
+        ("last_added", "INTEGER DEFAULT 0"),
+        ("last_duplicates", "INTEGER DEFAULT 0"),
+        ("last_parsed", "INTEGER DEFAULT 0"),
     ],
     "logs": [
         ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -141,6 +146,10 @@ SETTING_DEFAULTS = {
     "handshake_timeout": "5",
     "conn_idle": "300",
     "min_speed_mbps": "0",
+    # Строгий отбор: в конфиг и подписку только профили с замером скорости.
+    # 0 в min_speed_mbps такого требования не даёт: без порога незамеренные
+    # допускаются как второй эшелон.
+    "require_speed": "false",
     # Порог «свежести» профиля в конфиге/подписке, минут (0 = авто:
     # 2 × check_interval_db, не меньше 3 ч и не больше суток).
     "profile_max_age_min": "0",
@@ -427,6 +436,11 @@ class Settings:
             return int(mbps * 1000) if mbps > 0 else 0
         except (ValueError, TypeError):
             return 0
+
+    @classmethod
+    def require_speed(cls) -> bool:
+        """True — в конфиг и подписку только профили с замером скорости."""
+        return (cls.get("require_speed", "false") or "").strip().lower() == "true"
 
     @classmethod
     def profile_max_age_min(cls) -> int:

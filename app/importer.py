@@ -493,6 +493,17 @@ def _import_url(url: str, source_id=None, *, label: str = "", use_etag: bool = T
         result["status"] = STATUS_BAD_URL
         return _fail(result, "пустой URL")
 
+    # Пустой источник не должен застревать на 304: если профилей нет, кеш ETag
+    # не даёт восстановить их после очистки БД. В этом случае качаем заново.
+    if use_etag and source_id is not None:
+        try:
+            rows = db_q("SELECT COUNT(*) c FROM proxies WHERE source_id=?", (source_id,))
+            if not rows or rows[0]["c"] == 0:
+                use_etag = False
+                add_log("INFO", f"Source #{source_id}: нет профилей в БД, импорт без ETag")
+        except Exception:
+            pass
+
     try:
         raw, meta = fetch_url(url, use_etag=use_etag, allow_curl=allow_curl, timeout=timeout)
     except NotModified:
@@ -592,11 +603,26 @@ def save_source_status(result: dict) -> None:
         return
     reached = result.get("status") in REACHED_STATUSES
     try:
+        counters = (
+            int(result.get("added") or 0),
+            int(result.get("duplicates") or 0),
+            int(result.get("parsed") or 0),
+        )
         if reached:
-            db_q(
-                "UPDATE sources SET last_import=?, last_status=?, last_error=? WHERE id=?",
-                (now_utc(), result.get("status"), result.get("reason") or "", result["id"]),
-            )
+            if result.get("status") in (STATUS_OK, STATUS_EMPTY):
+                db_q(
+                    "UPDATE sources SET last_import=?, last_status=?, last_error=?, "
+                    "last_added=?, last_duplicates=?, last_parsed=? WHERE id=?",
+                    (now_utc(), result.get("status"), result.get("reason") or "",
+                     *counters, result["id"]),
+                )
+            else:
+                # «Без изменений» не перетирает счётчики прошлого импорта:
+                # иначе карточка теряла бы объяснение, откуда у неё профили.
+                db_q(
+                    "UPDATE sources SET last_import=?, last_status=?, last_error=? WHERE id=?",
+                    (now_utc(), result.get("status"), result.get("reason") or "", result["id"]),
+                )
         else:
             db_q(
                 "UPDATE sources SET last_status=?, last_error=? WHERE id=?",

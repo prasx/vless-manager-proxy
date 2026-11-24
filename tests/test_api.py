@@ -143,6 +143,13 @@ class TestApiSmoke(ApiTestCase):
         self.assertFalse(data["success"])
         self.assertEqual(data["queued"], 0)
 
+    def test_diagnose_reports_counts(self):
+        data = self.client.get("/api/import/diagnose").get_json()
+        self.assertEqual(data["total"], 0)
+        self.assertEqual(data["checked"], 0)
+        self.assertEqual(data["skipped"], 0)
+        self.assertEqual(data["reports"], [])
+
     def test_countries_reports_no_country(self):
         """Фильтр стран не покрывает профили без страны, и API это говорит."""
         from app.utils import now_utc

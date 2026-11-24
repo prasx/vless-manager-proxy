@@ -142,7 +142,6 @@ code {
 /* Закрытый details не должен оставлять в потоке невидимый текст: иначе он
    считается переполнением блока и мешает и раскладке, и проверкам. */
 details:not([open]) > *:not(summary) { display: none; }
-details[open] > summary { margin-bottom: 8px; }
 .dim { color: var(--text-muted); }
 .hidden { display: none !important; }
 [hidden] { display: none !important; }
@@ -392,7 +391,8 @@ input.input-invalid, select.input-invalid, textarea.input-invalid { border-color
 .input-row .input { flex: 1; }
 
 /* ─── Чекбоксы ─── */
-.chk-custom {
+.chk-custom,
+input[type="checkbox"]:not(.chk-custom) {
   appearance: none;
   -webkit-appearance: none;
   width: 16px;
@@ -409,9 +409,12 @@ input.input-invalid, select.input-invalid, textarea.input-invalid { border-color
   vertical-align: middle;
   transition: border-color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
 }
-.chk-custom:hover { border-color: var(--border-hover); }
-.chk-custom:checked { background: var(--text-primary); border-color: var(--text-primary); }
-.chk-custom:checked::after {
+.chk-custom:hover,
+input[type="checkbox"]:not(.chk-custom):hover { border-color: var(--border-hover); }
+.chk-custom:checked,
+input[type="checkbox"]:not(.chk-custom):checked { background: var(--text-primary); border-color: var(--text-primary); }
+.chk-custom:checked::after,
+input[type="checkbox"]:not(.chk-custom):checked::after {
   content: '✓';
   color: var(--bg);
   font-size: 11px;
@@ -429,8 +432,8 @@ input.input-invalid, select.input-invalid, textarea.input-invalid { border-color
   cursor: pointer;
   user-select: none;
 }
-.chk-safe input { accent-color: var(--text-primary); width: 16px; height: 16px; }
-.chk-inline { width: auto; height: auto; margin: 0; cursor: pointer; }
+.chk-safe input { width: 16px; height: 16px; }
+.chk-inline { width: 16px; height: 16px; margin: 0; cursor: pointer; }
 .chk-group { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 
 /* ─── Таблицы ─── */
@@ -903,6 +906,8 @@ dialog.modal::backdrop { background: var(--overlay); }
 }
 .hidden-input { display: none; }
 .geosite-cheatsheet { font-size: 0.8rem; line-height: 1.7; margin-bottom: 12px; }
+.geosite-cheatsheet[open] > summary,
+.api-ref[open] > summary { margin-bottom: 8px; }
 .geosite-cheatsheet-summary { cursor: pointer; font-weight: 600; color: var(--text-primary); }
 .geosite-cheatsheet-note { margin: 8px 0 4px; color: var(--text-muted); }
 .geosite-cheatsheet-note a { color: var(--green); }
@@ -970,8 +975,8 @@ dialog.modal::backdrop { background: var(--overlay); }
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 4px;
-  max-height: 360px;
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 8px;
@@ -1377,9 +1382,14 @@ dialog.modal::backdrop { background: var(--overlay); }
 .src-table td { padding: 8px; overflow: hidden; }
 .src-col-id { width: 48px; }
 .src-col-out { width: 112px; }
-.src-col-imp { width: 136px; }
-.src-col-val { width: 156px; }
-.src-col-act { width: 224px; }
+.src-col-imp { width: 128px; }
+.src-col-val { width: 144px; }
+.src-col-act { width: 212px; }
+/* На узком десктопе (1100–1339) три действия не помещаются в широкую
+   колонку: поджимаем кнопки, чтобы «удалить» не выходило за таблицу. */
+@media (min-width: 1100px) and (max-width: 1339px) {
+  .src-actions .btn { padding: 0 4px; font-size: 0.72rem; }
+}
 .src-cards { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
 @media (min-width: 1100px) { .src-cards { display: none; } }
 @media (max-width: 1099px) {
@@ -1448,9 +1458,11 @@ dialog.modal::backdrop { background: var(--overlay); }
 .v-bad, .v-broken { color: var(--red); }
 .v-stale { color: var(--orange); }
 .v-inactive { color: var(--text-muted); }
+.v-duplicate { color: var(--text-muted); }
+.v-empty { color: var(--orange); }
 .src-reco { font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; }
-.src-actions { white-space: nowrap; text-align: right; }
-.src-actions .btn { margin-left: 4px; padding: 0 8px; font-size: 0.75rem; }
+.src-actions { display: flex; gap: 4px; align-items: center; justify-content: flex-end; white-space: nowrap; text-align: right; }
+.src-actions .btn { padding: 0 8px; font-size: 0.75rem; }
 .src-actions .btn:first-child { margin-left: 0; }
 .src-verdict { white-space: normal; }
 .src-measured { display: block; margin-top: 4px; font-size: 0.75rem; color: var(--text-muted); }

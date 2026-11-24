@@ -44,6 +44,8 @@ def update_subscribe_cache() -> None:
         if blocked:
             lines.append(f"# Blocked: {blocked}")
         lines.append(f"# Probe: {probe_url}")
+        if sel.strict:
+            lines.append("# Strict: only measured profiles")
         if sel.fallback:
             reason = {
                 "slow": "все замеренные профили ниже порога скорости",

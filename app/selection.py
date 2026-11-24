@@ -90,10 +90,11 @@ class Selection:
 
     rows: list[dict] = field(default_factory=list)
     counts: dict = field(default_factory=dict)
-    fallback: str = ""  # "" | "unmeasured" | "stale"
+    fallback: str = ""  # "" | "unmeasured" | "stale" | "slow"
     fresh_minutes: int = 0
     limit: int = 0
     excluded: list[dict] = field(default_factory=list)
+    strict: bool = False  # включён режим «только замеренные»
 
     @property
     def tags(self) -> list[str]:
@@ -117,6 +118,8 @@ class Selection:
             parts.append(f"страна исключена {c['blocked']}")
         if c.get("invalid"):
             parts.append(f"битых ссылок {c['invalid']}")
+        if self.strict:
+            parts.append("только замеренные")
         return ", ".join(parts)
 
     def as_dict(self) -> dict:
@@ -125,6 +128,7 @@ class Selection:
             "limit": self.limit,
             "fresh_minutes": self.fresh_minutes,
             "fallback": self.fallback,
+            "strict": self.strict,
             "counts": dict(self.counts),
             "selected": [
                 {
@@ -161,6 +165,7 @@ def config_rows(limit: int = 0) -> Selection:
     """
     fresh_min = Settings.profile_freshness_minutes()
     min_kbps = Settings.min_speed_kbps()
+    require_speed = Settings.require_speed()
     blocked_raw = Settings.blocked_countries() or ""
     blocked = {c.strip().upper() for c in blocked_raw.split(",") if c.strip()}
     now = now_utc()
@@ -246,11 +251,16 @@ def config_rows(limit: int = 0) -> Selection:
             stale_rows.append(item)
             continue
 
-        if min_kbps > 0 and speed <= 0:
-            # Порог скорости нельзя подтвердить у незамеренного профиля:
-            # раньше он всё равно попадал в конфиг «на всякий случай».
+        if speed <= 0 and (require_speed or min_kbps > 0):
+            # Порог скорости нельзя подтвердить у незамеренного профиля, а в
+            # строгом режиме он не допускается вообще.
             counts["unmeasured"] += 1
-            exclude(dict(r), "unmeasured", "скорость не замерена, а задан порог min_speed", age)
+            detail = (
+                "скорость не замерена, включён строгий отбор «только замеренные»"
+                if require_speed
+                else "скорость не замерена, а задан порог min_speed"
+            )
+            exclude(dict(r), "unmeasured", detail, age)
             unmeasured_rows.append(item)
             continue
         if min_kbps > 0 and speed < min_kbps:
@@ -274,16 +284,22 @@ def config_rows(limit: int = 0) -> Selection:
             # режиме они предпочтительнее неизвестной скорости.
             candidates = slow_rows
             fallback = "slow"
-        elif unmeasured_rows:
+        elif unmeasured_rows and not require_speed:
             # Есть живые и свежие, но нет ни одного замера (например, сломался
             # speed-стенд). Пустой конфиг хуже: берём незамеренные, но явно.
             candidates = unmeasured_rows
             fallback = "unmeasured"
         elif stale_rows:
             # Всё, что было рабочим, устарело (проверки не идут?). Берём самое
-            # свежее из устаревшего, чтобы прокси не умер окончательно.
-            candidates = stale_rows
-            fallback = "stale"
+            # свежее из устаревшего, чтобы прокси не умер окончательно. В строгом
+            # режиме устаревшие тоже обязаны иметь замер.
+            measured_stale = (
+                [r for r in stale_rows if r["speed_kbps"] > 0]
+                if require_speed else stale_rows
+            )
+            if measured_stale:
+                candidates = measured_stale
+                fallback = "stale"
 
     priority = _source_priority()
 
@@ -309,6 +325,7 @@ def config_rows(limit: int = 0) -> Selection:
         fresh_minutes=fresh_min,
         limit=limit,
         excluded=excluded,
+        strict=require_speed,
     )
 
 

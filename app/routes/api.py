@@ -19,7 +19,6 @@ from .. import importer
 from ..importer import import_url, import_source, import_sources, save_source_status
 from ..xray_configurator import xray_configurator
 from ..subscribe import update_subscribe_cache
-from urllib.parse import urlparse
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -360,6 +359,7 @@ def api_sources_list():
         """SELECT
              s.id, s.name, s.url, s.type, s.last_import, s.created_at,
              s.last_status, s.last_error,
+             s.last_added, s.last_duplicates, s.last_parsed,
              (SELECT COUNT(*) FROM proxies p WHERE p.source_id = s.id) AS count,
              (SELECT COUNT(*) FROM proxies p WHERE p.source_id = s.id AND p.status='working') AS working
            FROM sources s"""
@@ -377,6 +377,9 @@ def api_sources_list():
                 "recommendation": q.get("recommendation", ""),
                 "measured": q.get("measured", 0),
                 "fresh": q.get("fresh", 0),
+                "last_added": q.get("last_added", 0),
+                "last_duplicates": q.get("last_duplicates", 0),
+                "last_parsed": q.get("last_parsed", 0),
                 "avg_latency": q.get("avg_latency", 0),
                 "avg_speed_kbps": q.get("avg_speed_kbps", 0),
             }
@@ -545,17 +548,12 @@ def api_import_diagnose():
     if url:
         return jsonify(reports=[importer.diagnose_url(url, timeout=timeout)])
 
-    rows = db_q("SELECT DISTINCT url FROM sources WHERE type != 'txt' ORDER BY id LIMIT 20")
-    urls: list[str] = []
-    seen_hosts = set()
-    for r in rows:
-        host = urlparse(r["url"] or "").hostname or r["url"]
-        if host in seen_hosts:
-            continue
-        seen_hosts.add(host)
-        urls.append(r["url"])
-        if len(urls) >= 8:
-            break
+    rows = db_q("SELECT url FROM sources WHERE type != 'txt' AND url != '' ORDER BY id")
+    all_urls = [r["url"] for r in rows]
+    # Проверяем все URL-источники, но не даём одному нажатию занять минуты:
+    # хвост честно считается непроверенным и виден в UI.
+    limit = 25
+    urls = all_urls[:limit]
 
     reports = []
     if urls:
@@ -569,7 +567,12 @@ def api_import_diagnose():
                 except Exception as e:
                     reports.append({"url": "?", "ok": False, "steps": [],
                                     "hint": f"{type(e).__name__}: {e}"})
-    return jsonify(reports=reports)
+    return jsonify(
+        reports=reports,
+        total=len(all_urls),
+        checked=len(urls),
+        skipped=max(0, len(all_urls) - len(urls)),
+    )
 
 
 # ─── Настройки ───
@@ -578,6 +581,7 @@ _REBUILD_KEYS = {
     "blocked_countries", "geo_enabled", "max_active_proxies", "probe_url",
     "observatory_probe_interval", "balancer_strategy", "handshake_timeout", "conn_idle",
     "min_speed_mbps", "profile_max_age_min",
+    "require_speed",
     "sniffing_enabled", "sniffing_dest_override", "sniffing_route_only",
     "geosite_rules", "proxy_listen",
 }
@@ -806,6 +810,7 @@ def api_config_preview():
         "profile_fresh_minutes": sel.fresh_minutes,
         "blocked_countries": Settings.blocked_countries(),
         "speed_test_enabled": Settings.get("speed_test_enabled", "true") == "true",
+        "require_speed": Settings.require_speed(),
     }
     return jsonify(data)
 

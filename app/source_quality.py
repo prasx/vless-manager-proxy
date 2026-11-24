@@ -45,6 +45,8 @@ VERDICT_LABELS = {
     "stale": "устарел",
     "broken": "импорт не проходит",
     "inactive": "нет профилей",
+    "duplicate": "все дубли",
+    "empty": "нет ссылок",
 }
 
 VERDICT_RECOMMENDATIONS = {
@@ -54,6 +56,8 @@ VERDICT_RECOMMENDATIONS = {
     "stale": "запустить перетест: профили устарели",
     "broken": "проверить связь и URL источника",
     "inactive": "импортировать или удалить источник",
+    "duplicate": "новых профилей нет: все ссылки уже пришли из других источников",
+    "empty": "источник не отдал ни одной vless-ссылки",
 }
 
 
@@ -90,8 +94,19 @@ def _verdict(
     fresh: int,
     score: int,
     last_status: str | None,
+    last_added: int = 0,
+    last_duplicates: int = 0,
+    last_parsed: int = 0,
 ) -> str:
     if total <= 0:
+        if last_status in _FAILED:
+            return "broken"
+        if last_status in (None, ""):
+            return "inactive"
+        if last_parsed > 0 and last_duplicates > 0 and last_added == 0:
+            return "duplicate"
+        if last_status == "empty":
+            return "empty"
         return "inactive"
     if working <= 0:
         # Импорт проходит, а живых нет — так же плохо, как сломанный импорт,
@@ -139,7 +154,10 @@ def collect(force: bool = False) -> dict[int, dict]:
             (cutoff,),
         )
     }
-    sources = [dict(r) for r in db_q("SELECT id, name, url, type, last_import, last_status, last_error FROM sources")]
+    sources = [dict(r) for r in db_q(
+        "SELECT id, name, url, type, last_import, last_status, last_error, "
+        "last_added, last_duplicates, last_parsed FROM sources"
+    )]
 
     data: dict[int, dict] = {}
     for s in sources:
@@ -150,7 +168,12 @@ def collect(force: bool = False) -> dict[int, dict]:
         measured = int(a.get("measured") or 0)
         fresh = int(a.get("fresh") or 0)
         score = _score(total, working, measured, fresh, s.get("last_status"))
-        verdict = _verdict(total, working, fresh, score, s.get("last_status"))
+        verdict = _verdict(
+            total, working, fresh, score, s.get("last_status"),
+            int(s.get("last_added") or 0),
+            int(s.get("last_duplicates") or 0),
+            int(s.get("last_parsed") or 0),
+        )
         data[sid] = {
             "id": sid,
             "name": s.get("name") or f"#{sid}",
@@ -167,6 +190,9 @@ def collect(force: bool = False) -> dict[int, dict]:
             "avg_speed_kbps": int(a.get("avg_speed") or 0),
             "last_status": s.get("last_status"),
             "last_error": s.get("last_error") or "",
+            "last_added": int(s.get("last_added") or 0),
+            "last_duplicates": int(s.get("last_duplicates") or 0),
+            "last_parsed": int(s.get("last_parsed") or 0),
             "import_age_min": _import_age_min(s.get("last_import")),
         }
 
@@ -200,7 +226,7 @@ def summary() -> dict:
     return {
         "sources": len(items),
         "healthy": sum(1 for d in items if d["verdict"] == "healthy"),
-        "attention": sum(1 for d in items if d["verdict"] in ("weak", "bad", "stale", "broken")),
+        "attention": sum(1 for d in items if d["verdict"] in ("weak", "bad", "stale", "broken", "duplicate", "empty")),
         "inactive": sum(1 for d in items if d["verdict"] == "inactive"),
         "total": sum(d["total"] for d in items),
         "working": sum(d["working"] for d in items),

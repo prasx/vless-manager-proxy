@@ -166,6 +166,25 @@ class TestSelection(TempDBTestCase):
         self.assertEqual([r["id"] for r in sel.rows], [slow])
         self.assertNotIn(unmeasured, [r["id"] for r in sel.rows])
 
+    def test_require_speed_strict_excludes_unmeasured(self):
+        """Строгий режим требует замер даже при min_speed = 0."""
+        Settings.set("require_speed", "true")
+        measured = self._insert("measured.test", speed=5_000)
+        unmeasured = self._insert("no-speed.test", speed=0)
+        sel = config_rows()
+        self.assertTrue(sel.strict)
+        self.assertEqual([r["id"] for r in sel.rows], [measured])
+        self.assertNotIn(unmeasured, [r["id"] for r in sel.rows])
+        self.assertEqual(sel.counts["unmeasured"], 1)
+
+    def test_require_speed_does_not_fall_back_to_unmeasured(self):
+        Settings.set("require_speed", "true")
+        self._insert("no-speed.test", speed=0)
+        sel = config_rows()
+        self.assertEqual(sel.fallback, "")
+        self.assertEqual(sel.rows, [])
+        self.assertEqual(sel.counts["selected"], 0)
+
     def test_invalid_link_never_selected(self):
         bad = "vless://11111111-1111-1111-1111-111111111111@bad.test:443?security=reality&pbk=short&type=tcp#US"
         bad_id = self._insert("bad.test", link=bad, security="reality")
@@ -293,6 +312,22 @@ class TestSubscribeUsesSelection(TempDBTestCase):
         self.assertIn("Warning: fallback", text)
         self.assertIn("# Configs: 1 / 1 working / 2 total", text)
 
+    def test_subscribe_strict_drops_unmeasured(self):
+        Settings.set("require_speed", "true")
+        measured = self._insert("measured.test", speed=5_000)
+        unmeasured = self._insert("no-speed.test", speed=0)
+
+        tmp = Path(self._tmpdir.name) / "subscribe.txt"
+        with mock.patch.object(app_subscribe, "SUBSCRIBE_FILE", tmp):
+            app_subscribe.update_subscribe_cache()
+
+        text = tmp.read_text(encoding="utf-8")
+        measured_link = db_q("SELECT link FROM proxies WHERE id=?", (measured,))[0]["link"]
+        unmeasured_link = db_q("SELECT link FROM proxies WHERE id=?", (unmeasured,))[0]["link"]
+        self.assertIn(measured_link, text)
+        self.assertNotIn(unmeasured_link, text)
+        self.assertIn("# Strict: only measured profiles", text)
+
 
 class TestSourceQuality(TempDBTestCase):
     def test_healthy_source_beats_bad_source(self):
@@ -318,10 +353,37 @@ class TestSourceQuality(TempDBTestCase):
         from app.source_quality import collect, invalidate
 
         sid = self._source("empty")
+        db_q("UPDATE sources SET last_status=NULL, last_import=NULL WHERE id=?", (sid,))
         invalidate()
         stats = collect(force=True)
         self.assertEqual(stats[sid]["verdict"], "inactive")
         self.assertEqual(stats[sid]["score"], 0)
+
+    def test_ok_import_without_links_is_empty(self):
+        from app.source_quality import collect, invalidate
+
+        sid = self._source("no-links")
+        db_q(
+            "UPDATE sources SET last_status='empty', last_added=0, last_duplicates=0, "
+            "last_parsed=0 WHERE id=?",
+            (sid,),
+        )
+        invalidate()
+        stats = collect(force=True)
+        self.assertEqual(stats[sid]["verdict"], "empty")
+
+    def test_import_counters_are_saved(self):
+        from app.importer import save_source_status
+
+        sid = self._source("counters")
+        save_source_status({
+            "id": sid, "status": "ok", "reason": "",
+            "added": 0, "duplicates": 361, "parsed": 361,
+        })
+        row = db_q("SELECT last_added, last_duplicates, last_parsed FROM sources WHERE id=?", (sid,))[0]
+        self.assertEqual(row["last_added"], 0)
+        self.assertEqual(row["last_duplicates"], 361)
+        self.assertEqual(row["last_parsed"], 361)
 
     def test_broken_import_verdict(self):
         from app.source_quality import collect, invalidate
@@ -333,6 +395,22 @@ class TestSourceQuality(TempDBTestCase):
         stats = collect(force=True)
         self.assertEqual(stats[sid]["verdict"], "broken")
         self.assertIn("связь", stats[sid]["recommendation"])
+
+    def test_duplicate_only_source_verdict(self):
+        """0 профилей + все ссылки уже были: это дубли, а не сломанный импорт."""
+        from app.source_quality import collect, invalidate
+
+        sid = self._source("dupes")
+        db_q(
+            "UPDATE sources SET last_status='ok', last_added=0, last_duplicates=361, "
+            "last_parsed=361 WHERE id=?",
+            (sid,),
+        )
+        invalidate()
+        stats = collect(force=True)
+        self.assertEqual(stats[sid]["verdict"], "duplicate")
+        self.assertEqual(stats[sid]["verdict_label"], "все дубли")
+        self.assertIn("других источников", stats[sid]["recommendation"])
 
 
 if __name__ == "__main__":

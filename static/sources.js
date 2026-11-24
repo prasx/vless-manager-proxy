@@ -34,6 +34,8 @@ const VERDICT_CLASS = {
   stale: 'stale',
   broken: 'broken',
   inactive: 'inactive',
+  duplicate: 'duplicate',
+  empty: 'empty',
 };
 
 const DIAG_STEP_LABELS = { url: 'URL', dns: 'DNS', tcp: 'TCP', tls: 'TLS', http: 'HTTP' };
@@ -71,7 +73,7 @@ function renderSummary(sources) {
   const total = sources.reduce((a, s) => a + (s.count || 0), 0);
   const working = sources.reduce((a, s) => a + (s.working || 0), 0);
   const measured = sources.reduce((a, s) => a + (s.measured || 0), 0);
-  const attention = sources.filter(s => ['weak', 'bad', 'stale', 'broken'].includes(s.verdict)).length;
+  const attention = sources.filter(s => ['weak', 'bad', 'stale', 'broken', 'duplicate', 'empty'].includes(s.verdict)).length;
   const parts = [
     `Работают <b>${working}</b> из <b>${total}</b> профилей, замерено <b>${measured}</b>.`,
   ];
@@ -118,6 +120,9 @@ function renderList(sources) {
     const vcls = VERDICT_CLASS[verdict] || 'inactive';
     const imported = s.last_import ? fmtUtcTime(s.last_import) : 'не было';
     const reco = s.recommendation || '';
+    const importCounts = s.last_parsed > 0
+      ? `новых ${s.last_added || 0}, дублей ${s.last_duplicates || 0}`
+      : '';
     return `<tr>
       <td class="id">${s.priority || '—'}</td>
       <td>
@@ -134,6 +139,7 @@ function renderList(sources) {
       <td>
         <span class="badge st-${statusClass(s.last_status)}">${esc(statusText(s.last_status))}</span>
         <span class="src-import-time">${esc(imported)}</span>
+        ${importCounts ? `<span class="src-import-time">${esc(importCounts)}</span>` : ''}
       </td>
       <td class="src-verdict">
         <span class="src-score">${s.score != null ? s.score : 0}</span>
@@ -150,6 +156,9 @@ function renderList(sources) {
     const imported = s.last_import ? fmtUtcTime(s.last_import) : 'не было';
     const measured = s.measured || 0;
     const reco = s.recommendation || '';
+    const importCounts = s.last_parsed > 0
+      ? `<span>новых <b>${s.last_added || 0}</b>, дублей <b>${s.last_duplicates || 0}</b></span>`
+      : '';
     return `<div class="src-card">
       <div class="src-card-top">
         <span class="src-type">${isTxt ? 'TXT' : 'URL'}</span>
@@ -163,6 +172,7 @@ function renderList(sources) {
         <span>рабочих <b>${s.working || 0}</b> из <b>${s.count || 0}</b></span>
         <span>замерено <b>${measured}</b></span>
         <span>импорт: ${esc(statusText(s.last_status))}, ${esc(imported)}</span>
+        ${importCounts}
       </div>
       ${reco && verdict !== 'healthy' ? `<div class="src-reco">${esc(reco)}</div>` : ''}
       <div class="src-card-actions">${sourceActionsHTML(s)}</div>
@@ -216,6 +226,9 @@ function renderConfigPreview(d) {
     }
     stats.push(`<span class="cp-stat text-bad">отсеяно: ${parts.join(', ')}</span>`);
   }
+  if (d.strict) {
+    stats.push('<span class="cp-stat text-warn">только замеренные</span>');
+  }
 
   let html = `<div class="cp-head">
       <h2>Состав конфига и подписки</h2>
@@ -232,7 +245,11 @@ function renderConfigPreview(d) {
   }
 
   if (!selected.length) {
-    html += '<div class="empty">// нечего отправить в конфиг: нет рабочих свежих профилей</div>';
+    if (d.strict) {
+      html += '<div class="cp-alert">Включён строгий отбор «только замеренные», но замеренных свежих профилей нет. Запустите «Актуализировать» или выключите строгий отбор в настройках.</div>';
+    } else {
+      html += '<div class="empty">// нечего отправить в конфиг: нет рабочих свежих профилей</div>';
+    }
     el.innerHTML = html;
     return;
   }
@@ -405,9 +422,12 @@ function renderImportReport(title, results, summary) {
 
 // ─── Диагностика связи ───
 
-function renderDiagnose(reports) {
+function renderDiagnose(reports, meta = {}) {
+  const total = meta.total != null ? meta.total : reports.length;
+  const checked = meta.checked != null ? meta.checked : reports.length;
+  const skipped = meta.skipped || 0;
   if (!reports.length) {
-    showReport(reportHead('Проверка связи', 'URL-источников нет'));
+    showReport(reportHead('Проверка источников', 'URL-источников нет'));
     return;
   }
   const items = reports.map(rep => {
@@ -421,7 +441,9 @@ function renderDiagnose(reports) {
       <span class="ir-detail">${esc(rep.hint || '')}</span>
     </li>`;
   }).join('');
-  showReport(reportHead('Проверка связи', `${reports.length} хостов, DNS → TCP → TLS → HTTP`)
+  const info = `${checked} из ${total} URL-источников; профили не тестируются: для них «Актуализировать»`
+    + (skipped ? `; ${skipped} не проверялись, нажмите «связь» у источника` : '');
+  showReport(reportHead('Проверка источников', info)
     + `<ul class="ir-list">${items}</ul>`);
 }
 
@@ -430,7 +452,11 @@ async function checkConnectivity() {
   await busyButton(btn, 'Проверяем…', async () => {
     const res = await api('GET', '/api/import/diagnose');
     if (res.error) return toast(res.error, 'error');
-    renderDiagnose(res.reports || []);
+    renderDiagnose(res.reports || [], {
+      total: res.total,
+      checked: res.checked,
+      skipped: res.skipped,
+    });
   });
 }
 
