@@ -528,22 +528,27 @@ function renderDesktop(proxies) {
     const tr = document.createElement('tr');
     const badgeCls = statusBadge(p.status, p.failed_since);
     const speedHtml = p.speed_kbps ? formatSpeed(p.speed_kbps) : '<span class="dim">нет</span>';
+    const peakHtml = p.speed_max_kbps > (p.speed_kbps || 0)
+      ? `<span class="speed-max">макс ${formatSpeed(p.speed_max_kbps)}</span>` : '';
+    const speedTitle = p.speed_kbps
+      ? `средняя ${formatSpeed(p.speed_kbps)}` + (peakHtml ? `, максимальная ${formatSpeed(p.speed_max_kbps)}` : '')
+      : 'скорость не замерена';
     const vlessClass = p.latency_vless && p.latency_vless < 300 ? 'lat-good' : p.latency_vless >= 300 ? 'lat-bad' : 'dim';
     const vlessHtml = p.latency_vless ? `<span class="${vlessClass}">${p.latency_vless}мс</span>` : '<span class="dim">нет</span>';
     tr.innerHTML = `
       <td class="chk"><input type="checkbox" class="chk-custom row-chk" data-id="${p.id}" aria-label="Выбрать прокси ${p.id}" ${selected.has(p.id)?'checked':''} onchange="toggleSelect(${p.id})"></td>
-      <td class="id">${p.id}</td>
+      <td class="id num">${p.id}</td>
       <td class="host-cell" title="${esc(p.host)}">${esc(p.host)}</td>
-      <td>${esc(p.port)}</td>
+      <td class="num">${esc(p.port)}</td>
       <td>${esc(p.country || 'нет')}${securityBadge(p.security)}</td>
       <td class="status-cell"><span class="badge ${badgeCls}" title="${testTooltip(p)}">${statusText(p.status)}</span>${errorHint(p)}</td>
-      <td class="speed-cell">${speedHtml}</td>
-      <td class="lat-cell">${vlessHtml}</td>
-      <td class="actions-cell">
+      <td class="speed-cell num" title="${esc(speedTitle)}">${speedHtml}${peakHtml}</td>
+      <td class="lat-cell num">${vlessHtml}</td>
+      <td class="actions-cell"><div class="row-actions">
         <button class="btn btn-sm btn-ghost" onclick="copyLink(${p.id})">копия</button>
         <button class="btn btn-sm btn-ghost" onclick="testOne(${p.id})">тест</button>
         <button class="btn btn-sm btn-danger-ghost" onclick="delOne(${p.id})">удалить</button>
-      </td>
+      </div></td>
     `;
     tb.appendChild(tr);
   }
@@ -559,6 +564,8 @@ function renderMobile(proxies) {
   for (const p of proxies) {
     const badgeCls = statusBadge(p.status, p.failed_since);
     const speedHtml = p.speed_kbps ? formatSpeed(p.speed_kbps) : '<span class="dim">нет</span>';
+    const peakText = p.speed_max_kbps > (p.speed_kbps || 0)
+      ? `, макс ${formatSpeed(p.speed_max_kbps)}` : '';
     const vlessClass = p.latency_vless && p.latency_vless < 300 ? 'lat-good' : p.latency_vless >= 300 ? 'lat-bad' : 'dim';
     const card = document.createElement('div');
     card.className = 'mobile-card';
@@ -577,7 +584,7 @@ function renderMobile(proxies) {
         <span class="badge ${badgeCls}" title="${testTooltip(p)}">${statusText(p.status)}</span>
         ${errorHint(p)}
         <span class="${vlessClass}">VLESS: ${p.latency_vless ? p.latency_vless + 'мс' : 'нет'}</span>
-        <span>Скорость: ${speedHtml}</span>
+        <span>Скорость: ${speedHtml}${peakText}</span>
       </div>
     `;
     list.appendChild(card);

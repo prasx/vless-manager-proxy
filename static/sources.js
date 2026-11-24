@@ -61,6 +61,16 @@ function shortError(text, limit = 60) {
   return s.length > limit ? s.slice(0, limit - 1) + '…' : s;
 }
 
+// В строке источника год не нужен: он есть в title, а в ячейку должно
+// помещаться время и счётчики импорта без переносов на три строки.
+function fmtImportTime(t) {
+  const d = utcDate(t);
+  if (!d) return t ? String(t) : '';
+  return d.toLocaleString(undefined, {
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
+
 // ─── Сводка ───
 
 function renderSummary(sources) {
@@ -118,10 +128,11 @@ function renderList(sources) {
     const measured = s.measured || 0;
     const verdict = s.verdict || 'inactive';
     const vcls = VERDICT_CLASS[verdict] || 'inactive';
-    const imported = s.last_import ? fmtUtcTime(s.last_import) : 'не было';
+    const importedFull = s.last_import ? fmtUtcTime(s.last_import) : 'не было';
+    const imported = s.last_import ? fmtImportTime(s.last_import) : 'не было';
     const reco = s.recommendation || '';
     const importCounts = s.last_parsed > 0
-      ? `новых ${s.last_added || 0}, дублей ${s.last_duplicates || 0}`
+      ? `новых ${s.last_added || 0} · дублей ${s.last_duplicates || 0}`
       : '';
     return `<tr>
       <td class="id">${s.priority || '—'}</td>
@@ -138,8 +149,8 @@ function renderList(sources) {
       </td>
       <td>
         <span class="badge st-${statusClass(s.last_status)}">${esc(statusText(s.last_status))}</span>
-        <span class="src-import-time">${esc(imported)}</span>
-        ${importCounts ? `<span class="src-import-time">${esc(importCounts)}</span>` : ''}
+        <span class="src-import-time" title="${esc(importedFull)}">${esc(imported)}</span>
+        ${importCounts ? `<span class="src-import-counts">${esc(importCounts)}</span>` : ''}
       </td>
       <td class="src-verdict">
         <span class="src-score">${s.score != null ? s.score : 0}</span>
@@ -153,7 +164,8 @@ function renderList(sources) {
     const isTxt = (s.type || 'url') === 'txt';
     const verdict = s.verdict || 'inactive';
     const vcls = VERDICT_CLASS[verdict] || 'inactive';
-    const imported = s.last_import ? fmtUtcTime(s.last_import) : 'не было';
+    const importedFull = s.last_import ? fmtUtcTime(s.last_import) : 'не было';
+    const imported = s.last_import ? fmtImportTime(s.last_import) : 'не было';
     const measured = s.measured || 0;
     const reco = s.recommendation || '';
     const importCounts = s.last_parsed > 0
@@ -171,7 +183,7 @@ function renderList(sources) {
       <div class="src-card-meta">
         <span>рабочих <b>${s.working || 0}</b> из <b>${s.count || 0}</b></span>
         <span>замерено <b>${measured}</b></span>
-        <span>импорт: ${esc(statusText(s.last_status))}, ${esc(imported)}</span>
+        <span title="${esc(importedFull)}">импорт: ${esc(statusText(s.last_status))}, ${esc(imported)}</span>
         ${importCounts}
       </div>
       ${reco && verdict !== 'healthy' ? `<div class="src-reco">${esc(reco)}</div>` : ''}
@@ -180,13 +192,13 @@ function renderList(sources) {
   }).join('');
 
   list.innerHTML = `
-    <table class="src-table">
+    <table class="src-table data-table">
       <colgroup>
         <col class="src-col-id"><col><col class="src-col-out"><col class="src-col-imp"><col class="src-col-val"><col class="src-col-act">
       </colgroup>
       <thead>
         <tr>
-          <th>#</th><th>Источник</th><th>Выход</th><th>Импорт</th><th>Оценка</th><th></th>
+          <th class="num">#</th><th>Источник</th><th>Выход</th><th>Импорт</th><th>Оценка</th><th class="actions-head"><span class="sr-only">Действия</span></th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>

@@ -84,18 +84,29 @@
 </div>
 
 <section class="table-wrap" aria-label="Список прокси">
-  <table class="desktop-table">
+  <table class="desktop-table data-table">
+    <colgroup>
+      <col class="dash-col-chk">
+      <col class="dash-col-id">
+      <col>
+      <col class="dash-col-port">
+      <col class="dash-col-country">
+      <col class="dash-col-status">
+      <col class="dash-col-speed">
+      <col class="dash-col-lat">
+      <col class="dash-col-actions">
+    </colgroup>
     <thead>
       <tr>
         <th class="chk"><input type="checkbox" class="chk-custom" id="selectAll" onchange="toggleSelectAll()" aria-label="Выбрать все"></th>
-        <th>#</th>
+        <th class="num">#</th>
         <th>Хост</th>
-        <th>Порт</th>
+        <th class="num">Порт</th>
         <th>Страна</th>
         <th>Статус</th>
-        <th>Скорость</th>
-        <th>Задержка</th>
-        <th><span class="sr-only">Действия</span></th>
+        <th class="num">Скорость</th>
+        <th class="num">Задержка</th>
+        <th class="actions-head"><span class="sr-only">Действия</span></th>
       </tr>
     </thead>
     <tbody id="tbodyDesktop"></tbody>

@@ -68,6 +68,7 @@ FAIL_BACKOFF_SEC = (900, 3600, 10800, 43200)  # 15 мин, 1 ч, 3 ч, 12 ч
 # Только достаточно крупные файлы и глобально доступные CDN-хосты:
 # российские зеркала (selectel/tele2) недоступны с иностранных exit-нод.
 _SPEED_FALLBACK_URLS = (
+    "https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/jquery-speedtest/10MB.txt",
     "https://speed.cloudflare.com/__down?bytes=10000000",
     "http://cachefly.cachefly.net/100mb.test",
     "https://proof.ovh.net/files/100Mb.dat",
@@ -517,7 +518,11 @@ class ProxyManager:
 
     @staticmethod
     def _measure_url_kbps(http_port, url, window_sec, min_kbps, adaptive_sec):
-        """Скачивает URL через HTTP-прокси ровно window_sec секунд, возвращает kbps.
+        """Скачивает URL через HTTP-прокси ровно window_sec секунд.
+
+        Возвращает (средняя_kbps, максимальная_kbps). Средняя — за всё окно,
+        максимальная — лучшие 0.5 секунды: именно она показывает, сколько
+        канал реально отдаёт на пике, а не размазанное среднее.
 
         Окно замера фиксированное: файл может закончиться раньше — тогда он
         открывается заново, пока не наберётся время замера (или не наступит
@@ -532,7 +537,24 @@ class ProxyManager:
         started = time.time()
         deadline = started + max(1, window_sec)
         total = 0
+        peak = 0
+        sample_t = started
+        sample_total = 0
         req_timeout = min(max(window_sec + 2, 6), 45)
+
+        def take_sample(now: float) -> None:
+            """Фиксирует пик по последнему окну 0.5 с (мелкие окна — шум)."""
+            nonlocal peak, sample_t, sample_total
+            dt = now - sample_t
+            if dt < 0.5:
+                return
+            delta = total - sample_total
+            if delta > 0:
+                inst = int((delta * 8) / (dt * 1000))
+                peak = max(peak, inst)
+            sample_t = now
+            sample_total = total
+
         try:
             req = urllib.request.Request(
                 url,
@@ -554,21 +576,27 @@ class ProxyManager:
                     except Exception:
                         break
                 total += len(buf)
-                if time.time() >= deadline:
+                now = time.time()
+                take_sample(now)
+                if now >= deadline:
                     break
                 # Adaptive early-exit: только при заданном пороге min_speed
                 if min_kbps > 0:
-                    elapsed = time.time() - started
+                    elapsed = now - started
                     if elapsed >= max(1, adaptive_sec) and elapsed > 0:
                         cur = int((total * 8) / (elapsed * 1000))
                         if cur >= min_kbps * 1.3:
-                            return cur
+                            peak = max(peak, cur)
+                            return cur, peak
         except Exception:
             pass
         elapsed = time.time() - started
         if total <= 0 or elapsed <= 0:
-            return 0
-        return int((total * 8) / (elapsed * 1000))
+            return 0, 0
+        # Последние неполные 0.5 с тоже могут быть пиком.
+        take_sample(time.time())
+        avg = int((total * 8) / (elapsed * 1000))
+        return avg, max(peak, avg)
 
     def _speed_urls(self) -> list[str]:
         """Кандидаты URL замера: рабочий из этого прогона — первым.
@@ -593,23 +621,26 @@ class ProxyManager:
         return healthy or candidates
 
     def _measure_kbps(self, http_port, window_sec):
-        """Замер скорости через HTTP-прокси с фиксированным окном window_sec.
+        """Замер скорости через HTTP-прокси.
 
-        URL, с которого в этом прогоне уже качалось, пробуется первым: раньше
-        недоступный основной URL заставлял каждый профиль выжидать полное окно
-        на нём, прежде чем перейти к рабочему CDN.
+        Возвращает (средняя_kbps, максимальная_kbps). URL, с которого в этом
+        прогоне уже качалось, пробуется первым: раньше недоступный основной URL
+        заставлял каждый профиль выжидать полное окно на нём, прежде чем
+        перейти к рабочему CDN.
         """
         window_sec = max(1, int(window_sec))
         min_kbps = Settings.min_speed_kbps()
         adaptive_sec = Settings.speed_test_adaptive_sec()
         for url in self._speed_urls():
-            kbps = self._measure_url_kbps(http_port, url, window_sec, min_kbps, adaptive_sec)
-            if kbps:
+            avg, peak = self._measure_url_kbps(
+                http_port, url, window_sec, min_kbps, adaptive_sec
+            )
+            if avg:
                 self._speed_url = url
                 self._speed_failed.pop(url, None)
-                return kbps
+                return avg, peak
             self._speed_failed[url] = self._speed_failed.get(url, 0) + 1
-        return 0
+        return 0, 0
 
     def _stage_speed(self, speed_rows):
         """Стадия «Замер скорости» — СТРОГО по одному профилю за раз.
@@ -640,15 +671,27 @@ class ProxyManager:
                 continue
             try:
                 self._set_current(f"#{r['id']} {host} — замер {window_sec}с…")
-                kbps = self._measure_kbps(http_port, window_sec)
+                kbps, peak = self._measure_kbps(http_port, window_sec)
                 if kbps:
                     measured += 1
-                    db_q("UPDATE proxies SET speed_kbps=? WHERE id=?", (kbps, r["id"]))
-                    add_log("INFO", f"Speed #{r['id']} ({host}): {kbps}kbps / {window_sec}s window")
+                    db_q(
+                        "UPDATE proxies SET speed_kbps=?, speed_max_kbps=? WHERE id=?",
+                        (kbps, peak, r["id"]),
+                    )
+                    add_log(
+                        "INFO",
+                        f"Speed #{r['id']} ({host}): avg {kbps}kbps, max {peak}kbps / "
+                        f"{window_sec}s window",
+                    )
                 else:
                     add_log("WARN", f"Speed #{r['id']} ({host}): no data in {window_sec}s window")
-                self._stage_advance(kbps > 0,
-                                    current_text=f"#{r['id']} {host}: {kbps}kbps" if kbps else f"#{r['id']} {host}: 0 kbps")
+                self._stage_advance(
+                    kbps > 0,
+                    current_text=(
+                        f"#{r['id']} {host}: {kbps}kbps (макс {peak})"
+                        if kbps else f"#{r['id']} {host}: 0 kbps"
+                    ),
+                )
             finally:
                 self._stop_xray(proc, tmp_path)
         if speed_rows and measured == 0:
@@ -955,7 +998,8 @@ class ProxyManager:
                 timeout=float(Settings.vless_per_proxy_timeout()),
             )
             after = db_q(
-                "SELECT status, latency, latency_vless, speed_kbps, last_error FROM proxies WHERE id=?",
+                "SELECT status, latency, latency_vless, speed_kbps, speed_max_kbps, "
+                "last_error FROM proxies WHERE id=?",
                 (pid,),
             )
             if not after:
@@ -966,6 +1010,7 @@ class ProxyManager:
                 "status": r["status"],
                 "latency": r["latency_vless"] or 0,
                 "speed": r["speed_kbps"] or 0,
+                "speed_max": r["speed_max_kbps"] or 0,
                 "error": r["last_error"] or (None if r["status"] == "working" else "test failed"),
             }
         finally:

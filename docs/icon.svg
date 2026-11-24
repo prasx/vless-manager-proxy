@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="VLESS Manager">
+  <title>VLESS Manager</title>
+  <rect width="512" height="512" rx="112" fill="#0a0a0a"/>
+  <rect x="18" y="18" width="476" height="476" rx="98" fill="none" stroke="#242424" stroke-width="6"/>
+  <path d="M160 356 268 156" fill="none" stroke="#4ade80" stroke-width="44" stroke-linecap="round"/>
+  <path d="M268 356 376 156" fill="none" stroke="#4ade80" stroke-width="44" stroke-linecap="round"/>
+  <path d="M160 396H352" fill="none" stroke="#4ade80" stroke-width="6" stroke-linecap="round" opacity="0.35"/>
+  <circle cx="376" cy="396" r="7" fill="#4ade80"/>
+</svg>

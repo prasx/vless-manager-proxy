@@ -165,7 +165,9 @@ def api_proxies():
         limit_params = [limit, offset]
     order = "speed_kbps DESC" if f == "top_speed" else "status, latency"
     rows = db_q(
-        f"SELECT id, host, port, country, status, latency, latency_vless, speed_kbps, failed_since, security, link, last_test_at, last_error FROM proxies {where} ORDER BY {order}{limit_sql}",
+        f"SELECT id, host, port, country, status, latency, latency_vless, speed_kbps, "
+        f"speed_max_kbps, failed_since, security, link, last_test_at, last_error "
+        f"FROM proxies {where} ORDER BY {order}{limit_sql}",
         params + limit_params,
     )
     if limit is not None:
@@ -270,10 +272,18 @@ def api_test(pid):
         detail = f" — {res['error']}"
     else:
         status = "working"
-        detail = f" ({res.get('latency')}ms, {res.get('speed')}kbps)" if res.get('speed') else f" ({res.get('latency')}ms)"
+        speed = res.get("speed") or 0
+        peak = res.get("speed_max") or 0
+        detail = f" ({res.get('latency')}ms"
+        if speed:
+            detail += f", {speed}kbps"
+            if peak:
+                detail += f", max {peak}kbps"
+        detail += ")"
     add_log("INFO", f"Tested proxy #{pid} → {status}{detail}")
     return jsonify(status=res.get("status", "failed"), latency=res.get("latency", 0),
-                   speed=res.get("speed", 0), error=None if res.get("status") == "working" else res.get("error"))
+                   speed=res.get("speed", 0), speed_max=res.get("speed_max", 0),
+                   error=None if res.get("status") == "working" else res.get("error"))
 
 
 @api_bp.route("/delete/<int:pid>", methods=["DELETE"])

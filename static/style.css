@@ -444,6 +444,13 @@ input[type="checkbox"]:not(.chk-custom):checked::after {
   overflow: hidden;
 }
 table { width: 100%; border-collapse: collapse; }
+.data-table { table-layout: fixed; }
+.data-table th,
+.data-table td { padding: 10px 8px; vertical-align: middle; }
+.data-table th.num,
+.data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.data-table .actions-head { text-align: right; }
+.row-actions { display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
 th, td {
   padding: 8px 12px;
   text-align: left;
@@ -1173,20 +1180,30 @@ dialog.modal::backdrop { background: var(--overlay); }
 
 /* ─── Таблица ─── */
 .desktop-table { display: none; }
-@media (min-width: 900px) {
+@media (min-width: 1024px) {
   .desktop-table { display: table; }
 }
+.dash-col-chk { width: 40px; }
+.dash-col-id { width: 64px; }
+.dash-col-port { width: 64px; }
+.dash-col-country { width: 86px; }
+.dash-col-status { width: 150px; }
+.dash-col-speed { width: 116px; }
+.dash-col-lat { width: 96px; }
+.dash-col-actions { width: 196px; }
 .desktop-table th.chk,
 .desktop-table td.chk { width: 40px; text-align: center; }
 .desktop-table td.host-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.desktop-table td.actions-cell { white-space: nowrap; text-align: right; }
+.desktop-table td.actions-cell { white-space: nowrap; }
 .desktop-table td.lat-cell,
 .desktop-table td.speed-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.speed-max { display: block; font-size: 0.7rem; font-weight: 400; color: var(--text-muted); }
 .desktop-table .status-cell {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
+  white-space: normal;
 }
 .desktop-table .status-cell .cell-err {
   max-width: 180px;
@@ -1196,8 +1213,6 @@ dialog.modal::backdrop { background: var(--overlay); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.desktop-table .actions-cell .btn { margin-left: 4px; }
-.desktop-table .actions-cell .btn:first-child { margin-left: 0; }
 
 /* ─── Мобильные карточки ─── */
 .mobile-list { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
@@ -1259,7 +1274,7 @@ dialog.modal::backdrop { background: var(--overlay); }
 /* Таблица и карточки — две ветки одного списка: на десктопе видна только
    таблица, на телефоне только карточки. Правило спрятать карточки должно
    стоять после их базового display, иначе оно проигрывает по порядку. */
-@media (min-width: 900px) {
+@media (min-width: 1024px) {
   .mobile-list { display: none; }
 }
 
@@ -1379,10 +1394,11 @@ dialog.modal::backdrop { background: var(--overlay); }
 .src-table { display: none; }
 @media (min-width: 1100px) { .src-table { display: table; table-layout: fixed; width: 100%; } }
 .src-table th,
-.src-table td { padding: 8px; overflow: hidden; }
+.src-table td { padding: 10px 8px; vertical-align: middle; overflow: hidden; }
+.src-table td.src-actions { overflow: visible; }
 .src-col-id { width: 48px; }
 .src-col-out { width: 112px; }
-.src-col-imp { width: 128px; }
+.src-col-imp { width: 168px; }
 .src-col-val { width: 144px; }
 .src-col-act { width: 212px; }
 /* На узком десктопе (1100–1339) три действия не помещаются в широкую
@@ -1463,10 +1479,10 @@ dialog.modal::backdrop { background: var(--overlay); }
 .src-reco { font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; }
 .src-actions { display: flex; gap: 4px; align-items: center; justify-content: flex-end; white-space: nowrap; text-align: right; }
 .src-actions .btn { padding: 0 8px; font-size: 0.75rem; }
-.src-actions .btn:first-child { margin-left: 0; }
 .src-verdict { white-space: normal; }
 .src-measured { display: block; margin-top: 4px; font-size: 0.75rem; color: var(--text-muted); }
 .src-import-time { display: block; margin-top: 4px; font-size: 0.75rem; color: var(--text-muted); }
+.src-import-counts { display: block; margin-top: 2px; font-size: 0.72rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
 .src-card {
   padding: 12px;

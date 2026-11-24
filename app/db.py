@@ -77,6 +77,7 @@ _SCHEMA = {
         ("security", "TEXT DEFAULT ''"),
         ("latency_vless", "INTEGER DEFAULT 0"),
         ("speed_kbps", "INTEGER DEFAULT 0"),
+        ("speed_max_kbps", "INTEGER DEFAULT 0"),
         ("source_id", "INTEGER"),
         ("last_test_at", "TIMESTAMP"),
         ("last_error", "TEXT"),
@@ -139,7 +140,7 @@ SETTING_DEFAULTS = {
     "observatory_probe_interval": "10s",
     "speed_test_enabled": "true",
     "speed_test_max": "8",
-    "speed_test_url": "https://speed.cloudflare.com/__down?bytes=10000000",
+    "speed_test_url": "https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/jquery-speedtest/10MB.txt",
     "speed_test_min_sec": "10",
     "apply_after_test": "true",
     "balancer_strategy": "random",
@@ -222,6 +223,16 @@ _MIGRATIONS = [
             "UPDATE settings SET value='https://speed.cloudflare.com/__down?bytes=10000000' "
             "WHERE key='speed_test_url' AND value IN "
             "('http://speedtest.selectel.ru/10MB', 'http://speedtest.tele2.net/10MB')",
+        ],
+    },
+    {
+        "version": 5,
+        "description": "speed_test_url: Cloudflare → Google 10MB (стабильный тест максимума)",
+        "sql": [
+            "UPDATE settings SET value="
+            "'https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/jquery-speedtest/10MB.txt' "
+            "WHERE key='speed_test_url' AND value="
+            "'https://speed.cloudflare.com/__down?bytes=10000000'",
         ],
     },
 ]
