@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/vless-manager-proxy
-ExecStart=/usr/bin/python3 app.py
+WorkingDirectory=/opt/vless-manager
+ExecStart=/opt/vless-manager/venv/bin/python app.py
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
