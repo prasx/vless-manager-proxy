@@ -174,6 +174,12 @@ SETTING_DEFAULTS = {
     # app/netcheck.py. Недоступный файл пропускается в пределах прогона.
     "speed_test_url_candidates": "",
     "speed_test_min_sec": "10",
+    # true — штатный замер через профили (пишет speed_kbps каждому узлу).
+    # false — только прямой замер панели для сравнения; профилям скорость не
+    # пишется, поэтому конфиг может остаться на старых замерах.
+    "speed_use_profiles": "true",
+    # Последний прямой замер (JSON): avg/max/bytes/elapsed/url/ts.
+    "speed_direct_last": "",
     "apply_after_test": "true",
     "balancer_strategy": "random",
     "handshake_timeout": "5",
@@ -218,7 +224,7 @@ SETTING_DEFAULTS = {
     "failed_backoff": "true",
     # Бюджет стадии скорости: 10 мин хватает на speed_test_max профилей по
     # 10 секунд. Меньший бюджет обрезал замеры на самых быстрых профилях.
-    "speed_stage_budget_sec": "600",
+    "speed_stage_budget_sec": "1200",
 }
 
 
@@ -328,6 +334,16 @@ _MIGRATIONS = [
         "sql": [
             "UPDATE settings SET value='128' "
             "WHERE key='check_batch_size' AND value='64'",
+        ],
+    },
+    {
+        # 600с хватало на 22 замера из 30: таймауты файлов съедали бюджет.
+        # Новый дефолт — 1200с, пользовательские значения не трогаем.
+        "version": 8,
+        "description": "speed_stage_budget_sec: 600 → 1200 секунд",
+        "sql": [
+            "UPDATE settings SET value='1200' "
+            "WHERE key='speed_stage_budget_sec' AND value='600'",
         ],
     },
 ]
@@ -642,6 +658,23 @@ class Settings:
         return max(1, min(300, int(cls.get("speed_test_min_sec"))))
 
     @classmethod
+    def speed_use_profiles(cls) -> bool:
+        """True — штатный замер через профили; False — только прямой baseline."""
+        return (cls.get("speed_use_profiles", "true") or "").strip().lower() == "true"
+
+    @classmethod
+    def speed_direct_last(cls) -> dict:
+        """Последний прямой замер скорости (пустой dict, если не было)."""
+        import json
+
+        try:
+            value = cls.get("speed_direct_last", "")
+            data = json.loads(value) if value else {}
+            return data if isinstance(data, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+
+    @classmethod
     def max_workers(cls) -> int:
         """Количество параллельных воркеров для тестирования прокси."""
         return max(1, min(30, int(cls.get("max_workers"))))
@@ -710,9 +743,9 @@ class Settings:
     def speed_stage_budget_sec(cls) -> int:
         """Общий бюджет стадии замера скорости, секунд (0 — без ограничения)."""
         try:
-            return max(0, min(7200, int(cls.get("speed_stage_budget_sec", "600"))))
+            return max(0, min(7200, int(cls.get("speed_stage_budget_sec", "1200"))))
         except (TypeError, ValueError):
-            return 600
+            return 1200
 
     @classmethod
     def xray_startup_retries(cls) -> int:

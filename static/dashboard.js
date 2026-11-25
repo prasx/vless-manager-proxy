@@ -619,11 +619,16 @@ async function testOne(id) {
   if (r.error) return toast(r.error, 'error');
   if (r.status === 'working') {
     const speedStr = r.speed ? `, ${formatSpeed(r.speed)}` : '';
+    const directStr = r.direct_avg_kbps ? `; прямой ${formatSpeed(r.direct_avg_kbps)}` : '';
+    let verdict = '';
+    if (r.speed && r.direct_avg_kbps && r.speed < r.direct_avg_kbps * 0.35) {
+      verdict = ' — узел заметно медленнее прямого замера';
+    }
     if (!r.speed && r.speed_error) {
-      toast(`прокси #${id} работает: ${r.latency}мс; скорость не измерилась — ${r.speed_error}`,
+      toast(`прокси #${id} работает: ${r.latency}мс; скорость не измерилась — ${r.speed_error}${directStr}`,
             'error');
     } else {
-      toast(`прокси #${id} работает: ${r.latency}мс${speedStr}`, 'success');
+      toast(`прокси #${id} работает: ${r.latency}мс${speedStr}${directStr}${verdict}`, 'success');
     }
   }
   else toast(`прокси #${id} не работает${r.error ? ': ' + r.error : ''}`);

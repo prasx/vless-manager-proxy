@@ -366,6 +366,11 @@
           <input type="checkbox" id="speedTestEnabled" class="chk-inline" checked>
         </div>
         <div class="tuning-item">
+          <span class="tuning-label">Через профили</span>
+          <input type="checkbox" id="speedUseProfiles" class="chk-inline" checked>
+          <span class="tuning-comment">штатный замер по узлам; выключено — только прямой baseline панели (профили не обновляются)</span>
+        </div>
+        <div class="tuning-item">
           <span class="tuning-label">Топ-N</span>
           <input type="number" id="speedTestMax" class="input" min="1" max="100" style="width:80px">
           <span class="tuning-suffix">прокси</span>
@@ -397,7 +402,12 @@
           <span class="tuning-label">Бюджет стадии</span>
           <input type="number" id="speedStageBudget" class="input" min="0" max="7200" style="width:80px">
           <span class="tuning-suffix">сек</span>
-          <span class="tuning-comment">0 = без ограничения; 600 хватает на 30 профилей по 10 с, после бюджета остальные пропускаются</span>
+          <span class="tuning-comment">0 = без ограничения; 1200 хватает на 30 профилей по 10 с с запасом на таймауты, после бюджета остальные пропускаются</span>
+        </div>
+        <div class="tuning-item tuning-item-wrap">
+          <span class="tuning-label">Прямой замер</span>
+          <button type="button" class="btn btn-sm" id="speedDirectBtn" onclick="testDirectSpeed(this)">Замерить напрямую</button>
+          <span class="tuning-comment" id="speedDirectResult" role="status">ещё не было</span>
         </div>
       </div>
     </div>

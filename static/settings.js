@@ -402,9 +402,13 @@ async function loadSettings() {
   $('connIdle').value = s.conn_idle || '300';
   $('dbCheckAutoCleanup').checked = s.db_check_auto_cleanup === 'true';
   $('speedTestEnabled').checked = s.speed_test_enabled !== 'false';
+  $('speedUseProfiles').checked = s.speed_use_profiles !== 'false';
   $('speedTestMax').value = s.speed_test_max || '15';
   $('speedTestUrl').value = s.speed_test_url || 'https://speed.cloudflare.com/__down?bytes=10000000';
   $('speedTestMinSec').value = s.speed_test_min_sec || '10';
+  let directLast = {};
+  try { directLast = JSON.parse(s.speed_direct_last || '{}'); } catch (e) { directLast = {}; }
+  renderDirectSpeed(directLast);
   $('applyAfterTest').checked = s.apply_after_test !== 'false';
   $('minSpeedMbps').value = s.min_speed_mbps || '0';
   $('profileMaxAgeMin').value = s.profile_max_age_min || '0';
@@ -428,7 +432,7 @@ async function loadSettings() {
   $('tcpPrefilter').checked = s.tcp_prefilter !== 'false';
   $('tcpPrefilterTimeout').value = s.tcp_prefilter_timeout || '3';
   $('tcpPrefilterRetries').value = s.tcp_prefilter_retries != null ? s.tcp_prefilter_retries : '1';
-  $('speedStageBudget').value = s.speed_stage_budget_sec || '600';
+  $('speedStageBudget').value = s.speed_stage_budget_sec || '1200';
 
   setLoadError('xray', status.error ? `не удалось получить статус Xray: ${status.error}` : '');
   if (!status.error) {
@@ -472,11 +476,16 @@ function updateConfigStatus(status) {
 
 function updateSpeedTestDependants() {
   const enabled = $('speedTestEnabled').checked;
+  const useProfiles = $('speedUseProfiles').checked;
   const body = $('speedTestBody');
   if (!body) return;
   body.querySelectorAll('input').forEach(inp => {
     if (inp.id !== 'speedTestEnabled') inp.disabled = !enabled;
   });
+  $('speedTestMax').disabled = !enabled || !useProfiles;
+  $('speedTestAdaptiveSec').disabled = !enabled || !useProfiles;
+  const directBtn = $('speedDirectBtn');
+  if (directBtn) directBtn.disabled = !enabled;
   body.style.opacity = enabled ? '1' : '0.45';
 }
 
@@ -662,6 +671,7 @@ async function saveSettings() {
     log_trim_every: $('logTrimEvery').value.trim() || '500',
     log_keep: $('logKeep').value.trim() || '2000',
     speed_test_enabled: $('speedTestEnabled').checked ? 'true' : 'false',
+    speed_use_profiles: $('speedUseProfiles').checked ? 'true' : 'false',
     speed_test_max: $('speedTestMax').value.trim() || '15',
     speed_test_url: $('speedTestUrl').value.trim() || 'https://speed.cloudflare.com/__down?bytes=10000000',
     speed_test_min_sec: $('speedTestMinSec').value.trim() || '10',
@@ -701,7 +711,7 @@ async function saveSettings() {
     tcp_prefilter_timeout: $('tcpPrefilterTimeout').value.trim() || '3',
     tcp_prefilter_retries: $('tcpPrefilterRetries').value.trim() || '1',
     tcp_prefilter_workers: $('tcpPrefilterWorkers').value.trim() || '128',
-    speed_stage_budget_sec: $('speedStageBudget').value.trim() || '600',
+    speed_stage_budget_sec: $('speedStageBudget').value.trim() || '1200',
   };
 
   let r;
@@ -730,7 +740,7 @@ const RESET_NUMBERS = {
   speedTestMax: '8',
   speedTestMinSec: '10',
   speedTestAdaptiveSec: '2',
-  speedStageBudget: '600',
+  speedStageBudget: '1200',
   checkBatchSize: '128',
   tcpPrefilterWorkers: '128',
   tcpPrefilterTimeout: '3',
@@ -745,6 +755,7 @@ const RESET_NUMBERS = {
 const RESET_CHECKBOXES = {
   dbCheckAutoCleanup: false,
   speedTestEnabled: true,
+  speedUseProfiles: true,
   applyAfterTest: true,
   safeOnlyImport: false,
   requireSpeed: false,
@@ -775,6 +786,7 @@ function resetSettings() {
     if (el) el.checked = value;
   }
   $('speedTestUrl').value = 'https://speed.cloudflare.com/__down?bytes=10000000';
+  renderDirectSpeed({});
   $('balancerStrategy').value = 'random';
   setRangeValue(_rangeDb, 0.5);
   setRangeValue(_rangeImport, 3);
@@ -907,6 +919,50 @@ async function testSpeedUrls(btn) {
     }
   } finally {
     urlTestButtonBusy(btn, false, 'Тест URL');
+  }
+}
+
+function fmtKbps(kbps) {
+  const n = Number(kbps) || 0;
+  return n >= 1000 ? `${(n / 1000).toFixed(1)} Mbps` : `${n} kbps`;
+}
+
+function renderDirectSpeed(res) {
+  const el = $('speedDirectResult');
+  if (!el) return;
+  if (!res || !res.ok) {
+    const err = res && res.error ? `: ${res.error}` : '';
+    el.textContent = res && (res.ts || res.url) ? `ошибка${err}` : 'ещё не было';
+    el.classList.toggle('text-bad', Boolean(res && res.error));
+    return;
+  }
+  const when = res.ts ? new Date(res.ts * 1000).toLocaleTimeString() : '';
+  el.innerHTML = `прямой: <b>${fmtKbps(res.avg_kbps)}</b> / макс ${fmtKbps(res.max_kbps)}`
+    + ` · ${res.bytes || 0} байт за ${res.elapsed || 0} с`
+    + (when ? ` · ${escapeHtml(when)}` : '');
+  el.classList.remove('text-bad');
+}
+
+async function testDirectSpeed(btn) {
+  urlTestButtonBusy(btn, true);
+  btn.textContent = 'Замеряю…';
+  try {
+    const url = $('speedTestUrl').value.trim();
+    const r = await api('POST', '/api/speedtest/direct', { url });
+    if (r.error) {
+      renderDirectSpeed({ ok: false, error: r.error });
+      toast(r.error, 'error');
+      return;
+    }
+    renderDirectSpeed(r);
+    if (r.ok) {
+      toast(`Прямой замер: ${fmtKbps(r.avg_kbps)} / макс ${fmtKbps(r.max_kbps)}`, 'success');
+    } else {
+      toast(`Прямой замер не удался: ${r.error || 'нет данных'}`, 'error');
+    }
+  } finally {
+    urlTestButtonBusy(btn, false);
+    btn.textContent = 'Замерить напрямую';
   }
 }
 
@@ -1046,6 +1102,7 @@ async function importBackup(event) {
 _rangeDb = setupRange('checkIntervalDb', 'checkIntervalDbLabel');
 _rangeImport = setupRange('checkIntervalImport', 'checkIntervalImportLabel');
 $('speedTestEnabled').addEventListener('change', updateSpeedTestDependants);
+$('speedUseProfiles').addEventListener('change', updateSpeedTestDependants);
 ['checkBatchSize', 'tcpPrefilterWorkers', 'probeTimeout', 'probeRetries',
  'tcpPrefilterTimeout', 'tcpPrefilterRetries'].forEach(id => {
   const el = $(id);

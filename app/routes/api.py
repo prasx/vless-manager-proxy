@@ -307,6 +307,8 @@ def api_test(pid):
         latency=res.get("latency", 0),
         speed=res.get("speed", 0),
         speed_max=res.get("speed_max", 0),
+        direct_avg_kbps=res.get("direct_avg_kbps", 0),
+        direct_max_kbps=res.get("direct_max_kbps", 0),
         speed_url=res.get("speed_url", ""),
         speed_error=res.get("speed_error", ""),
         speed_errors=res.get("speed_errors", {}),
@@ -677,6 +679,26 @@ def api_urls_test():
             target=lambda: xray_configurator.apply_all(blocking=True), daemon=True
         ).start()
     return jsonify(**report)
+
+
+@api_bp.route("/speedtest/direct", methods=["POST"])
+def api_speedtest_direct():
+    """POST /api/speedtest/direct — прямой замер панели без профиля.
+
+    Тело: ``{"url": "...", "window": 10}``. Не пишет скорость профилям:
+    это baseline для сравнения с замером через узел.
+    """
+    data = request.get_json(silent=True) or {}
+    url = str(data.get("url") or "").strip()
+    window = data.get("window")
+    try:
+        window = int(window) if window not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify(error="window должен быть числом"), 400
+    res = proxy_manager.speedtest_direct(url, window)
+    if res.get("busy"):
+        return jsonify(error=res.get("error") or "Идёт другой тест"), 409
+    return jsonify(res)
 
 
 # ─── Настройки ───

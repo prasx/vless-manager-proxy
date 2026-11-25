@@ -1042,6 +1042,76 @@ class ProxyManager:
                 )
         return 0, 0
 
+    def _measure_direct_and_save(self, url: str, window_sec: int) -> dict:
+        """Прямой замер панели + сохранение baseline в настройках."""
+        res = netcheck.measure_speed_direct(
+            url or Settings.speed_test_url(), window_sec
+        )
+        payload = dict(res)
+        payload["ts"] = time.time()
+        payload["window_sec"] = window_sec
+        Settings.set("speed_direct_last", json.dumps(payload, ensure_ascii=False))
+        if res.get("ok"):
+            add_log(
+                "INFO",
+                f"Direct speed: avg {res['avg_kbps']}kbps, max {res['max_kbps']}kbps, "
+                f"{res['bytes']} байт за {res['elapsed']}с ({res['url']})",
+            )
+        else:
+            add_log(
+                "WARN",
+                f"Direct speed failed: {res.get('error') or '0 байт'} ({res['url']})",
+            )
+        return res
+
+    def speedtest_direct(self, url: str = "", window_sec: int | None = None) -> dict:
+        """Ручной прямой замер (кнопка в настройках), без изменения профилей."""
+        if not self._run_lock.acquire(blocking=False):
+            return {"busy": True, "error": "Идёт проверка или замер — попробуйте позже"}
+        try:
+            window = int(window_sec or Settings.speed_test_duration_sec())
+            return self._measure_direct_and_save(url.strip(), max(1, min(300, window)))
+        finally:
+            try:
+                self._run_lock.release()
+            except RuntimeError:
+                pass
+
+    def _stage_speed_direct(self, speed_rows):
+        """Диагностический режим: один прямой замер вместо профилей."""
+        with self._progress_lock:
+            p = self.progress
+            p["total"] = 1
+            p["done"] = 0
+            p["ok"] = 0
+            p["current"] = "прямой замер панели"
+            for st in p["stages"]:
+                if st["status"] == "active":
+                    st["total"] = 1
+                    st["done"] = 0
+                    st["ok"] = 0
+        add_log(
+            "WARN",
+            "Speed: включён режим «прямой замер» — профили не обновляются, "
+            "это диагностический baseline",
+        )
+        res = self._measure_direct_and_save(
+            Settings.speed_test_url(), Settings.speed_test_duration_sec()
+        )
+        self._stage_advance(
+            bool(res.get("ok")),
+            current_text=(
+                f"прямой: avg {res.get('avg_kbps', 0)} / max {res.get('max_kbps', 0)} kbps"
+                if res.get("ok") else f"прямой: {res.get('error') or 'нет данных'}"
+            ),
+        )
+        if speed_rows:
+            add_log(
+                "INFO",
+                f"Speed: прямой режим пропустил {len(speed_rows)} профилей; "
+                "верните «Через профили», чтобы обновить их скорость",
+            )
+
     def _stage_speed(self, speed_rows, apply_incremental=False):
         """Стадия «Замер скорости» — СТРОГО по одному профилю за раз.
 
@@ -1049,7 +1119,14 @@ class ProxyManager:
         Если включён `apply_incremental`, между замерами (то есть без нагрузки
         на измеряемый канал) конфиг и подписка обновляются: пользователь видит
         первые рабочие узлы через десятки секунд, а не после всей стадии.
+
+        Если в настройках выключен режим «через профили», стадия не трогает
+        профили и делает только один прямой baseline с панели. Это диагностика:
+        сравнение с профильным замером показывает, где теряется скорость.
         """
+        if not Settings.speed_use_profiles():
+            self._stage_speed_direct(speed_rows)
+            return
         window_sec = Settings.speed_test_duration_sec()
         budget = Settings.speed_stage_budget_sec()
         deadline = time.monotonic() + budget if budget else 0.0
@@ -1079,7 +1156,8 @@ class ProxyManager:
                 add_log(
                     "WARN",
                     f"Speed stage: бюджет {budget}с исчерпан — {measured} замеров, "
-                    f"остальные профили пропущены",
+                    f"остальные профили пропущены. Увеличьте «Бюджет стадии» "
+                    "или уменьшите «Топ-N».",
                 )
                 break
             # Применяем накопленные результаты перед стартом следующего замера:
@@ -1592,6 +1670,7 @@ class ProxyManager:
                 # тест мог только что сделать профиль рабочим — запускаем
                 # фоновое обогащение, не дожидаясь следующего прогона.
                 schedule_country_enrichment()
+            direct = Settings.speed_direct_last()
             # Для диагностики: если скорость 0 — отдаём причину по URL (важнее),
             # а лог Xray — отдельным полем.
             speed_error = ""
@@ -1606,6 +1685,8 @@ class ProxyManager:
                 "latency": r["latency_vless"] or 0,
                 "speed": speed,
                 "speed_max": r["speed_max_kbps"] or 0,
+                "direct_avg_kbps": int(direct.get("avg_kbps") or 0),
+                "direct_max_kbps": int(direct.get("max_kbps") or 0),
                 "speed_url": self._speed_url_override or Settings.speed_test_url(),
                 "speed_error": speed_error,
                 "speed_errors": dict(self._speed_error_reasons),

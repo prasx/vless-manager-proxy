@@ -238,6 +238,89 @@ def test_speed_url(url: str, timeout: float = 8.0) -> dict:
     return {"url": url, **res}
 
 
+def measure_speed_direct(url: str, window_sec: int = 10) -> dict:
+    """Полный прямой замер с панели (без профиля), avg + max.
+
+    Нужен как baseline: если прямой замер быстрый, а профиль медленный —
+    виноват узел/транспорт; если оба медленные — файл/канал панели.
+    В отличие от test_speed_url не делает Range и не пишет в БД.
+    """
+    window_sec = max(1, min(300, int(window_sec)))
+    started = time.time()
+    deadline = started + window_sec
+    timeout = max(8.0, min(60.0, window_sec + 5))
+    total = 0
+    peak = 0
+    sample_t = started
+    sample_total = 0
+    status = 0
+    error = ""
+
+    def sample(now: float) -> None:
+        nonlocal peak, sample_t, sample_total
+        dt = now - sample_t
+        if dt < 0.5:
+            return
+        delta = total - sample_total
+        if delta > 0:
+            peak = max(peak, int((delta * 8) / (dt * 1000)))
+        sample_t = now
+        sample_total = total
+
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _UA})
+        resp = urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX)
+        status = int(getattr(resp, "status", 200) or 200)
+        try:
+            while True:
+                buf = resp.read(131072)
+                if not buf:
+                    if time.time() >= deadline:
+                        break
+                    try:
+                        resp.close()
+                        resp = urllib.request.urlopen(
+                            req, timeout=timeout, context=_SSL_CTX
+                        )
+                        continue
+                    except Exception as e:  # noqa: BLE001
+                        error = f"reopen: {type(e).__name__}: {e}"
+                        break
+                total += len(buf)
+                now = time.time()
+                sample(now)
+                if now >= deadline:
+                    break
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+    except urllib.error.HTTPError as e:
+        status = e.code
+        error = f"HTTP {e.code}"
+    except Exception as e:  # noqa: BLE001
+        error = f"{type(e).__name__}: {e}"
+    elapsed = time.time() - started
+    sample(time.time())
+    avg = int((total * 8) / (elapsed * 1000)) if total > 0 and elapsed > 0 else 0
+    peak = max(peak, avg)
+    if not total and not error:
+        error = "0 байт за окно"
+    elif total < 4096 and not error:
+        error = f"мало данных: {total} байт за {elapsed:.1f}с"
+    return {
+        "url": url,
+        "ok": total >= 4096,
+        "status": status,
+        "avg_kbps": avg,
+        "max_kbps": peak,
+        "bytes": total,
+        "elapsed": round(elapsed, 2),
+        "error": error,
+    }
+
+
 def _run_parallel(urls: list[str], func, parallel: int = 6) -> list[dict]:
     """Параллельный тест кандидатов: последовательный ждал бы таймаут каждого."""
     if not urls:

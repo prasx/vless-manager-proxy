@@ -36,6 +36,7 @@
 | GET | `/api/config/preview?limit=` | Что попадёт в конфиг и подписку: `selected`, `excluded`, `fallback`, `settings` |
 | POST | `/api/refresh-stale` | Актуализация устаревших и незамеренных |
 | GET | `/api/import/diagnose?url=&source_id=&timeout=` | DNS → TCP → TLS → HTTP; без параметров — все URL-источники |
+| POST | `/api/speedtest/direct` | Прямой замер скорости панели (baseline); `{"url","window"}`, не пишет скорость профилям |
 
 ## URL проверки и файла замера
 

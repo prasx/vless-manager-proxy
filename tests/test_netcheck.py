@@ -81,6 +81,25 @@ class StatusServer(threading.Thread):
             pass
 
 
+class TestDirectSpeedMeasurement(unittest.TestCase):
+    def test_direct_speed_reads_body(self):
+        srv = StatusServer(200, body=b"x" * 8192)
+        srv.start()
+        try:
+            for _ in range(50):
+                if srv.port:
+                    break
+                threading.Event().wait(0.02)
+            res = netcheck.measure_speed_direct(
+                f"http://127.0.0.1:{srv.port}/file.bin", 1
+            )
+        finally:
+            srv.stop()
+        self.assertTrue(res["ok"], res)
+        self.assertGreater(res["bytes"], 0)
+        self.assertGreater(res["avg_kbps"], 0)
+
+
 class TempDBTestCase(unittest.TestCase):
     """Подменяет файл БД на временный: реальный proxies.db не трогаем."""
 
@@ -443,8 +462,8 @@ class TestMigrations(unittest.TestCase):
         )
         self.assertEqual(Settings.probe_timeout(), 8)
         self.assertEqual(Settings.tcp_prefilter_timeout(), 3.0)
-        self.assertEqual(Settings.speed_stage_budget_sec(), 600)
-        self.assertEqual(Settings.get("schema_version"), "7")
+        self.assertEqual(Settings.speed_stage_budget_sec(), 1200)
+        self.assertEqual(Settings.get("schema_version"), "8")
 
     def test_migrates_batch_size(self):
         """Пачка 64 (прежний дефолт) переезжает на 128, кастомные — нет."""
