@@ -39,6 +39,7 @@ def create_app():
 
     @app.errorhandler(500)
     def handle_500(e):
+        """Логирует необработанную ошибку и отдаёт JSON вместо HTML-трейсбека."""
         _log_exception(app, e)
         return {"error": "Internal server error"}, 500
 

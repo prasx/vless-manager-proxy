@@ -120,6 +120,7 @@ def _blocked_countries_clause() -> tuple[str, list]:
 
 
 def _build_where(f, src, search, reason="") -> tuple[str, list]:
+    """Собирает WHERE и параметры для фильтров списка профилей."""
     clauses = []
     params = []
     fc = proxy_filter_clause(f)
@@ -768,7 +769,6 @@ _INT_RANGES = {
     "conn_idle": (1, 86400),
     "check_interval_db": (1, 604800),
     "check_interval_import": (1, 2592000),
-    "max_workers": (1, 256),
     "probe_timeout": (1, 60),
     "probe_retries": (0, 3),
     "xray_startup_retries": (1, 1000),
@@ -796,8 +796,8 @@ def _validate_settings(data: dict) -> None:
             continue
         try:
             val = int(data[key])
-        except (ValueError, TypeError):
-            raise ValueError(f"{key} must be an integer, got {data[key]!r}")
+        except (ValueError, TypeError) as err:
+            raise ValueError(f"{key} must be an integer, got {data[key]!r}") from err
         if not low <= val <= high:
             raise ValueError(f"{key} must be in {low}..{high}, got {val}")
     for key, (low, high) in _FLOAT_RANGES.items():
@@ -805,8 +805,8 @@ def _validate_settings(data: dict) -> None:
             continue
         try:
             val = float(data[key])
-        except (ValueError, TypeError):
-            raise ValueError(f"{key} must be a number, got {data[key]!r}")
+        except (ValueError, TypeError) as err:
+            raise ValueError(f"{key} must be a number, got {data[key]!r}") from err
         if not low <= val <= high:
             raise ValueError(f"{key} must be in {low}..{high}, got {val}")
 
@@ -819,8 +819,8 @@ def _validate_settings(data: dict) -> None:
             if key in data:
                 try:
                     ports[key] = int(data[key])
-                except (ValueError, TypeError):
-                    raise ValueError(f"{key} must be an integer, got {data[key]!r}")
+                except (ValueError, TypeError) as err:
+                    raise ValueError(f"{key} must be an integer, got {data[key]!r}") from err
             else:
                 ports[key] = int(Settings.get(key, "0") or 0)
         if len(set(ports.values())) != len(ports):
@@ -974,6 +974,7 @@ def api_config_preview():
     names = {sid: q["name"] for sid, q in quality.items()}
 
     def with_source(item: dict) -> dict:
+        """Добавляет к профилю человекочитаемое имя источника."""
         sid = item.get("source_id")
         item = dict(item)
         item["source_name"] = (
@@ -1191,6 +1192,7 @@ def api_test_progress_stream():
     стадий и новые прогоны приходили без переподключения страницы.
     """
     def generate():
+        """Генерирует SSE-события только при изменении прогресса."""
         last_payload = None
         last_beat = time.time()
         while True:
@@ -1263,18 +1265,21 @@ def api_performance_recommendations():
     tcp_worst = tcp_t * (1 + 0.5 * tcp_retries)
 
     def prefilter_seconds(count: int, with_prefilter: bool) -> float:
+        """Оценка времени TCP-префильтра волнами по числу воркеров."""
         if count <= 0 or not with_prefilter:
             return 0.0
         waves = -(-count // max(1, prefilter_workers))
         return waves * tcp_worst
 
     def check_seconds(count: int, batch_size: int, probe: float) -> float:
+        """Оценка времени стадии проверки волнами по размеру пачки."""
         if count <= 0:
             return 0.0
         waves = -(-count // max(1, batch_size))
         return waves * probe
 
     def speed_seconds(working_count: int, top_n: int, window: int) -> float:
+        """Оценка времени замера скорости с учётом общего бюджета."""
         if not speed_enabled or top_n <= 0 or working_count <= 0:
             return 0.0
         est = min(top_n, working_count) * window

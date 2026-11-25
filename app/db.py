@@ -124,9 +124,8 @@ _SCHEMA = {
 
 # Единственный источник значений по умолчанию. Отсюда их берут и init_db
 # (запись в БД при первом запуске), и Settings.get для ключей, которых в БД
-# ещё нет, — раньше запасные значения в классах Settings расходились с этими
-# (например max_workers 10 против 15) и панель вела себя по-разному до и после
-# первой записи настройки.
+# ещё нет: иначе запасные значения в Settings расходились бы с БД и панель
+# вела себя по-разному до и после первой записи настройки.
 SETTING_DEFAULTS = {
     "xray_bin": "/usr/local/bin/xray",
     "xray_config_path": "",  # подставляется из default_xray_config_path() при init_db
@@ -199,8 +198,6 @@ SETTING_DEFAULTS = {
     "sniffing_enabled": "true",
     "sniffing_dest_override": "http,tls",
     "sniffing_route_only": "true",
-    # Performance tuning
-    "max_workers": "15",
     # Таймаут одной пробы через туннель. Медленные/защищённые узлы не успевают
     # за 5 с, поэтому по умолчанию чуть больше — качество проверки важнее.
     "probe_timeout": "8",
@@ -222,8 +219,8 @@ SETTING_DEFAULTS = {
     "probe_retries": "1",
     "ping_samples": "3",
     "failed_backoff": "true",
-    # Бюджет стадии скорости: 10 мин хватает на speed_test_max профилей по
-    # 10 секунд. Меньший бюджет обрезал замеры на самых быстрых профилях.
+    # Бюджет стадии скорости: 20 минут хватает на speed_test_max профилей
+    # по 10 секунд с запасом на таймауты файлов замера.
     "speed_stage_budget_sec": "1200",
 }
 
@@ -407,7 +404,7 @@ def init_db() -> None:
     c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_source_id ON proxies(source_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_proxies_failed_since ON proxies(failed_since)")
 
-    # backfill security для старых строк
+    # Заполняем security у старых строк, импортированных до появления колонки.
     from .vless import parse_vless
 
     c.execute("SELECT id, link FROM proxies WHERE security IS NULL OR security = ''")
@@ -449,6 +446,7 @@ class Settings:
 
     @classmethod
     def _cached(cls, key: str) -> str | None:
+        """Возвращает значение из кэша, если оно ещё не устарело."""
         with cls._cache_lock:
             item = cls._cache.get(key)
         if item and (time.monotonic() - item[0]) < cls._CACHE_TTL:
@@ -457,6 +455,7 @@ class Settings:
 
     @classmethod
     def _store(cls, key: str, value: str) -> None:
+        """Кладёт значение в кэш с текущей меткой времени."""
         with cls._cache_lock:
             cls._cache[key] = (time.monotonic(), value)
 
@@ -683,11 +682,6 @@ class Settings:
             return data if isinstance(data, dict) else {}
         except (ValueError, TypeError):
             return {}
-
-    @classmethod
-    def max_workers(cls) -> int:
-        """Количество параллельных воркеров для тестирования прокси."""
-        return max(1, min(30, int(cls.get("max_workers"))))
 
     @classmethod
     def probe_timeout(cls) -> int:

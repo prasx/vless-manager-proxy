@@ -221,6 +221,7 @@ def _reality_server_name(parsed: dict) -> str:
 
 
 def _truthy(value: Optional[str]) -> bool:
+    """Интерпретирует булевы параметры VLESS (1/true/yes, без регистра)."""
     return (unquote(str(value or "")).strip().lower() in ("1", "true", "yes"))
 
 

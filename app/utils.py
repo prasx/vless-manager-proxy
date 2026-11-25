@@ -4,7 +4,6 @@ import json
 import ssl
 import threading
 import time
-import traceback
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -24,6 +23,7 @@ def set_correlation_id(cid: str) -> None:
 
 
 def get_correlation_id() -> str:
+    """Возвращает correlation_id текущего потока (пустая строка, если не задан)."""
     with _cid_lock:
         return _current_cid
 
@@ -180,6 +180,7 @@ _enrich_lock = threading.Lock()
 
 
 def _geo_cached(cache: dict, key: str, ttl: float):
+    """Возвращает значение geo-кеша, если оно не старше ttl."""
     with _geo_lock:
         item = cache.get(key)
     if item and (time.time() - item[0]) < ttl:
@@ -188,12 +189,14 @@ def _geo_cached(cache: dict, key: str, ttl: float):
 
 
 def _geo_store_ip(ip: str, cc: str) -> None:
+    """Запоминает успешную страну IP и снимает негативную метку."""
     with _geo_lock:
         _geo_ip_cache[ip] = (time.time(), cc)
         _geo_neg_cache.pop(ip, None)
 
 
 def _geo_mark_negative(ip: str) -> None:
+    """Запоминает, что для IP не удалось определить страну."""
     with _geo_lock:
         _geo_neg_cache[ip] = time.time()
 
@@ -277,6 +280,7 @@ def _country_is_batch(ips: list[str]) -> dict[str, str]:
     from urllib.request import Request, urlopen
 
     def lookup(ip: str) -> tuple[str, str]:
+        """Запрашивает страну одного IP у api.country.is."""
         try:
             req = Request(
                 _GEO_FALLBACK_URL.format(ip=ip),
@@ -300,38 +304,6 @@ def _country_is_batch(ips: list[str]) -> dict[str, str]:
     if out:
         add_log("DEBUG", f"api.country.is определил страны для {len(out)}/{len(ips)} IP")
     return out
-
-
-def detect_country(host):
-    """Определяет страну по IP хоста через ip-api.com (с кешированием)."""
-    ip = resolve_host(host)
-    if not ip:
-        return ""
-    cached = _geo_cached(_geo_ip_cache, ip, _GEO_OK_TTL)
-    if cached is not None:
-        return cached
-    cc = _ipapi_batch([ip]).get(ip, "")
-    if cc:
-        _geo_store_ip(ip, cc)
-    else:
-        _geo_mark_negative(ip)
-        add_log("WARN", f"Failed to detect country for {host}")
-    return cc
-
-
-def enrich_country(pid, host):
-    """Обновляет страну одного профиля (совместимость; массовый путь — ниже)."""
-    from .db import db_q
-
-    cc = detect_country(host)
-    if not cc:
-        return False
-    current = db_q("SELECT country FROM proxies WHERE id=?", (pid,))
-    if current and current[0]["country"] == cc:
-        db_q("UPDATE proxies SET country_verified=1 WHERE id=?", (pid,))
-        return False
-    db_q("UPDATE proxies SET country=?, country_verified=1 WHERE id=?", (cc, pid))
-    return True
 
 
 def _geo_targets(limit: int | None = None) -> list[dict]:
@@ -373,7 +345,7 @@ def enrich_countries_once(limit: int | None = None) -> int:
 
         with ThreadPoolExecutor(max_workers=min(20, len(hosts)),
                                 thread_name_prefix="geo-dns") as pool:
-            for host, ip in zip(hosts, pool.map(resolve_host, hosts)):
+            for host, ip in zip(hosts, pool.map(resolve_host, hosts), strict=True):
                 if ip:
                     host_to_ip[host] = ip
 
@@ -429,6 +401,7 @@ def enrich_countries_once(limit: int | None = None) -> int:
 
 
 def _neg_recent(key: str) -> bool:
+    """True, если для ключа недавно была неудача и можно не повторять запрос."""
     with _geo_lock:
         ts = _geo_neg_cache.get(key)
     return bool(ts and (time.time() - ts) < _GEO_NEG_TTL)
@@ -457,6 +430,7 @@ def schedule_country_enrichment() -> bool:
         return False
 
     def run():
+        """Фоновый проход обогащения стран."""
         enrich_all_unknown_countries()
 
     threading.Thread(target=run, daemon=True, name="geo-enrich").start()
@@ -639,7 +613,6 @@ def close_connection(remote_host, remote_port, local_port=None):
                         return True
         else:
             # Linux: ss -K (kill)
-            from config import API_LISTEN
             filter_expr = f"( dst {remote_host} and dport {remote_port} )"
             r = subprocess.run(
                 ["ss", "-K", filter_expr],

@@ -53,11 +53,6 @@ STARTUP_TIMEOUT = 15.0
 PORT_RANGE_START = 20000
 PORT_RANGE_END = 40000
 
-# Транспорты, которые умеет собирать stream_settings().
-KNOWN_NETWORKS = frozenset(
-    {"tcp", "ws", "grpc", "kcp", "h2", "http", "xhttp", "quic", "httpupgrade"}
-)
-
 
 # ─── Ошибки проб ───
 
@@ -94,6 +89,7 @@ def _median(values: list[int]) -> int:
 
 
 def _opener_for_port(http_port: int) -> urllib.request.OpenerDirector:
+    """urllib-opener, направляющий HTTP(S) через локальный http-inbound Xray."""
     proxy_url = f"http://127.0.0.1:{http_port}"
     return urllib.request.build_opener(
         urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
@@ -118,6 +114,7 @@ _PROXY_DIAL_ERROR_MARKERS = (
 
 
 def _is_proxy_dial_error(body: str) -> bool:
+    """True, если тело 503 — ошибка dial внутри Xray, а не ответ сервиса."""
     low = (body or "").lower()
     return any(marker in low for marker in _PROXY_DIAL_ERROR_MARKERS)
 
@@ -191,6 +188,7 @@ class ProbeUrlStats:
     """
 
     def __init__(self, urls):
+        """Создаёт статистику для набора URL пробы."""
         self._lock = threading.Lock()
         self._urls = list(dict.fromkeys(u for u in (urls or []) if u))
         self._ok: dict[str, int] = {u: 0 for u in self._urls}
@@ -198,6 +196,7 @@ class ProbeUrlStats:
         self._errors: dict[str, dict[str, int]] = {u: {} for u in self._urls}
 
     def record(self, url: str, ok: bool, error: str = "") -> None:
+        """Учитывает результат одной пробы для URL."""
         with self._lock:
             if url not in self._ok:
                 self._urls.append(url)
@@ -221,20 +220,24 @@ class ProbeUrlStats:
         index = {u: i for i, u in enumerate(urls)}
 
         def score(u: str):
+            """Ключ сортировки: сглаженная доля успеха, затем число успехов."""
             ratio = (ok[u] + 1) / (ok[u] + fail[u] + 2)  # сглаживание: 0 проб = 0.5
             return (-ratio, -ok[u], index[u])
 
         return sorted(urls, key=score)
 
     def ok_count(self, url: str) -> int:
+        """Сколько успешных проб было у URL."""
         with self._lock:
             return self._ok.get(url, 0)
 
     def attempts(self, url: str) -> int:
+        """Сколько всего проб было у URL."""
         with self._lock:
             return self._ok.get(url, 0) + self._fail.get(url, 0)
 
     def total(self) -> int:
+        """Суммарное число проб по всем URL."""
         with self._lock:
             return sum(self._ok.values()) + sum(self._fail.values())
 
@@ -255,7 +258,6 @@ class ProbeUrlStats:
     def summary(self, limit: int = 6) -> str:
         """Короткая сводка «url: ok/attempts» для логов и прогресса."""
         with self._lock:
-            urls = list(self._urls)
             ok = dict(self._ok)
             fail = dict(self._fail)
         parts = []
@@ -407,6 +409,7 @@ class PortReserver:
     """
 
     def __init__(self, start: int = PORT_RANGE_START, end: int = PORT_RANGE_END):
+        """Задаёт диапазон портов для резервирования."""
         self._next = start
         self._end = end
         self._lock = threading.Lock()
@@ -429,6 +432,7 @@ class PortReserver:
 
     @staticmethod
     def _is_free(port: int) -> bool:
+        """Проверяет, что порт можно забиндить на loopback."""
         # Без SO_REUSEADDR: на Windows он позволяет занять уже слушающий порт,
         # и тогда проба уйдёт в чужой туннель (ровно та ошибка, которую порты
         # и должны исключить).
@@ -447,9 +451,11 @@ class SubprocessLauncher:
     """Запускает Xray отдельной группой процессов (чтобы убивать вместе с детьми)."""
 
     def __init__(self, xray_bin: str):
+        """Запоминает путь к бинарнику Xray."""
         self.xray_bin = xray_bin
 
     def start(self, config_path: str, log_path: str) -> subprocess.Popen:
+        """Запускает Xray в отдельной группе процессов."""
         log = open(log_path, "wb")
         try:
             return subprocess.Popen(
@@ -463,6 +469,7 @@ class SubprocessLauncher:
 
     @staticmethod
     def stop(proc: subprocess.Popen) -> None:
+        """Останавливает Xray, при необходимости добивая группу процессов."""
         if proc is None:
             return
         try:
@@ -486,6 +493,7 @@ class BatchXrayChecker:
 
     def __init__(self, launcher: SubprocessLauncher | None = None,
                  port_reserver: PortReserver | None = None):
+        """Создаёт чекер с опциональными launcher и резервером портов."""
         self._launcher = launcher
         self._ports = port_reserver or PortReserver()
         self._current_proc = None
@@ -559,16 +567,9 @@ class BatchXrayChecker:
                         pass
             return results
 
-        # Поштучная предпроверка конфигов ДО батчей. Раньше при одном битом
-        # профиле в пачке чекер делил её пополам, тестировал половины и снова
-        # запускал Xray — на сервере это давало пачки по 150–300 с и лавину
-        # «конфиг пачки отклонён». Одиночные тесты дёшевы и параллелятся,
-        # а после них в батчи попадают только заведомо валидные профили.
-        #
-        # Но для больших прогонов это 8247 процессов `xray -test` на 8 воркерах:
-        # прогресс стоит на месте минутами и выглядит как зависание. Валидность
-        # пачки дешевле проверить одним `-test` в _start_chunk, а битой пачке
-        # сделать bisect. Поштучно проверяем только небольшие прогоны.
+        # Небольшие прогоны проверяем поштучно: битый конфиг отсекается без
+        # bisect. Для тысяч профилей это тысячи процессов `xray -test`, поэтому
+        # там валидируем пачку одним тестом и делим её только при отказе.
         if len(items) <= 256:
             items = self._prevalidate_configs(items, results, on_result, cancel)
         else:
@@ -603,10 +604,8 @@ class BatchXrayChecker:
                 f"Check batch {index}/{len(batches)}: {len(chunk)} профилей",
             )
             batch_started = time.monotonic()
-            # Бюджет на ЗАПУСК Xray внутри пачки: при битом конфиге чекер
-            # делит пачку пополам и снова стартует процесс. Без бюджета
-            # пачка из 128 «плохих» профилей могла висеть на стартах десятки
-            # минут (до 255 попыток по 15 с), и прогон выглядел зависшим.
+            # Ограничиваем суммарные попытки старта пачки: при битом конфиге
+            # bisect иначе может запускать Xray сотни раз по 15 секунд.
             start_deadline = batch_started + max(90.0, STARTUP_TIMEOUT * 4)
             self._check_chunk(
                 chunk, timeout, self.last_probe_stats, samples, cancel, on_result,
@@ -631,6 +630,7 @@ class BatchXrayChecker:
     # ─── Внутреннее ───
 
     def _launcher_or_default(self) -> SubprocessLauncher:
+        """Возвращает переданный launcher или создаёт стандартный."""
         if self._launcher is not None:
             return self._launcher
         return SubprocessLauncher(Settings.xray_bin())
@@ -643,6 +643,7 @@ class BatchXrayChecker:
             return
 
         def report_failed(chunk_items, error: str) -> None:
+            """Помечает все профили пачки одной ошибкой и отдаёт прогресс."""
             for key, _parsed in chunk_items:
                 result = {"ok": False, "latency": 0, "error": error, "samples": 0}
                 results[key] = result
@@ -701,6 +702,7 @@ class BatchXrayChecker:
     _last_start_error: str = ""
 
     def _xray_bin(self) -> str:
+        """Путь к Xray: из launcher, если он умеет его отдавать, иначе из настроек."""
         launcher = self._launcher_or_default()
         return getattr(launcher, "xray_bin", "") or Settings.xray_bin()
 
@@ -774,6 +776,7 @@ class BatchXrayChecker:
             return items
 
         def test_one(item):
+            """Собирает и проверяет конфиг одного профиля во временном файле."""
             key, parsed = item
             ports = self._ports.reserve(1)
             if not ports:
@@ -793,6 +796,7 @@ class BatchXrayChecker:
             return item, ok, detail
 
         def handle(item, ok, detail):
+            """Записывает результат предвалидации и возвращает «профиль годен»."""
             if ok:
                 return True
             key = item[0]
@@ -954,6 +958,7 @@ class BatchXrayChecker:
         parallel = max(1, min(parallel, len(chunk)))
 
         def run_one(key: int, port: int):
+            """Проба одного профиля через его локальный inbound."""
             if cancel and cancel.is_set():
                 return key, None  # отмена: не пишем ложный «failed»
             if sys.is_finalizing():
@@ -966,6 +971,7 @@ class BatchXrayChecker:
             return key, {"ok": ok, "latency": lat, "error": err, "samples": n}
 
         def report(key, result):
+            """Сохраняет результат пробы и вызывает колбэк прогресса."""
             results[key] = result
             if on_result:
                 try:
@@ -980,7 +986,7 @@ class BatchXrayChecker:
         try:
             futures = {
                 pool.submit(run_one, key, port): key
-                for (key, _parsed), port in zip(chunk, ports)
+                for (key, _parsed), port in zip(chunk, ports, strict=True)
             }
             for fut in as_completed(futures, timeout=limit):
                 finished.add(fut)
@@ -1020,6 +1026,7 @@ class BatchXrayChecker:
             pool.shutdown(wait=False, cancel_futures=True)
 
     def _stop(self, proc, tmp_path, log_path) -> None:
+        """Останавливает процесс пачки и удаляет временные файлы."""
         with self._proc_lock:
             if self._current_proc is proc:
                 self._current_proc = None

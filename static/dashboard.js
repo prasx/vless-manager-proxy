@@ -355,7 +355,6 @@ function renderSourceButtons(sources, unknownCount, totalCount) {
   const unknownBtn = $('#sourceUnknown');
 
   if (totalSrc <= 4) {
-    // inline buttons: show All + source buttons
     if (allBtn) allBtn.style.display = '';
     // Кнопка «Свои» есть в разметке (templates/index.html), поэтому её не создаём,
     // а только показываем при наличии прокси без источника.

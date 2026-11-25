@@ -62,6 +62,7 @@ VERDICT_RECOMMENDATIONS = {
 
 
 def _import_age_min(last_import) -> int | None:
+    """Возраст последнего импорта в минутах; None, если импорта не было."""
     if not last_import:
         return None
     from .selection import age_minutes
@@ -98,6 +99,7 @@ def _verdict(
     last_duplicates: int = 0,
     last_parsed: int = 0,
 ) -> str:
+    """Короткий вердикт источника: healthy/weak/bad/stale/broken/duplicate/empty."""
     if total <= 0:
         if last_status in _FAILED:
             return "broken"

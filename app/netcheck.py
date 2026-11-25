@@ -68,14 +68,14 @@ PROBE_URL_CANDIDATES: tuple[str, ...] = (
 
 # Каталог файлов замера скорости. Первым — Cloudflare: он отдаёт ровно
 # запрошенное число байт и стабильно доступен с большинства exit-нод.
-# Дальше — запасные, причём сначала plain HTTP: если у exit-нод режутся TLS/SNI
+# Дальше — HTTPS-зеркала, затем plain HTTP: если у exit-нод режутся TLS/SNI
 # или CONNECT-запросы, HTTPS-файлы «отвечают» мгновенной ошибкой, а HTTP-файл
 # спокойно отдаёт байты (замеру скорости TLS не нужен).
 SPEED_URL_CANDIDATES: tuple[str, ...] = (
     "https://speed.cloudflare.com/__down?bytes=10000000",
     # Российское зеркало: полезно, когда exit-нода в РФ и зарубежные CDN режутся.
     "https://speedtest.wcloud.ru/10MB",
-    # Крупный стабильный файл Google: good для гигабитных каналов, где 10MB
+    # Крупный стабильный файл Google: хорош для гигабитных каналов, где 10MB
     # заканчивается быстрее окна замера.
     "https://storage.googleapis.com/google-code-archive-downloads/"
     "v2/code.google.com/jquery-speedtest/100MB.txt",
@@ -84,10 +84,7 @@ SPEED_URL_CANDIDATES: tuple[str, ...] = (
     # HuggingFace отдаёт файл через CDN; иногда доступен там, где Cloudflare
     # уже заблокирован.
     "https://huggingface.co/apple/DiffuCoder-7B-cpGRPO/resolve/refs%2Fpr%2F16/10-MB-Test.docx",
-    # Plain HTTP: у exit-нод в РФ часто режется HTTPS по SNI, а HTTP-файл
-    # спокойно отдаёт байты — замеру скорости TLS не нужен.
-    "http://ftp.bit.nl/speedtest/10mb.bin",
-    "http://cachefly.cachefly.net/10mb.test",
+    "http://ftp.bit.nl/speedtest/10mb.bin",    "http://cachefly.cachefly.net/10mb.test",
     "http://mirror.yandex.ru/debian/ls-lR.gz",
     "http://mirror.yandex.ru/ubuntu/ls-lR.gz",
     "http://speedtest.selectel.ru/10MB",
@@ -102,7 +99,6 @@ SPEED_URL_CANDIDATES: tuple[str, ...] = (
 )
 
 DEFAULT_SPEED_URL = SPEED_URL_CANDIDATES[0]
-DEFAULT_PROBE_URL = PROBE_URL_CANDIDATES[0]
 
 # Сколько кандидатов максимум отдавать чекеру: фоллбек пробуется только у
 # упавших профилей, но каждый лишний кандидат — это лишний таймаут.
@@ -138,6 +134,7 @@ def _user_probe_candidates() -> list[str]:
 
 
 def _dedupe(urls) -> list[str]:
+    """Оставляет только http(s)-URL без пустых значений и повторов."""
     seen: set[str] = set()
     out: list[str] = []
     for u in urls:
@@ -271,6 +268,7 @@ def measure_speed_direct(url: str, window_sec: int = 10) -> dict:
     error = ""
 
     def sample(now: float) -> None:
+        """Обновляет пик скорости по окнам не короче 0.5 с."""
         nonlocal peak, sample_t, sample_total
         dt = now - sample_t
         if dt < 0.5:
@@ -349,6 +347,7 @@ def _sort_results(results: list[dict]) -> list[dict]:
     """Лучшие первыми: 204, затем прочие ответы, затем ошибки; внутри — по ms."""
 
     def key(r: dict):
+        """Ключ сортировки: 204, затем успешные, затем ошибки, внутри — по ms."""
         status = r.get("status") or 0
         if not r.get("ok"):
             tier = 3

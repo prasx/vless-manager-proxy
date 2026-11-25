@@ -46,6 +46,7 @@ class XrayConfigurator:
     APPLY_LOCK_TIMEOUT = 120.0
 
     def __init__(self):
+        """Инициализирует блокировки и кэши состояния Xray."""
         self._apply_lock = threading.Lock()
         self._last_restart_time = 0.0
         self._restart_cooldown = 20  # seconds
@@ -265,6 +266,7 @@ class XrayConfigurator:
 
     @staticmethod
     def _api_config() -> dict:
+        """Outbound-заглушка для API и список сервисов Xray."""
         return {"tag": "api", "services": ["HandlerService", "RoutingService", "StatsService"]}
 
     @staticmethod
@@ -494,11 +496,6 @@ class XrayConfigurator:
         return removed
 
     @staticmethod
-    def _remove_outbound(tag) -> bool:
-        """Совместимость: удаляет один outbound, возвращает успех."""
-        return bool(XrayConfigurator._remove_outbounds([tag]))
-
-    @staticmethod
     def add_outbound(ob):
         """Добавляет один outbound в Xray через API (26.x: ado)."""
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
@@ -599,6 +596,7 @@ class XrayConfigurator:
             return dict(self._last_apply)
 
     def _record_apply(self, **fields) -> None:
+        """Сохраняет последний результат apply для API/UI."""
         fields.setdefault("ts", time.time())
         with self._apply_state_lock:
             self._last_apply = dict(fields)
@@ -760,6 +758,7 @@ class XrayConfigurator:
             return {"ok": False, "status": "exception", "message": msg}
 
     def _apply_all_impl_safe(self):
+        """Пишет конфиг/подписку и синхронизирует outbound; не бросает наружу."""
         cfg_path = xray_config_path()
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -796,6 +795,7 @@ class XrayConfigurator:
         desired_tags = {o["tag"] for o in limited_obs}
 
         def finish(status, ok, message, *, live=None, config_newer=False, **extra):
+            """Формирует и сохраняет итоговое состояние apply."""
             live_set = set(live or [])
             state = {
                 "ok": bool(ok),

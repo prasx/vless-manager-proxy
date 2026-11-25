@@ -4,7 +4,6 @@
 Точка входа: инициализирует БД, запускает фоновые задачи и стартует сервер.
 """
 
-import os
 import signal
 import sys
 import threading
@@ -17,7 +16,7 @@ from app.xray_configurator import xray_configurator
 from app.proxy_manager import proxy_manager
 
 
-def _on_shutdown(signum, frame):
+def _on_shutdown(_signum, _frame):
     """Завершение процесса: убить дочерние Xray и выйти.
 
     proxy_manager тоже ставит обработчик SIGTERM (чистка дочерних процессов),

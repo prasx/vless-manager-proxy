@@ -87,6 +87,7 @@ class ProxyManager:
     """Тестирование прокси, обновление статусов, фоновый циклический чекер."""
 
     def __init__(self, checker: BatchXrayChecker | None = None):
+        """Создаёт менеджер с общей блокировкой прогонов и резервером портов."""
         # Эксклюзивная блокировка прогона: только один замер за раз.
         self._run_lock = threading.Lock()
         self._last_run_db = 0.0
@@ -139,19 +140,21 @@ class ProxyManager:
         """Идёт ли сейчас какой-либо замер (эксклюзивный прогон)."""
         return self._run_lock.locked()
 
-    def _signal_handler(self, signum, frame):
+    def _signal_handler(self, _signum, _frame):
+        """Останавливает дочерние Xray и завершает процесс по SIGTERM/SIGINT."""
         add_log("INFO", "SIGTERM received, shutting down...")
         self.kill_all_xray_children()
         self._shutdown.set()
         sys.exit(0)
 
     def kill_all_xray_children(self):
+        """Убивает все дочерние процессы Xray, запущенные панелью."""
         try:
             self._checker.kill_current()
         except Exception:
             pass
         with self._xray_children_lock:
-            for pid, proc in list(self._xray_children.items()):
+            for pid, _proc in list(self._xray_children.items()):
                 try:
                     os.killpg(pid, signal.SIGTERM)
                 except Exception:
@@ -171,8 +174,6 @@ class ProxyManager:
     def _xray_config(self, parsed, http_port):
         """Собирает минимальный конфиг Xray для одного прокси (http-inbound)."""
         return {
-            # warning: если exit-нода не отдала ответ, в логе Xray будет причина
-            # («failed to read response from host: …») — она попадает в panel-лог.
             "log": {"loglevel": "warning"},
             "inbounds": [
                 {
@@ -209,9 +210,7 @@ class ProxyManager:
             with tmp:
                 json.dump(config, tmp)
             tmp_path = tmp.name
-            # Лог Xray (warning) в файл: если замер не получился, в нём будет
-            # причина («failed to read response from host: connection reset»),
-            # а не только «no data». stdout+stderr — в один файл.
+            # Причину отказа пишем в лог Xray: иначе останется только «no data».
             log = tempfile.NamedTemporaryFile(
                 mode="w", suffix=".log", delete=False, prefix="xray-speed-"
             )
@@ -297,10 +296,12 @@ class ProxyManager:
             self._last_speed_log = ""
 
     def _track_xray(self, proc):
+        """Запоминает дочерний Xray для аварийной остановки."""
         with self._xray_children_lock:
             self._xray_children[proc.pid] = proc
 
     def _untrack_xray(self, proc):
+        """Убирает дочерний Xray из списка после завершения."""
         with self._xray_children_lock:
             self._xray_children.pop(proc.pid, None)
 
@@ -488,6 +489,7 @@ class ProxyManager:
         done_total = 0
 
         def handle(key, ok, lat=0, err=""):
+            """Записывает результат и обновляет счётчики стадии."""
             nonlocal ok_total, done_total
             self._record_result(key, ok, lat, err)
             done_total += 1
@@ -525,6 +527,7 @@ class ProxyManager:
         # 2. TCP-префильтр: мёртвый server:port отсекается за 1–2 с без Xray.
         if Settings.tcp_prefilter() and items:
             def prefilter_progress(done, total):
+                """Показывает прогресс TCP-префильтра в статусе и логе."""
                 self._set_current(f"TCP {done}/{total}")
                 if done % 500 == 0 or done == total:
                     add_log("DEBUG", f"TCP-префильтр: {done}/{total}")
@@ -544,6 +547,7 @@ class ProxyManager:
         )
 
         def on_result(key, result):
+            """Адаптирует результат чекера к общему обработчику стадии."""
             handle(key, result["ok"], result["latency"], result["error"])
 
         try:
@@ -629,6 +633,7 @@ class ProxyManager:
         )
 
         def is_ip(host: str) -> bool:
+            """True, если host — IP-литерал, а не домен."""
             try:
                 ip_address((host or "").strip().strip("[]"))
                 return True
@@ -636,6 +641,7 @@ class ProxyManager:
                 return False
 
         def check_one(item):
+            """Быстрая TCP-проверка одного IP-литерала с повторами."""
             key, parsed = item
             host = parsed.get("server") or ""
             if not is_ip(host):
@@ -804,6 +810,7 @@ class ProxyManager:
         result = healthy or candidates
 
         def rank(u: str) -> int:
+            """Приоритет URL: текущий/override, затем HTTP, затем HTTPS."""
             if u in (self._speed_url_override, self._speed_url):
                 return 0
             # HTTP-файлы раньше HTTPS: у многих exit-нод TLS режется, и
@@ -871,6 +878,7 @@ class ProxyManager:
             sock.settimeout(req_timeout)
 
             def read_headers() -> bytes:
+                """Читает HTTP-заголовки ответа до пустой строки."""
                 data = b""
                 while b"\r\n\r\n" not in data:
                     chunk = sock.recv(4096)
@@ -1139,6 +1147,7 @@ class ProxyManager:
         zero_warned = False
 
         def maybe_apply():
+            """Применяет накопленные замеры, если прошло достаточно времени."""
             nonlocal last_apply, changed_since_apply
             if not (apply_incremental and changed_since_apply):
                 return
@@ -1474,6 +1483,7 @@ class ProxyManager:
             add_log("INFO", f"Auto-cleanup: deleted {deleted} failed proxies (3+ fails)")
 
     def _speed_enabled_for(self, working) -> bool:
+        """True, если стадию скорости вообще нужно запускать для этих профилей."""
         if Settings.get("speed_test_enabled", "true") != "true":
             return False
         if int(Settings.get("speed_test_max", "8")) <= 0:
@@ -1483,6 +1493,7 @@ class ProxyManager:
         return True
 
     def _working_rows(self, row_ids):
+        """Рабочие профили из списка id, лучшие по пингу первыми."""
         if not row_ids:
             return []
         placeholders = ",".join("?" * len(row_ids))
@@ -1630,6 +1641,7 @@ class ProxyManager:
             return False
 
         def worker():
+            """Запускает конвейер в отдельном потоке и освобождает блокировку."""
             try:
                 self._execute_pipeline(
                     rows, label,

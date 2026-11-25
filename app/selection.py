@@ -38,14 +38,15 @@ fallback в порядке «наименее плохой»: замеренны
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from .checker import validate_link
 from .db import Settings, db_q
 from .utils import now_utc
 from .vless import parse_vless
 
-# Коды стран в блок-листе сравниваются без учёта регистра.
+# Ограничение на список исключённых профилей в ответе: не раздувать JSON
+# многотысячными причинами отказа.
 _MAX_EXCLUDED_SAMPLES = 300
 
 
@@ -183,6 +184,7 @@ def config_rows(limit: int = 0) -> Selection:
     excluded: list[dict] = []
 
     def exclude(row, reason: str, detail: str, age=None):
+        """Добавляет профиль в отсеянные с причиной и метаданными."""
         src = row.get("source_id")
         excluded.append(
             {
@@ -304,6 +306,7 @@ def config_rows(limit: int = 0) -> Selection:
     priority = _source_priority()
 
     def sort_key(item: dict):
+        """Сортировка: tier, скорость, качество источника, пинг, id."""
         return (
             item["tier"],
             -item["speed_kbps"],

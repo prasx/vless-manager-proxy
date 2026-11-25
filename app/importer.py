@@ -44,8 +44,6 @@ STATUS_ERROR = "error"
 
 # Статусы, при которых источник реально ответил (можно обновлять last_import)
 REACHED_STATUSES = {STATUS_OK, STATUS_EMPTY, STATUS_NOT_MODIFIED}
-# Статусы, при которых сеть до источника не дошла
-OFFLINE_STATUSES = {STATUS_NETWORK_ERROR}
 
 STATUS_LABELS = {
     STATUS_OK: "ок",
@@ -130,9 +128,9 @@ def _etag_path() -> Path:
 
 
 def _etag_file(url: str) -> Path:
-    # Имя файла — стабильный sha1 от URL. Прежний str(hash(url)) зависел от
-    # рандомизации хешей в Python: после каждого перезапуска процесса кеш
-    # промахивался, и источники скачивались заново.
+    """Путь к файлу ETag-кеша для URL (стабильный SHA-1 от адреса)."""
+    # Прежний str(hash(url)) зависел от рандомизации хешей в Python: после
+    # перезапуска процесса кеш промахивался и источники скачивались заново.
     key = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
     return _etag_path() / f"etag_{key}.json"
 
@@ -151,6 +149,7 @@ def _read_cache(url: str) -> dict:
 
 
 def _write_cache(url: str, etag: str, last_modified: str) -> None:
+    """Сохраняет ETag/Last-Modified источника; пустые заголовки не пишет."""
     if not etag and not last_modified:
         return
     try:
@@ -169,6 +168,7 @@ class FetchError(Exception):
     """Сбой загрузки с классификацией: сеть, HTTP или некорректный URL."""
 
     def __init__(self, kind: str, message: str, http_status: int | None = None):
+        """Сохраняет категорию сбоя, текст и HTTP-код (если был)."""
         self.kind = kind
         self.message = message
         self.http_status = http_status
@@ -385,6 +385,7 @@ def _extract_vless_links(text: str) -> list[str]:
 
 
 def _dedupe_links(links: list[str]) -> list[str]:
+    """Удаляет повторные ссылки, сохраняя порядок появления."""
     seen: set[str] = set()
     out: list[str] = []
     for link in links:
@@ -555,6 +556,7 @@ def import_url(url: str, source_id=None, **kwargs) -> dict:
 
 def _import_url(url: str, source_id=None, *, label: str = "", use_etag: bool = True,
                 allow_curl: bool = True, timeout: int = IMPORT_TIMEOUT) -> dict:
+    """Скачивает URL и разбирает ссылки; внутренний путь без финального _finish."""
     started = time.monotonic()
     url = (url or "").strip().strip('"').strip("'")
     result = _result(source_id, label or url[:60], "url", STATUS_OK)
@@ -617,6 +619,7 @@ def import_txt(source_id, **kwargs) -> dict:
 
 
 def _import_txt(source_id, *, label: str = "") -> dict:
+    """Импортирует TXT-источник из БД без финального _finish."""
     started = time.monotonic()
     result = _result(source_id, label, "txt", STATUS_OK)
     rows = db_q("SELECT name, content FROM sources WHERE id=?", (source_id,))
@@ -1010,6 +1013,7 @@ def diagnose_url(url: str, *, timeout: int = 8) -> dict:
 
 
 def _curl_available() -> bool:
+    """True, если в PATH есть curl (резервный загрузчик для сложных сетей)."""
     import shutil
 
     return shutil.which("curl") is not None
