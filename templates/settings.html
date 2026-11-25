@@ -384,7 +384,7 @@
             <input type="text" id="speedTestUrl" class="input" placeholder="https://speed.cloudflare.com/__down?bytes=10000000" style="flex:1;min-width:200px" spellcheck="false">
             <button type="button" class="btn btn-sm" id="speedUrlTestBtn" onclick="testSpeedUrls(this)">Тест URL</button>
           </div>
-          <span class="tuning-comment">10MB-файл; если основной недоступен, берутся запасные (Cloudflare → CacheFly → Google)</span>
+          <span class="tuning-comment">10MB-файл; если основной недоступен, берутся запасные (Cloudflare → wcloud → Google 100MB/10MB → HuggingFace)</span>
         </div>
         <div class="tuning-item">
           <span class="tuning-label">Длительность одного профиля</span>

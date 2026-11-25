@@ -362,18 +362,24 @@ class TestApiSmoke(ApiTestCase):
     def test_speedtest_direct_route(self):
         fake = {
             "ok": True, "avg_kbps": 12000, "max_kbps": 18000,
-            "bytes": 1500000, "elapsed": 10.0, "url": "http://x.test/10mb",
+            "bytes": 1500000, "elapsed": 10.0,
+            "url": "https://speed.cloudflare.com/__down?bytes=10000000",
         }
         with mock.patch(
             "app.routes.api.proxy_manager.speedtest_direct", return_value=fake
         ) as fn:
             r = self.client.post(
                 "/api/speedtest/direct",
-                json={"url": "http://x.test/10mb", "window": 10},
+                json={
+                    "url": "https://speed.cloudflare.com/__down?bytes=10000000",
+                    "window": 10,
+                },
             )
         self.assertEqual(r.status_code, 200, r.get_json())
         self.assertEqual(r.get_json()["avg_kbps"], 12000)
-        fn.assert_called_once_with("http://x.test/10mb", 10)
+        fn.assert_called_once_with(
+            "https://speed.cloudflare.com/__down?bytes=10000000", 10
+        )
 
     def test_ports_settings_roundtrip_and_validation(self):
         r = self.client.post(

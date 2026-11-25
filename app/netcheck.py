@@ -73,6 +73,17 @@ PROBE_URL_CANDIDATES: tuple[str, ...] = (
 # спокойно отдаёт байты (замеру скорости TLS не нужен).
 SPEED_URL_CANDIDATES: tuple[str, ...] = (
     "https://speed.cloudflare.com/__down?bytes=10000000",
+    # Российское зеркало: полезно, когда exit-нода в РФ и зарубежные CDN режутся.
+    "https://speedtest.wcloud.ru/10MB",
+    # Крупный стабильный файл Google: good для гигабитных каналов, где 10MB
+    # заканчивается быстрее окна замера.
+    "https://storage.googleapis.com/google-code-archive-downloads/"
+    "v2/code.google.com/jquery-speedtest/100MB.txt",
+    "https://storage.googleapis.com/google-code-archive-downloads/"
+    "v2/code.google.com/jquery-speedtest/10MB.txt",
+    # HuggingFace отдаёт файл через CDN; иногда доступен там, где Cloudflare
+    # уже заблокирован.
+    "https://huggingface.co/apple/DiffuCoder-7B-cpGRPO/resolve/refs%2Fpr%2F16/10-MB-Test.docx",
     # Plain HTTP: у exit-нод в РФ часто режется HTTPS по SNI, а HTTP-файл
     # спокойно отдаёт байты — замеру скорости TLS не нужен.
     "http://ftp.bit.nl/speedtest/10mb.bin",
@@ -82,9 +93,12 @@ SPEED_URL_CANDIDATES: tuple[str, ...] = (
     "http://speedtest.selectel.ru/10MB",
     "http://speedtest.tele2.net/10MB.zip",
     "http://proof.ovh.net/files/10Mb.dat",
-    "https://storage.googleapis.com/google-code-archive-downloads/"
-    "v2/code.google.com/jquery-speedtest/10MB.txt",
     "http://www.samplefiles.online/files/sample-10mb.bin",
+    # Подписанная ссылка Google Drive: может истечь, поэтому последняя.
+    "https://drive.usercontent.google.com/download"
+    "?id=0B1MVW1mFO2zmdGhyaUJESWROQkE&export=download&authuser=0&confirm=t"
+    "&uuid=4e0b9304-fdc7-4051-91a2-12d7292a0775"
+    "&at=AMrWOn2eo2kdmlP3RLq9A156mIRU%3A1795592165521",
 )
 
 DEFAULT_SPEED_URL = SPEED_URL_CANDIDATES[0]
