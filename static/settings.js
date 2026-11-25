@@ -470,8 +470,14 @@ function updateConfigStatus(status) {
     el.style.color = 'var(--text-muted)';
     return;
   }
-  el.textContent = `узлов в конфиге: ${active}, кандидатов: ${candidates} (рабочих ${working}, замерено ${measured})${fallback}`;
-  el.style.color = status.config_fallback ? 'var(--orange)' : 'var(--green)';
+  const live = status.nodes_live != null ? status.nodes_live : active;
+  const setsState = status.config_on_disk_newer
+    ? ' · конфиг на диске новее Xray'
+    : (status.nodes_mismatch ? ' · наборы не совпадают' : '');
+  el.textContent = `узлов в конфиге: ${active} (живых ${live}), кандидатов: ${candidates} (рабочих ${working}, замерено ${measured})${fallback}${setsState}`;
+  el.style.color = status.config_on_disk_newer
+    ? 'var(--red)'
+    : (status.nodes_mismatch || status.config_fallback ? 'var(--orange)' : 'var(--green)');
 }
 
 function updateSpeedTestDependants() {
@@ -978,9 +984,51 @@ function renderXrayStatus(s) {
     ? '<span class="badge badge-green">API доступен</span>'
     : '<span class="badge badge-muted">API недоступен</span>';
   const sd = s.systemd_active ? '<span class="badge badge-muted">systemd активен</span>' : '';
-  const nodes = (s.active_outbounds || []).filter(t => String(t).startsWith('node'));
-  const nodesText = nodes.length ? `<span class="badge badge-muted">узлов ${nodes.length}</span>` : '';
-  el.innerHTML = `<span class="status-chips">${run}${api}${sd}${nodesText}</span>`;
+
+  const desired = s.desired_nodes || [];
+  const live = s.live_nodes || [];
+  const disk = s.disk_nodes || [];
+  const onlyDesired = s.desired_only || [];
+  const onlyLive = s.live_only || [];
+  const newer = Boolean(s.config_on_disk_newer);
+  const mismatch = Boolean(s.nodes_mismatch);
+  const liveKnown = Boolean(s.live_known);
+
+  let setsBadge = '';
+  if (newer) {
+    setsBadge = `<span class="badge badge-red" title="${escapeHtml(s.apply_message || '')}">диск новее Xray: желаемых ${desired.length}, живых ${live.length}</span>`;
+  } else if (mismatch) {
+    setsBadge = `<span class="badge badge-orange">расхождение +${onlyDesired.length} / -${onlyLive.length}</span>`;
+  } else if (liveKnown) {
+    setsBadge = `<span class="badge badge-muted">желаемых ${desired.length}, живых ${live.length}</span>`;
+  } else {
+    setsBadge = '<span class="badge badge-muted">живой набор: нет счётчиков</span>';
+  }
+  const applyStatus = s.apply_status
+    ? `<span class="badge ${newer || mismatch ? 'badge-orange' : 'badge-muted'}" title="${escapeHtml(s.apply_message || '')}">apply: ${escapeHtml(s.apply_status)}</span>`
+    : '';
+  el.innerHTML = `<span class="status-chips">${run}${api}${sd}${setsBadge}${applyStatus}</span>`;
+
+  const sets = $('xraySets');
+  if (sets) {
+    const hasSets = desired.length || live.length || disk.length;
+    sets.hidden = !hasSets;
+    if (hasSets) {
+      const tags = arr => arr.length ? arr.map(escapeHtml).join(', ') : '—';
+      const diff = (onlyDesired.length || onlyLive.length)
+        ? `<div class="daemon-set-row"><span>только в желаемых</span><span class="daemon-set-tags">${tags(onlyDesired)}</span></div>`
+          + `<div class="daemon-set-row"><span>только в живых</span><span class="daemon-set-tags">${tags(onlyLive)}</span></div>`
+        : '';
+      sets.innerHTML = `<details ${newer || mismatch ? 'open' : ''}>
+        <summary>Наборы outbound: желаемые ${desired.length}, живые ${live.length}, на диске ${disk.length}</summary>
+        <div class="daemon-set-row"><span>желаемые</span><span class="daemon-set-tags">${tags(desired)}</span></div>
+        <div class="daemon-set-row"><span>живые</span><span class="daemon-set-tags">${liveKnown ? tags(live) : 'неизвестны (statsquery пуст)'}</span></div>
+        <div class="daemon-set-row"><span>на диске</span><span class="daemon-set-tags">${tags(disk)}</span></div>
+        ${diff}
+      </details>`;
+    }
+  }
+
   const btnStart = $('btnXrayStart');
   const btnStop = $('btnXrayStop');
   if (btnStart) btnStart.style.display = s.running ? 'none' : '';

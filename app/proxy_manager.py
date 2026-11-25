@@ -1399,8 +1399,16 @@ class ProxyManager:
 
             if apply_config and not self._cancel.is_set():
                 from .xray_configurator import xray_configurator
-                xray_configurator.apply_all(blocking=apply_blocking)
-                add_log("INFO", f"Config applied after {label}")
+                applied = xray_configurator.apply_all(blocking=apply_blocking)
+                state = xray_configurator.apply_state()
+                if applied and not state.get("config_on_disk_newer"):
+                    add_log("INFO", f"Config applied after {label}")
+                else:
+                    detail = state.get("message") or state.get("status") or "живой Xray не подтверждён"
+                    add_log(
+                        "WARN",
+                        f"Config written but live Xray not confirmed after {label}: {detail}",
+                    )
 
             self._finish_run(label)
             return self._check_stats
@@ -1442,6 +1450,14 @@ class ProxyManager:
         from .xray_configurator import xray_configurator
 
         if xray_configurator.apply_all(blocking=False):
+            state = xray_configurator.apply_state()
+            if state.get("config_on_disk_newer"):
+                add_log(
+                    "WARN",
+                    f"Конфиг обновлён на диске ({reason}), но живой Xray не подтверждён: "
+                    f"{state.get('message') or state.get('status')}",
+                )
+                return False
             add_log("INFO", f"Конфиг и подписка обновлены на ходу ({reason})")
             return True
         return False

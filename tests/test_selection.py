@@ -323,6 +323,22 @@ class TestOutboundTags(TempDBTestCase):
         finally:
             xr._apply_lock.release()
 
+    def test_apply_all_blocking_lock_timeout(self):
+        """blocking=True не ждёт lock вечно и оставляет явный статус."""
+        from app.xray_configurator import XrayConfigurator
+
+        xr = XrayConfigurator()
+        xr._apply_lock.acquire()
+        try:
+            with mock.patch.object(xr, "_apply_all_impl") as impl:
+                self.assertFalse(xr.apply_all(blocking=True, timeout=0.01))
+                impl.assert_not_called()
+        finally:
+            xr._apply_lock.release()
+        state = xr.apply_state()
+        self.assertEqual(state["status"], "lock_timeout")
+        self.assertTrue(state["config_on_disk_newer"])
+
     def test_diff_sync_is_noop_when_everything_applied(self):
         from app.xray_configurator import XrayConfigurator
 

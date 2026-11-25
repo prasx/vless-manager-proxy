@@ -43,10 +43,16 @@ def _ensure_duration(val: str, default: str = "10s") -> str:
 class XrayConfigurator:
     """Управление конфигурацией Xray: генерация, применение через API, диагностика."""
 
+    APPLY_LOCK_TIMEOUT = 120.0
+
     def __init__(self):
         self._apply_lock = threading.Lock()
         self._last_restart_time = 0.0
         self._restart_cooldown = 20  # seconds
+        # Последний результат применения: нужен UI, чтобы показать
+        # «конфиг на диске новее живого Xray», а не терять это в логах.
+        self._apply_state_lock = threading.Lock()
+        self._last_apply: dict = {}
         # Снимок применённого набора outbound уже снят (см. _init_applied_state).
         self._state_ready = False
         self._stats_cache = {"data": None, "ts": 0.0}
@@ -574,6 +580,29 @@ class XrayConfigurator:
         except Exception:
             return set()
 
+    def disk_node_tags(self) -> set[str]:
+        """Публичный снимок node-тегов из конфига на диске (для API/UI)."""
+        return self._disk_node_tags()
+
+    def desired_node_tags(self) -> set[str]:
+        """node-теги, которые должны быть в конфиге по текущей политике отбора."""
+        try:
+            sel = self.select_nodes(Settings.max_active_proxies())
+            return {node_tag(r["id"]) for r in sel.rows}
+        except Exception as e:  # noqa: BLE001
+            add_log("DEBUG", f"Desired outbound state failed: {e}")
+            return set()
+
+    def apply_state(self) -> dict:
+        """Последний результат apply_all для API/UI."""
+        with self._apply_state_lock:
+            return dict(self._last_apply)
+
+    def _record_apply(self, **fields) -> None:
+        fields.setdefault("ts", time.time())
+        with self._apply_state_lock:
+            self._last_apply = dict(fields)
+
     def known_node_tags(self) -> set[str]:
         """Набор node-тегов, который, по нашим данным, уже живёт в Xray.
 
@@ -664,26 +693,54 @@ class XrayConfigurator:
 
     # ─── Apply config ───
 
-    def apply_all(self, blocking=False):
+    def apply_all(self, blocking=False, timeout: float | None = None):
         """Пишет полный конфиг на диск, прокси добавляет через Xray API.
 
-        blocking=True — ждать освобождения _apply_lock (для финального apply после тестов).
+        blocking=True — ждать освобождения _apply_lock, но не дольше
+        APPLY_LOCK_TIMEOUT (120 с). Раньше ожидание было вечным: зависший
+        промежуточный apply останавливал финальный и весь прогон.
         blocking=False — пропустить, если другой apply уже выполняется.
-        Возвращает True, если конфиг реально пересобран и применён.
+        Возвращает True, если конфиг обработан и живой набор подтверждён.
         """
-        if not self._apply_lock.acquire(blocking=blocking):
-            add_log("WARN", "Config rebuild already in progress — skipping")
+        wait = self.APPLY_LOCK_TIMEOUT if timeout is None else max(0.0, float(timeout))
+        if blocking:
+            acquired = self._apply_lock.acquire(timeout=wait)
+        else:
+            acquired = self._apply_lock.acquire(blocking=False)
+        if not acquired:
+            if blocking:
+                msg = (
+                    f"Config rebuild: не дождался lock {wait:.0f}с — "
+                    "конфиг на диске мог обновиться, живой Xray не подтверждён"
+                )
+                status = "lock_timeout"
+            else:
+                msg = "Config rebuild already in progress — skipping"
+                status = "busy"
+            add_log("WARN", msg)
+            prev = self.apply_state()
+            self._record_apply(
+                ok=False,
+                status=status,
+                message=msg,
+                config_on_disk_newer=(status == "lock_timeout"),
+                desired_tags=prev.get("desired_tags", []),
+                live_tags=prev.get("live_tags", []),
+                disk_tags=prev.get("disk_tags", []),
+            )
             return False
         try:
-            self._apply_all_impl()
-            return True
+            result = self._apply_all_impl()
+            if not isinstance(result, dict):
+                result = {"ok": True, "status": "applied"}
+            return bool(result.get("ok", False))
         finally:
             self._apply_lock.release()
 
     def _apply_all_impl(self):
         """Внутренняя реализация применения конфига (без блокировки)."""
         try:
-            self._apply_all_impl_safe()
+            return self._apply_all_impl_safe()
         except Exception as e:
             hint = ""
             if isinstance(e, PermissionError):
@@ -692,7 +749,15 @@ class XrayConfigurator:
                     f"на {xray_config_path()} (панель должна писать туда, откуда "
                     f"Xray читает конфиг)"
                 )
-            add_log("ERROR", f"Config rebuild failed: {e}{hint}")
+            msg = f"Config rebuild failed: {e}{hint}"
+            add_log("ERROR", msg)
+            self._record_apply(
+                ok=False,
+                status="exception",
+                message=msg,
+                config_on_disk_newer=True,
+            )
+            return {"ok": False, "status": "exception", "message": msg}
 
     def _apply_all_impl_safe(self):
         cfg_path = xray_config_path()
@@ -728,41 +793,152 @@ class XrayConfigurator:
                 f"GeoSite rules active ({len(geosite_rules_list)}): {', '.join(domains)}",
             )
 
+        desired_tags = {o["tag"] for o in limited_obs}
+
+        def finish(status, ok, message, *, live=None, config_newer=False, **extra):
+            live_set = set(live or [])
+            state = {
+                "ok": bool(ok),
+                "status": status,
+                "message": message,
+                "desired_tags": sorted(desired_tags),
+                "live_tags": sorted(live_set),
+                "disk_tags": sorted(self._disk_node_tags()),
+                "config_on_disk_newer": bool(config_newer),
+                "live_unknown": not live_set,
+                **extra,
+            }
+            self._record_apply(**state)
+            return state
+
         if not self.api_ok():
-            self._write_and_restart(cfg_path, max_active, selection=sel)
-            return
+            res = self._write_and_restart(cfg_path, max_active, selection=sel)
+            live = self.live_node_tags()
+            state = finish(
+                res.get("status", "restarted" if res.get("ok") else "restart_failed"),
+                bool(res.get("ok")),
+                res.get("message", ""),
+                live=live,
+                config_newer=bool(res.get("config_on_disk_newer")),
+                applied=res.get("applied", 0),
+                desired=len(desired_tags),
+            )
+            return state
 
         # Cooldown после рестарта: не дёргаем API, даём Xray устаканиться
         since_restart = time.time() - self._last_restart_time
         if since_restart < self._restart_cooldown:
-            add_log(
-                "INFO",
-                f"Restart cooldown ({self._restart_cooldown - since_restart:.0f}s left) — API hot-reload deferred",
+            live = self.live_node_tags()
+            same = bool(live) and live == desired_tags
+            msg = (
+                f"Restart cooldown ({self._restart_cooldown - since_restart:.0f}s left) — "
+                "API hot-reload deferred"
             )
-            return
+            add_log("WARN" if desired_tags and not same else "INFO", msg)
+            if desired_tags and not same:
+                add_log(
+                    "WARN",
+                    "Config on disk is newer than the live Xray set: "
+                    f"desired {len(desired_tags)}, live {len(live)} — "
+                    "will retry after cooldown",
+                )
+            return finish(
+                "cooldown",
+                same or not desired_tags,
+                msg,
+                live=live,
+                config_newer=bool(desired_tags and not same),
+            )
 
         result = self._sync_outbounds(limited_obs)
-        if result["attempted"] == 0 and result["removed"] == 0:
+        live = self.live_node_tags()
+        live_known = bool(live)
+        failed = result["failed"]
+        added = result["added"]
+        attempted = result["attempted"]
+        removed = result["removed"]
+
+        if attempted == 0 and removed == 0:
+            if live_known and live != desired_tags:
+                msg = (
+                    "Outbound API reported no changes, но живой набор отличается: "
+                    f"желаемых {len(desired_tags)}, живых {len(live)}"
+                )
+                add_log("WARN", msg)
+                return finish(
+                    "live_mismatch", False, msg, live=live, config_newer=True,
+                    added=added, failed=failed, attempted=attempted,
+                )
             add_log("DEBUG", f"All {result['total']} outbounds already in sync, no API calls needed")
-            return
-        if result["failed"]:
-            add_log(
-                "WARN",
-                f"Only {result['added']}/{result['attempted']} outbounds added via API — "
-                f"{len(result['failed'])} останутся в силе после рестарта Xray",
+            return finish(
+                "in_sync", True, "All outbounds already in sync",
+                live=live, config_newer=False, added=added, failed=failed,
+                attempted=attempted,
             )
+
+        if failed:
+            msg = (
+                f"Only {added}/{attempted} outbounds added via API — "
+                f"{len(failed)} останутся в силе после рестарта Xray"
+            )
+            add_log("WARN", msg)
             # Если живых node-outbound не видно вовсе, Xray мог стартовать с пустым
             # конфигом: один рестарт применяет конфиг с диска. Не чаще раза в 5 мин,
             # чтобы не устраивать цикл рестартов.
-            if not self.live_node_tags() and time.time() - self._last_restart_time > 300:
+            restarted = False
+            if not live and time.time() - self._last_restart_time > 300:
                 add_log("WARN", "No live node outbounds visible — restarting Xray to apply config from disk")
-                self.restart_via_systemd()
-            return
-        add_log(
-            "INFO",
-            f"Applied outbounds via API: +{result['added']} / -{result['removed']} "
+                restarted = self.restart_via_systemd()
+                live = self.live_node_tags()
+            if restarted and live:
+                return finish(
+                    "restarted", True, "Xray restarted after partial API apply",
+                    live=live, config_newer=False, added=added, failed=failed,
+                    attempted=attempted,
+                )
+            if restarted:
+                return finish(
+                    "restarted", True,
+                    "Xray restarted after partial API apply; live set not visible yet",
+                    live=live, config_newer=False, added=added, failed=failed,
+                    attempted=attempted,
+                )
+            add_log(
+                "WARN",
+                "Config on disk is newer than the live Xray set: "
+                f"desired {len(desired_tags)}, live {len(live)}, failed "
+                f"{len(failed)} — нужен рестарт или повторный apply",
+            )
+            return finish(
+                "partial", False, msg, live=live, config_newer=True,
+                added=added, failed=failed, attempted=attempted,
+            )
+
+        if live_known and live != desired_tags:
+            msg = (
+                "API применил изменения, но живой набор всё ещё отличается: "
+                f"желаемых {len(desired_tags)}, живых {len(live)}"
+            )
+            add_log("WARN", msg)
+            add_log(
+                "WARN",
+                "Config on disk is newer than the live Xray set — "
+                "restart Xray or apply again",
+            )
+            return finish(
+                "live_mismatch", False, msg, live=live, config_newer=True,
+                added=added, failed=failed, attempted=attempted,
+            )
+
+        msg = (
+            f"Applied outbounds via API: +{added} / -{removed} "
             f"(total {result['total']}, измеренных "
-            f"{sum(1 for r in sel.rows if r.get('tier') == 1)})",
+            f"{sum(1 for r in sel.rows if r.get('tier') == 1)})"
+        )
+        add_log("INFO", msg)
+        return finish(
+            "applied", True, msg, live=live, config_newer=False,
+            added=added, failed=failed, attempted=attempted,
         )
 
     def _write_and_restart(self, cfg_path, max_active, attempt=1, skip_geosite=False, selection=None):
@@ -780,25 +956,52 @@ class XrayConfigurator:
             f"(working {sel.counts.get('working_total', 0)}, годных {sel.counts.get('eligible', 0)})",
         )
         if applied == 0:
-            return
+            msg = (
+                "Config written with 0 node outbounds — Xray NOT restarted; "
+                "старый живой набор остаётся, конфиг на диске новее"
+            )
+            add_log("WARN", msg)
+            return {
+                "ok": False,
+                "status": "empty_config",
+                "message": msg,
+                "applied": 0,
+                "config_on_disk_newer": True,
+            }
         add_log("INFO", "Restarting Xray to enable API services...")
-        self.restart_via_systemd()
+        restart_ok = self.restart_via_systemd()
         self._last_restart_time = time.time()
         # Ждём и проверяем, взлетел ли Xray (с повторными попытками)
         for wait in (5, 10, 15):
             time.sleep(wait)
             if self.api_ok():
-                return
+                return {
+                    "ok": True,
+                    "status": "restarted",
+                    "message": "Xray restarted with config from disk",
+                    "applied": applied,
+                    "config_on_disk_newer": False,
+                }
         if rule_count > 0 and attempt < 2:
             add_log(
                 "WARN",
                 "Xray failed to start with GeoSite rules — retrying without them",
             )
-            self._write_and_restart(
+            return self._write_and_restart(
                 cfg_path, max_active, attempt=2, skip_geosite=True, selection=sel
             )
-        else:
-            self._log_systemd_xray_error()
+        self._log_systemd_xray_error()
+        msg = (
+            "Xray did not come up with the config from disk"
+            if restart_ok else "systemctl restart xray failed"
+        )
+        return {
+            "ok": False,
+            "status": "restart_failed",
+            "message": msg,
+            "applied": applied,
+            "config_on_disk_newer": True,
+        }
 
 
     @staticmethod

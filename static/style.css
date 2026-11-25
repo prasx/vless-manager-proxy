@@ -830,6 +830,28 @@ dialog.modal::backdrop { background: var(--overlay); }
   font-size: 0.8rem;
   color: var(--text-muted);
 }
+.daemon-sets {
+  margin: -4px 0 10px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+.daemon-sets summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.daemon-sets summary:hover { color: var(--text); }
+.daemon-set-row {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 6px;
+  margin-top: 4px;
+}
+.daemon-set-tags {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.7rem;
+  overflow-wrap: anywhere;
+}
 .status-chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .daemon-hint { font-size: 0.78rem; color: var(--text-muted); margin-top: 12px; line-height: 1.5; }
 .label-daemon { margin-bottom: 12px; }

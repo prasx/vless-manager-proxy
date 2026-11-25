@@ -912,6 +912,14 @@ def api_xray_status():
     socks_port = Settings.socks_port()
     running = api_ok or (d["systemd_active"] and d["ports"].get(str(socks_port)))
     live_nodes = sorted(xray_configurator.live_node_tags()) if api_ok else []
+    desired_nodes = sorted(xray_configurator.desired_node_tags())
+    disk_nodes = sorted(xray_configurator.disk_node_tags())
+    live_known = bool(api_ok and live_nodes)
+    nodes_mismatch = live_known and set(desired_nodes) != set(live_nodes)
+    apply_state = xray_configurator.apply_state()
+    config_newer = bool(apply_state.get("config_on_disk_newer")) or (
+        live_known and set(disk_nodes) != set(live_nodes)
+    )
     # Тем же селектором, что и генератор конфига (единственная политика допуска).
     sel = xray_configurator.select_nodes(0)
     return jsonify(
@@ -924,7 +932,20 @@ def api_xray_status():
         systemd_active=d["systemd_active"],
         config_mismatch=d["config_mismatch"],
         active_outbounds=xray_configurator.list_active_outbounds() if api_ok else [],
-        nodes_in_config=len(live_nodes),
+        nodes_in_config=len(desired_nodes),
+        nodes_live=len(live_nodes),
+        live_nodes=live_nodes,
+        desired_nodes=desired_nodes,
+        disk_nodes=disk_nodes,
+        live_known=live_known,
+        live_unknown=not live_known,
+        nodes_mismatch=nodes_mismatch,
+        desired_only=sorted(set(desired_nodes) - set(live_nodes)) if live_known else [],
+        live_only=sorted(set(live_nodes) - set(desired_nodes)) if live_known else [],
+        config_on_disk_newer=config_newer,
+        apply_state=apply_state,
+        apply_status=apply_state.get("status", ""),
+        apply_message=apply_state.get("message", ""),
         config_candidates=len(sel.rows),
         config_working=sel.counts.get("working_total", 0),
         config_measured=sum(1 for r in sel.rows if r.get("speed_kbps", 0) > 0),
@@ -1065,6 +1086,7 @@ def api_health():
         api_ok or (d["systemd_active"] and d["ports"].get(str(Settings.socks_port())))
     )
     proxy_count = db_q("SELECT COUNT(*) c FROM proxies")[0]["c"]
+    apply_state = xray_configurator.apply_state()
     return jsonify(
         status="ok" if db_ok else "error",
         db=db_ok,
@@ -1073,6 +1095,8 @@ def api_health():
             api_accessible=api_ok,
             systemd_active=d["systemd_active"],
             config_mismatch=d["config_mismatch"],
+            config_on_disk_newer=bool(apply_state.get("config_on_disk_newer")),
+            apply_status=apply_state.get("status", ""),
         ),
         proxies=dict(total=proxy_count),
     )

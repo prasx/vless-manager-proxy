@@ -49,7 +49,7 @@
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/xray/status` | Статус Xray: running, API, systemd, outbounds, `socks_port`/`http_port`/`api_port` |
+| GET | `/api/xray/status` | Статус Xray: running, API, systemd, outbounds, порты, `desired_nodes`/`live_nodes`/`disk_nodes`, `nodes_mismatch`, `config_on_disk_newer`, `apply_state` |
 | GET | `/api/xray/outbounds` | Outbound и трафик по узлам |
 | POST | `/api/xray/start`, `/api/xray/stop`, `/api/xray-restart` | Управление через systemd |
 | POST | `/api/xray/rebuild` | Пересобрать конфиг и применить |
