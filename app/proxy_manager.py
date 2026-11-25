@@ -918,7 +918,8 @@ class ProxyManager:
         # успевает проверить 5 узлов вместо 50. Ограничиваем перебор.
         profile_started = time.monotonic()
         profile_budget = max(12.0, min(45.0, window_sec * 2 + 10))
-        tls_blocked = False
+        tls_fail = 0
+        egress_fail = 0
         for url in self._speed_urls():
             if time.monotonic() - profile_started > profile_budget:
                 add_log(
@@ -927,8 +928,9 @@ class ProxyManager:
                     "остальные URL не пробую",
                 )
                 break
-            if tls_blocked and url.startswith("https://"):
-                # У exit-ноды уже рвётся TLS — не тратим бюджет на остальные https.
+            if tls_fail >= 2 and url.startswith("https://"):
+                # Два разных HTTPS-файла оборвались на TLS — не тратим бюджет
+                # на остальные https у этой exit-ноды.
                 continue
             avg, peak, error = self._measure_url_kbps(
                 http_port, url, window_sec, min_kbps, adaptive_sec
@@ -939,7 +941,7 @@ class ProxyManager:
                 self._speed_error_reasons.pop(url, None)
                 return avg, peak
             if "SSL" in error or "TLS" in error:
-                tls_blocked = True
+                tls_fail += 1
             # Домен не открылся — пробуем тот же файл по IP через CONNECT-туннель
             # (обход подмены DNS у exit-ноды; Host передаём настоящий).
             if time.monotonic() - profile_started <= profile_budget:
@@ -967,21 +969,31 @@ class ProxyManager:
                         return avg2, peak2
                     add_log("DEBUG", f"Speed: по IP тоже не вышло — {error2[:160]}")
                     error = error2 or error
-                    # Пустой ответ/сброс после CONNECT — узел не выпускает трафик
-                    # на этот IP. Остальные файлы через него тоже не пойдут:
-                    # не тратим остаток бюджета профиля.
+                    # Пустой ответ/сброс после CONNECT может быть свойством
+                    # конкретного файла/хоста. Раньше после первого такого URL
+                    # цикл обрывался, и Cloudflare/Google вообще не проверялись.
+                    # Теперь пробуем ещё один файл, и только два подряд
+                    # egress-подобных отказа считаем блокировкой egress.
                     if any(
                         m in (error2 or "").lower()
                         for m in ("пустой ответ", "connection reset", "обрыв")
                     ):
+                        egress_fail += 1
                         self._speed_failed[url] = self._speed_failed.get(url, 0) + 1
                         self._speed_error_reasons.setdefault(url, error2)
                         add_log(
                             "DEBUG",
-                            "Speed: узел закрывает соединение после CONNECT — "
-                            "похоже, egress заблокирован, пропускаю остальные файлы",
+                            f"Speed: узел закрывает соединение после CONNECT "
+                            f"({egress_fail}/2) — пробую следующий файл",
                         )
-                        break
+                        if egress_fail >= 2:
+                            add_log(
+                                "DEBUG",
+                                "Speed: два файла подряд не отдали данные после "
+                                "CONNECT — похоже, egress заблокирован",
+                            )
+                            break
+                        continue
             self._speed_failed[url] = self._speed_failed.get(url, 0) + 1
             if url not in self._speed_error_reasons:
                 reason = error or "0 байт за окно"

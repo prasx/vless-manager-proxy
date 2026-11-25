@@ -100,10 +100,9 @@ def _opener_for_port(http_port: int) -> urllib.request.OpenerDirector:
     )
 
 
-# Когда Xray не может открыть соединение к цели, его http-inbound сам отвечает
-# 503 с текстом ошибки. Такой ответ НЕ значит, что туннель жив: это ошибка
-# dial внутри Xray. Раньше любой HTTPError считался живым профилем — отсюда
-# «рабочие» узлы, у которых на самом деле не открывался ни один сайт.
+# 503 от http-inbound Xray — это ошибка dial внутри Xray, а не ответ сервиса.
+# Настоящий 503 сервиса (с текстом обслуживания) тоже не доказывает egress,
+# но не даёт повода считать узел мёртвым; отличаем по тексту dial-ошибки.
 _PROXY_DIAL_ERROR_MARKERS = (
     "failed to dial",
     "dial tcp",
@@ -114,6 +113,7 @@ _PROXY_DIAL_ERROR_MARKERS = (
     "connection reset by peer",
     "context deadline exceeded",
     "proxy dial failed",
+    "failed to read response",
 )
 
 
@@ -127,29 +127,40 @@ def probe_once(http_port: int, timeout: float, probe_url: str) -> tuple[bool, in
 
     Возвращает (ok, latency_ms, error, elapsed_sec).
 
-    Живым считается HTTP-ответ сервиса: 403/404 от точки проверки означают,
-    что туннель поднялся и трафик дошёл до сервиса. Но 5xx с текстом ошибки
-    dial (его генерирует сам Xray) — это мёртвый туннель, а не ответ сервиса.
+    Живым считается не только HTTP-ответ, но и **реально полученное тело**:
+    DPI/фейковый узел умеет отдать заголовки 200 и оборвать поток. Раньше такая
+    handshake-only нода считалась рабочей, а замер скорости у неё всегда был 0.
+    Для 204/304 тела нет по стандарту — их пропускаем без проверки.
     """
     req_timeout = max(1.0, timeout)
     started = time.time()
     try:
         resp = _opener_for_port(http_port).open(probe_url, timeout=req_timeout)
+        status = int(getattr(resp, "status", 0) or 0)
+        body = b""
         try:
-            resp.close()
-        except Exception:
-            pass
+            if status not in (204, 304):
+                # 64 байт достаточно, чтобы отличить живой поток от одних
+                # заголовков; полный ответ для проверки не нужен.
+                body = resp.read(64)
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+        if status not in (204, 304) and not body:
+            return False, 0, "empty body (handshake only)", time.time() - started
         # Не меньше 1 мс: latency_vless > 0 — условие попадания в конфиг,
         # а округление быстрого ответа до 0 исключило бы живой профиль.
         latency_ms = max(1, int((time.time() - started) * 1000))
         return True, latency_ms, "", time.time() - started
     except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read(400).decode("utf-8", "replace").strip()
+        except Exception:
+            pass
         if e.code >= 500:
-            body = ""
-            try:
-                body = e.read(400).decode("utf-8", "replace").strip()
-            except Exception:
-                pass
             if _is_proxy_dial_error(body):
                 return (
                     False,
@@ -157,7 +168,12 @@ def probe_once(http_port: int, timeout: float, probe_url: str) -> tuple[bool, in
                     f"proxy dial failed: {body[:120]}",
                     time.time() - started,
                 )
-        # Ответ ниже 500 (или 5xx самого сервиса, а не Xray) — туннель жив.
+            if not body:
+                return False, 0, f"http {e.code}: no body", time.time() - started
+            # Настоящий 5xx сервиса с телом: egress дошёл до сервиса.
+            latency_ms = max(1, int((time.time() - started) * 1000))
+            return True, latency_ms, "", time.time() - started
+        # 4xx — реальный ответ сервиса, туннель и egress живы.
         latency_ms = max(1, int((time.time() - started) * 1000))
         return True, latency_ms, "", time.time() - started
     except Exception as e:  # noqa: BLE001 — нужна человекочитаемая причина
@@ -548,7 +564,19 @@ class BatchXrayChecker:
         # запускал Xray — на сервере это давало пачки по 150–300 с и лавину
         # «конфиг пачки отклонён». Одиночные тесты дёшевы и параллелятся,
         # а после них в батчи попадают только заведомо валидные профили.
-        items = self._prevalidate_configs(items, results, on_result, cancel)
+        #
+        # Но для больших прогонов это 8247 процессов `xray -test` на 8 воркерах:
+        # прогресс стоит на месте минутами и выглядит как зависание. Валидность
+        # пачки дешевле проверить одним `-test` в _start_chunk, а битой пачке
+        # сделать bisect. Поштучно проверяем только небольшие прогоны.
+        if len(items) <= 256:
+            items = self._prevalidate_configs(items, results, on_result, cancel)
+        else:
+            add_log(
+                "DEBUG",
+                f"Check: {len(items)} профилей — поштучная предпроверка пропущена, "
+                "валидирую пачками (xray -test на пачку + bisect при ошибке)",
+            )
         if not items:
             return results
 
