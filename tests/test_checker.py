@@ -74,6 +74,7 @@ class FakeNodeServer(threading.Thread):
     def run(self):
         try:
             srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             srv.bind(("127.0.0.1", self.port))
             srv.listen(16)
             srv.settimeout(0.2)
@@ -518,9 +519,14 @@ class TestBackoff(TempDBTestCase):
         from app.proxy_manager import ProxyManager
 
         pid = self._add()
+        app_db.db_q(
+            "UPDATE proxies SET speed_kbps=1234, speed_max_kbps=2345 WHERE id=?", (pid,)
+        )
         ProxyManager._update_vless_status(pid, False, 0, "timeout")
         row = app_db.db_q("SELECT * FROM proxies WHERE id=?", (pid,))[0]
         self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["speed_kbps"], 0)
+        self.assertEqual(row["speed_max_kbps"], 0)
         self.assertEqual(row["fail_count"], 1)
         self.assertIsNotNone(row["next_test_at"])
         first_backoff = row["next_test_at"]

@@ -716,6 +716,13 @@ class BatchXrayChecker:
         if self._config_test_supported is False:
             return True, ""
         xbin = self._xray_bin()
+        if not xbin or not (Path(xbin).is_file() or shutil.which(xbin)):
+            # Не запускаем заведомо отсутствующий бинарник: на Windows
+            # subprocess с несуществующим путём может ждать таймаут, и каждый
+            # тест конфига тормозит на 10 секунд.
+            self._config_test_supported = False
+            add_log("DEBUG", f"Config pre-test недоступен: {xbin or 'xray path пуст'}")
+            return True, ""
         # Сначала «старый» синтаксис: современный Xray поддерживает его через
         # режим совместимости (main.go добавляет `run`), а древние версии знают
         # только его. Второй вариант — явный `run -test -c` для новых сборок.

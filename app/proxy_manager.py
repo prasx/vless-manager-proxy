@@ -452,8 +452,8 @@ class ProxyManager:
             next_at = now + timedelta(seconds=_backoff_seconds(fail_count))
         db_q(
             "UPDATE proxies SET status='failed', latency=0, latency_vless=0, "
-            "speed_kbps=0, failed_since=COALESCE(failed_since, ?), last_test_at=?, "
-            "last_error=?, fail_count=?, next_test_at=? WHERE id=?",
+            "speed_kbps=0, speed_max_kbps=0, failed_since=COALESCE(failed_since, ?), "
+            "last_test_at=?, last_error=?, fail_count=?, next_test_at=? WHERE id=?",
             (now, now, err, fail_count, next_at, pid),
         )
 
@@ -1220,11 +1220,16 @@ class ProxyManager:
                     # этот профиль уйдёт в конец очереди, а не будет снова
                     # первым съедать бюджет стадии.
                     db_q(
-                        "UPDATE proxies SET speed_tested_at=?, "
-                        "speed_fail_count=COALESCE(speed_fail_count, 0) + 1 WHERE id=?",
+                        "UPDATE proxies SET speed_kbps=0, speed_max_kbps=0, "
+                        "speed_tested_at=?, speed_fail_count=COALESCE(speed_fail_count, 0) + 1 "
+                        "WHERE id=?",
                         (now_utc(), r["id"]),
                     )
-                    add_log("WARN", f"Speed #{r['id']} ({host}): no data in {window_sec}s window")
+                    add_log(
+                        "WARN",
+                        f"Speed #{r['id']} ({host}): no data in {window_sec}s window; "
+                        "старая скорость сброшена",
+                    )
                     xray_tail = self._speed_log_tail()
                     if xray_tail:
                         self._last_speed_xray_tail = xray_tail

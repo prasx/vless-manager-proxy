@@ -346,6 +346,16 @@ _MIGRATIONS = [
             "WHERE key='speed_stage_budget_sec' AND value='600'",
         ],
     },
+    {
+        # Старые speed_max/speed_kbps оставались у уже упавших профилей и
+        # показывали «макс» там, где скорость уже 0. Чистим один раз при старте.
+        "version": 9,
+        "description": "очистка устаревших speed_max/speed_kbps у нерабочих профилей",
+        "sql": [
+            "UPDATE proxies SET speed_kbps=0, speed_max_kbps=0 WHERE status != 'working'",
+            "UPDATE proxies SET speed_max_kbps=0 WHERE COALESCE(speed_kbps, 0) = 0",
+        ],
+    },
 ]
 
 
