@@ -58,6 +58,13 @@ class XrayConfigurator:
         self._state_ready = False
         self._stats_cache = {"data": None, "ts": 0.0}
         self._stats_cache_lock = threading.Lock()
+        # lso (ListOutbounds) — авторитетный список живых outbound. Старый
+        # statsquery оставляет счётчики удалённых узлов, поэтому как основной
+        # источник он не годится.
+        self._lso_cache = {"data": None, "ts": 0.0}
+        self._lso_cache_lock = threading.Lock()
+        self._lso_supported: bool | None = None
+        self._live_source = ""
         self._diag_result_cache = {"data": None, "ts": 0.0}
         self._diag_result_lock = threading.Lock()
 
@@ -418,7 +425,11 @@ class XrayConfigurator:
         return rc == 0
 
     def list_active_outbounds(self):
-        """Возвращает список тегов активных outbound (использует кэш statsquery)."""
+        """Возвращает список тегов outbound, по которым есть счётчики трафика.
+
+        Это не список живых обработчиков: statsquery хранит счётчики и после
+        `rmo`. Для фактического набора используйте live_node_tags()/lso.
+        """
         rc, out = self._cached_statsquery()
         if rc != 0:
             return []
@@ -428,6 +439,65 @@ class XrayConfigurator:
             if m:
                 tags.add(m.group(1))
         return sorted(tags)
+
+    def _list_outbounds_lso(self, force: bool = False) -> set[str] | None:
+        """Список реально зарегистрированных outbound через `xray api lso`.
+
+        None — команда недоступна/не ответила; пустое множество — валидный
+        ответ «outbound'ов нет».
+        """
+        if self._lso_supported is False:
+            return None
+        now = time.time()
+        with self._lso_cache_lock:
+            cached = self._lso_cache["data"]
+            if not force and cached is not None and now - self._lso_cache["ts"] < 3:
+                return cached
+        try:
+            r = subprocess.run(
+                [
+                    Settings.xray_bin(),
+                    "api",
+                    "lso",
+                    "-s",
+                    f"{API_LISTEN}:{Settings.api_port()}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=6,
+            )
+        except Exception as e:  # noqa: BLE001
+            # Таймаут/недоступный API — не повод навсегда отключать lso:
+            # следующий вызов попробует снова.
+            add_log("DEBUG", f"lso unavailable: {e}")
+            return None
+        if r.returncode != 0:
+            detail = (r.stderr or r.stdout or "").strip()[:200]
+            if any(word in detail.lower() for word in ("unknown command", "flag provided", "not defined")):
+                self._lso_supported = False
+            add_log("DEBUG", f"lso unavailable (code {r.returncode}): {detail}")
+            return None
+        try:
+            data = json.loads(r.stdout or "{}")
+            outbounds = data.get("outbounds") if isinstance(data, dict) else data
+            tags = {
+                ob.get("tag")
+                for ob in (outbounds or [])
+                if isinstance(ob, dict) and isinstance(ob.get("tag"), str)
+            }
+        except (ValueError, TypeError) as e:
+            self._lso_supported = False
+            add_log("DEBUG", f"lso response parse failed: {e}")
+            return None
+        self._lso_supported = True
+        result = {t for t in tags if t.startswith("node")}
+        with self._lso_cache_lock:
+            self._lso_cache = {"data": result, "ts": now}
+        return result
+
+    def live_source(self) -> str:
+        """Источник последнего live-набора: lso, statsquery или пусто."""
+        return self._live_source
 
     @staticmethod
     def _remove_outbounds(tags) -> set[str]:
@@ -554,15 +624,22 @@ class XrayConfigurator:
 
     # ─── Применённое состояние outbound ───
 
-    def live_node_tags(self) -> set[str]:
-        """node-теги, видимые через statsquery (реально работающий Xray).
+    def live_node_tags(self, force: bool = False) -> set[str]:
+        """node-теги, реально зарегистрированные в работающем Xray.
 
-        Пустое множество — не «узлов нет», а «statsquery их не показал»:
-        счётчики outbound появляются только после трафика, поэтому пустой
-        ответ не считается доказательством отсутствия узлов.
+        Основной источник — `xray api lso` (ListOutbounds). statsquery
+        используется только как fallback: его счётчики остаются и после
+        удаления outbound, поэтому по ним нельзя надёжно определить живой набор.
+        Пустой ответ lso — это валидное «outbound'ов нет».
         """
         if not self.api_ok():
+            self._live_source = ""
             return set()
+        tags = self._list_outbounds_lso(force=force)
+        if tags is not None:
+            self._live_source = "lso"
+            return tags
+        self._live_source = "statsquery"
         return {t for t in self.list_active_outbounds() if t.startswith("node")}
 
     def _disk_node_tags(self) -> set[str]:
@@ -805,7 +882,8 @@ class XrayConfigurator:
                 "live_tags": sorted(live_set),
                 "disk_tags": sorted(self._disk_node_tags()),
                 "config_on_disk_newer": bool(config_newer),
-                "live_unknown": not live_set,
+                "live_unknown": (not live_set and self._live_source != "lso"),
+                "live_source": self._live_source,
                 **extra,
             }
             self._record_apply(**state)
@@ -813,7 +891,7 @@ class XrayConfigurator:
 
         if not self.api_ok():
             res = self._write_and_restart(cfg_path, max_active, selection=sel)
-            live = self.live_node_tags()
+            live = self.live_node_tags(force=True)
             state = finish(
                 res.get("status", "restarted" if res.get("ok") else "restart_failed"),
                 bool(res.get("ok")),
@@ -851,8 +929,8 @@ class XrayConfigurator:
             )
 
         result = self._sync_outbounds(limited_obs)
-        live = self.live_node_tags()
-        live_known = bool(live)
+        live = self.live_node_tags(force=True)
+        live_known = self._live_source == "lso"
         failed = result["failed"]
         added = result["added"]
         attempted = result["attempted"]
@@ -865,9 +943,16 @@ class XrayConfigurator:
                     f"желаемых {len(desired_tags)}, живых {len(live)}"
                 )
                 add_log("WARN", msg)
+                restarted, live_after = self._restart_after_mismatch(desired_tags)
+                if restarted and live_after == desired_tags:
+                    return finish(
+                        "restarted", True, "Xray restarted to remove stale outbounds",
+                        live=live_after, config_newer=False, added=added, failed=failed,
+                        attempted=attempted,
+                    )
                 return finish(
-                    "live_mismatch", False, msg, live=live, config_newer=True,
-                    added=added, failed=failed, attempted=attempted,
+                    "live_mismatch", False, msg, live=live_after or live,
+                    config_newer=True, added=added, failed=failed, attempted=attempted,
                 )
             add_log("DEBUG", f"All {result['total']} outbounds already in sync, no API calls needed")
             return finish(
@@ -889,7 +974,7 @@ class XrayConfigurator:
             if not live and time.time() - self._last_restart_time > 300:
                 add_log("WARN", "No live node outbounds visible — restarting Xray to apply config from disk")
                 restarted = self.restart_via_systemd()
-                live = self.live_node_tags()
+                live = self.live_node_tags(force=True)
             if restarted and live:
                 return finish(
                     "restarted", True, "Xray restarted after partial API apply",
@@ -925,9 +1010,16 @@ class XrayConfigurator:
                 "Config on disk is newer than the live Xray set — "
                 "restart Xray or apply again",
             )
+            restarted, live_after = self._restart_after_mismatch(desired_tags)
+            if restarted and live_after == desired_tags:
+                return finish(
+                    "restarted", True, "Xray restarted to remove stale outbounds",
+                    live=live_after, config_newer=False, added=added, failed=failed,
+                    attempted=attempted,
+                )
             return finish(
-                "live_mismatch", False, msg, live=live, config_newer=True,
-                added=added, failed=failed, attempted=attempted,
+                "live_mismatch", False, msg, live=live_after or live,
+                config_newer=True, added=added, failed=failed, attempted=attempted,
             )
 
         msg = (
@@ -940,6 +1032,22 @@ class XrayConfigurator:
             "applied", True, msg, live=live, config_newer=False,
             added=added, failed=failed, attempted=attempted,
         )
+
+    def _restart_after_mismatch(self, desired_tags: set[str]):
+        """Перезапускает Xray, если lso показал реальное расхождение.
+
+        Возвращает (restarted, live_tags). Не чаще раза в 5 минут, чтобы
+        повторный apply не устраивал цикл рестартов.
+        """
+        if time.time() - self._last_restart_time <= 300:
+            return False, set()
+        add_log(
+            "WARN",
+            "Live outbound set differs from disk — restarting Xray to apply disk config",
+        )
+        restarted = self.restart_via_systemd()
+        live = self.live_node_tags(force=True)
+        return restarted, live
 
     def _write_and_restart(self, cfg_path, max_active, attempt=1, skip_geosite=False, selection=None):
         """Пишет конфиг на диск и перезапускает Xray. При неудаче пробует без geosite."""

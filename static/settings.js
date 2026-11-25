@@ -993,9 +993,12 @@ function renderXrayStatus(s) {
   const newer = Boolean(s.config_on_disk_newer);
   const mismatch = Boolean(s.nodes_mismatch);
   const liveKnown = Boolean(s.live_known);
+  const liveSource = s.live_source || (liveKnown ? 'lso' : '');
 
   let setsBadge = '';
-  if (newer) {
+  if (liveSource === 'statsquery') {
+    setsBadge = `<span class="badge badge-orange" title="statsquery хранит счётчики и после удаления outbound; расхождение не проверяется">живой набор из счётчиков (может быть старым)</span>`;
+  } else if (newer) {
     setsBadge = `<span class="badge badge-red" title="${escapeHtml(s.apply_message || '')}">диск новее Xray: желаемых ${desired.length}, живых ${live.length}</span>`;
   } else if (mismatch) {
     setsBadge = `<span class="badge badge-orange">расхождение +${onlyDesired.length} / -${onlyLive.length}</span>`;
@@ -1020,9 +1023,9 @@ function renderXrayStatus(s) {
           + `<div class="daemon-set-row"><span>только в живых</span><span class="daemon-set-tags">${tags(onlyLive)}</span></div>`
         : '';
       sets.innerHTML = `<details ${newer || mismatch ? 'open' : ''}>
-        <summary>Наборы outbound: желаемые ${desired.length}, живые ${live.length}, на диске ${disk.length}</summary>
+        <summary>Наборы outbound: желаемые ${desired.length}, живые ${live.length}${liveSource ? ' (' + liveSource + ')' : ''}, на диске ${disk.length}</summary>
         <div class="daemon-set-row"><span>желаемые</span><span class="daemon-set-tags">${tags(desired)}</span></div>
-        <div class="daemon-set-row"><span>живые</span><span class="daemon-set-tags">${liveKnown ? tags(live) : 'неизвестны (statsquery пуст)'}</span></div>
+        <div class="daemon-set-row"><span>живые</span><span class="daemon-set-tags">${liveKnown ? tags(live) : 'неизвестны (нет счётчиков)'}</span></div>
         <div class="daemon-set-row"><span>на диске</span><span class="daemon-set-tags">${tags(disk)}</span></div>
         ${diff}
       </details>`;

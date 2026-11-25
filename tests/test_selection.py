@@ -339,6 +339,20 @@ class TestOutboundTags(TempDBTestCase):
         self.assertEqual(state["status"], "lock_timeout")
         self.assertTrue(state["config_on_disk_newer"])
 
+    def test_lso_filters_node_tags(self):
+        """Живой набор берётся из lso, а не из счётчиков statsquery."""
+        from app.xray_configurator import XrayConfigurator
+
+        xr = XrayConfigurator()
+        completed = mock.Mock(
+            returncode=0,
+            stdout='{"outbounds":[{"tag":"node1"},{"tag":"direct"}]}',
+            stderr="",
+        )
+        with mock.patch("app.xray_configurator.subprocess.run", return_value=completed):
+            tags = xr._list_outbounds_lso(force=True)
+        self.assertEqual(tags, {"node1"})
+
     def test_diff_sync_is_noop_when_everything_applied(self):
         from app.xray_configurator import XrayConfigurator
 

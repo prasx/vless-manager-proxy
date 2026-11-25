@@ -914,11 +914,12 @@ def api_xray_status():
     live_nodes = sorted(xray_configurator.live_node_tags()) if api_ok else []
     desired_nodes = sorted(xray_configurator.desired_node_tags())
     disk_nodes = sorted(xray_configurator.disk_node_tags())
-    live_known = bool(api_ok and live_nodes)
-    nodes_mismatch = live_known and set(desired_nodes) != set(live_nodes)
+    live_source = xray_configurator.live_source() if api_ok else ""
+    live_known = live_source == "lso" or bool(live_nodes)
+    nodes_mismatch = live_source == "lso" and set(desired_nodes) != set(live_nodes)
     apply_state = xray_configurator.apply_state()
     config_newer = bool(apply_state.get("config_on_disk_newer")) or (
-        live_known and set(disk_nodes) != set(live_nodes)
+        live_source == "lso" and set(disk_nodes) != set(live_nodes)
     )
     # Тем же селектором, что и генератор конфига (единственная политика допуска).
     sel = xray_configurator.select_nodes(0)
@@ -939,9 +940,10 @@ def api_xray_status():
         disk_nodes=disk_nodes,
         live_known=live_known,
         live_unknown=not live_known,
+        live_source=live_source,
         nodes_mismatch=nodes_mismatch,
-        desired_only=sorted(set(desired_nodes) - set(live_nodes)) if live_known else [],
-        live_only=sorted(set(live_nodes) - set(desired_nodes)) if live_known else [],
+        desired_only=sorted(set(desired_nodes) - set(live_nodes)) if live_source == "lso" else [],
+        live_only=sorted(set(live_nodes) - set(desired_nodes)) if live_source == "lso" else [],
         config_on_disk_newer=config_newer,
         apply_state=apply_state,
         apply_status=apply_state.get("status", ""),
