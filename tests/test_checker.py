@@ -603,12 +603,12 @@ class TestEnrichment(TempDBTestCase):
         app_db.db_q(
             "INSERT INTO proxies (link, host, port, country, country_verified, status, added_at) "
             "VALUES (?,?,?,?,?,?,?)",
-            ("vless://u@a.test:443", "a.test", 443, "", 0, "pending", now_utc()),
+            ("vless://u@a.test:443", "a.test", 443, "", 0, "working", now_utc()),
         )
         app_db.db_q(
             "INSERT INTO proxies (link, host, port, country, country_verified, status, added_at) "
             "VALUES (?,?,?,?,?,?,?)",
-            ("vless://u@b.test:443", "b.test", 443, "", 0, "pending", now_utc()),
+            ("vless://u@b.test:443", "b.test", 443, "", 0, "working", now_utc()),
         )
         utils._geo_ip_cache.clear()
         utils._geo_neg_cache.clear()
@@ -638,6 +638,33 @@ class TestEnrichment(TempDBTestCase):
 
         # повторный проход ничего не делает: профили уже верифицированы
         self.assertEqual(enrich_countries_once(), 0)
+
+    def test_only_working_profiles_are_enriched(self):
+        """Мёртвые и непроверенные не тратят DNS/ip-api."""
+        import app.utils as utils
+        from app.utils import enrich_countries_once, now_utc
+
+        for status in ("pending", "failed"):
+            app_db.db_q(
+                "INSERT INTO proxies (link, host, port, country, country_verified, status, added_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (f"vless://u@{status}.test:443", f"{status}.test", 443, "", 0, status, now_utc()),
+            )
+        utils._geo_ip_cache.clear()
+        utils._geo_neg_cache.clear()
+        utils._geo_host_cache.clear()
+        called = []
+        old_batch = utils._ipapi_batch
+        old_resolve = utils.resolve_host
+        utils._ipapi_batch = lambda ips: called.append(list(ips)) or {}
+        utils.resolve_host = lambda host: "10.0.0.9"
+        try:
+            corrected = enrich_countries_once()
+        finally:
+            utils._ipapi_batch = old_batch
+            utils.resolve_host = old_resolve
+        self.assertEqual(corrected, 0)
+        self.assertEqual(called, [], "для нерабочих профилей ip-api не вызывается")
 
     def test_country_fallback_parses_codes(self):
         """ip-api.com недоступен → страны берутся из HTTPS-резерва."""

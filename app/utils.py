@@ -335,12 +335,18 @@ def enrich_country(pid, host):
 
 
 def _geo_targets(limit: int | None = None) -> list[dict]:
-    """Профили, для которых страна ещё не верифицирована."""
+    """Рабочие профили, для которых страна ещё не верифицирована.
+
+    Мёртвые и непроверенные профили не тратят DNS/ip-api: их страна никому
+    не нужна, пока они не станут working. После проверки конвейер сам
+    запускает обогащение только что появившихся рабочих.
+    """
     from .db import db_q
 
     sql = (
         "SELECT id, host, country, COALESCE(country_verified, 0) AS verified "
-        "FROM proxies WHERE COALESCE(country_verified, 0) = 0 ORDER BY id ASC"
+        "FROM proxies WHERE status = 'working' "
+        "AND COALESCE(country_verified, 0) = 0 ORDER BY id ASC"
     )
     if limit:
         sql += " LIMIT ?"

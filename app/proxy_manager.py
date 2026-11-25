@@ -1587,6 +1587,11 @@ class ProxyManager:
                 return {"busy": False, "error": "deleted during test"}
             r = after[0]
             speed = r["speed_kbps"] or 0
+            if r["status"] == "working":
+                # Страну определяем только для рабочих профилей. Одиночный
+                # тест мог только что сделать профиль рабочим — запускаем
+                # фоновое обогащение, не дожидаясь следующего прогона.
+                schedule_country_enrichment()
             # Для диагностики: если скорость 0 — отдаём причину по URL (важнее),
             # а лог Xray — отдельным полем.
             speed_error = ""
