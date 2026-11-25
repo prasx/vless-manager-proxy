@@ -19,6 +19,7 @@ venv/
 # IDE
 .vscode/
 .idea/
+.hallmark/
 
 # Local config
 xray_config.json
