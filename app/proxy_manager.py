@@ -41,6 +41,7 @@ import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from ipaddress import ip_address
 from pathlib import Path
 
 from . import importer, netcheck
@@ -523,7 +524,12 @@ class ProxyManager:
 
         # 2. TCP-префильтр: мёртвый server:port отсекается за 1–2 с без Xray.
         if Settings.tcp_prefilter() and items:
-            items = self._tcp_prefilter(items, handle)
+            def prefilter_progress(done, total):
+                self._set_current(f"TCP {done}/{total}")
+                if done % 500 == 0 or done == total:
+                    add_log("DEBUG", f"TCP-префильтр: {done}/{total}")
+
+            items = self._tcp_prefilter(items, handle, on_progress=prefilter_progress)
         if not items or self._cancel.is_set():
             return ok_total, done_total
 
@@ -595,7 +601,7 @@ class ProxyManager:
                 f"переключён на {best}. Следующие проверки пойдут через него.",
             )
 
-    def _tcp_prefilter(self, items, handle):
+    def _tcp_prefilter(self, items, handle, on_progress=None):
         """Отсекает заведомо недоступные server:port. Возвращает выживших.
 
         Медленные и защищённые серверы не всегда отвечают на SYN с первого
@@ -603,19 +609,39 @@ class ProxyManager:
         таймаутом. Раньше такие узлы выпадали как «tcp timeout», не доходя до
         проверки через Xray — именно поэтому часть живых профилей не попадала
         в замер скорости.
+
+        Доменные имена не проверяем здесь: getaddrinfo не ограничивается
+        socket-timeout и при медленном DNS блокирует воркер на десятки секунд.
+        На 8000+ профилях это и давало «0/8245» на несколько минут. Домены
+        идут в Xray, который сам решает DNS; TCP-префильтр остаётся быстрым
+        для IP-литералов.
         """
         timeout = Settings.tcp_prefilter_timeout()
         retries = Settings.tcp_prefilter_retries()
         parallel = max(1, min(Settings.tcp_prefilter_workers(), len(items)))
+        total = len(items)
+        checked = 0
+        domains = 0
         add_log(
             "DEBUG",
             f"TCP-префильтр: {len(items)} адресов, {parallel} параллельно, "
             f"таймаут {timeout:.1f}с, повторов {retries}",
         )
 
+        def is_ip(host: str) -> bool:
+            try:
+                ip_address((host or "").strip().strip("[]"))
+                return True
+            except ValueError:
+                return False
+
         def check_one(item):
             key, parsed = item
-            ok, err = tcp_reachable(parsed["server"], parsed["port"], timeout)
+            host = parsed.get("server") or ""
+            if not is_ip(host):
+                # DNS-резолв — не дело быстрого TCP-префильтра.
+                return key, parsed, True, "", True
+            ok, err = tcp_reachable(host, parsed["port"], timeout)
             attempt = 0
             while (
                 not ok
@@ -626,19 +652,30 @@ class ProxyManager:
                 # Последующие попытки терпеливее: SYN/retransmit у защищённых
                 # узлов может занимать несколько секунд.
                 ok, err = tcp_reachable(
-                    parsed["server"], parsed["port"], timeout * (1 + attempt)
+                    host, parsed["port"], timeout * (1 + attempt)
                 )
-            return key, parsed, ok, err
+            return key, parsed, ok, err, False
 
         survivors = []
         with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix="tcp") as pool:
-            for key, parsed, ok, err in pool.map(check_one, items):
+            for key, parsed, ok, err, skipped in pool.map(check_one, items):
+                checked += 1
+                if skipped:
+                    domains += 1
                 if self._cancel.is_set():
                     break
                 if ok:
                     survivors.append((key, parsed))
                 else:
                     handle(key, False, 0, err)
+                if on_progress and (checked % 25 == 0 or checked == total):
+                    on_progress(checked, total)
+        if domains:
+            add_log(
+                "DEBUG",
+                f"TCP-префильтр: {domains} доменных имён пропущено "
+                "(их разрешит Xray, а не медленный системный DNS)",
+            )
         return survivors
 
     # ─── Стадия 2: замер скорости (строго по одному) ───
