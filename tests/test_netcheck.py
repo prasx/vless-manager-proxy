@@ -246,6 +246,34 @@ class TestProbeAcceptsAnyHttpResponse(unittest.TestCase):
         self.assertTrue(ok, err)
         self.assertGreaterEqual(lat, 1)
 
+    def test_200_without_body_is_handshake_only(self):
+        """200 с Content-Length: 0 — это не egress, а только заголовки."""
+        srv = StatusServer(200, body=b"")
+        srv.start()
+        try:
+            for _ in range(50):
+                if srv.port:
+                    break
+                threading.Event().wait(0.02)
+            ok, _lat, err, _ = probe_once(srv.port, 1.0, "http://probe.local/x")
+        finally:
+            srv.stop()
+        self.assertFalse(ok, "пустой 200 не должен считаться рабочим узлом")
+        self.assertIn("empty body", err)
+
+    def test_200_with_body_is_alive(self):
+        srv = StatusServer(200, body=b"Microsoft Connect Test")
+        srv.start()
+        try:
+            for _ in range(50):
+                if srv.port:
+                    break
+                threading.Event().wait(0.02)
+            ok, _lat, err, _ = probe_once(srv.port, 1.0, "http://probe.local/x")
+        finally:
+            srv.stop()
+        self.assertTrue(ok, err)
+
     def test_503_with_xray_dial_error_is_dead(self):
         """Xray отвечает 503 с текстом dial-ошибки — туннель на самом деле мёртв."""
         srv = StatusServer(
